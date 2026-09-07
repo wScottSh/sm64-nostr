@@ -187,19 +187,19 @@ void bhv_toad_message_init(void) {
 
     switch (dialogID) {
         case TOAD_STAR_1_DIALOG:
-            enoughStars = save_file_star_gate_open(starCount, TOAD_STAR_1_REQUIREMENT);
+            enoughStars = save_file_star_gate_is_open(starCount, TOAD_STAR_1_REQUIREMENT);
             if (saveFlags & SAVE_FLAG_COLLECTED_TOAD_STAR_1) {
                 dialogID = TOAD_STAR_1_DIALOG_AFTER;
             }
             break;
         case TOAD_STAR_2_DIALOG:
-            enoughStars = save_file_star_gate_open(starCount, TOAD_STAR_2_REQUIREMENT);
+            enoughStars = save_file_star_gate_is_open(starCount, TOAD_STAR_2_REQUIREMENT);
             if (saveFlags & SAVE_FLAG_COLLECTED_TOAD_STAR_2) {
                 dialogID = TOAD_STAR_2_DIALOG_AFTER;
             }
             break;
         case TOAD_STAR_3_DIALOG:
-            enoughStars = save_file_star_gate_open(starCount, TOAD_STAR_3_REQUIREMENT);
+            enoughStars = save_file_star_gate_is_open(starCount, TOAD_STAR_3_REQUIREMENT);
             if (saveFlags & SAVE_FLAG_COLLECTED_TOAD_STAR_3) {
                 dialogID = TOAD_STAR_3_DIALOG_AFTER;
             }

@@ -492,7 +492,7 @@ u32 save_file_get_flags(void) {
  * every star gate is passable at 0 stars. Does not touch save_file_get_total_star_count,
  * which continues to feed the HUD/level-select honestly.
  */
-s32 save_file_star_gate_open(UNUSED s32 numStars, UNUSED s32 requiredStars) {
+s32 save_file_star_gate_is_open(UNUSED s32 numStars, UNUSED s32 requiredStars) {
     return TRUE;
 }
 
