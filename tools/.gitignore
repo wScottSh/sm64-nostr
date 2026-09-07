@@ -7,6 +7,8 @@
 /tabledesign
 /textconv
 /vadpcm_enc
+/pipeline_test/pipeline_test
+/pipeline_test/pipeline_test.exe
 !/ido5.3_compiler/lib/*.so
 !/ido5.3_compiler/usr/lib/*.so
 !/ido5.3_compiler/usr/lib/*.so.1

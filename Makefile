@@ -186,7 +186,7 @@ TOOLS_DIR := tools
 
 PYTHON := python3
 
-ifeq ($(filter clean distclean print-%,$(MAKECMDGOALS)),)
+ifeq ($(filter clean distclean print-% pipeline-test,$(MAKECMDGOALS)),)
 
   # Make sure assets exist
   NOEXTRACT ?= 0
@@ -234,6 +234,21 @@ LEVEL_DIRS     := $(patsubst levels/%,%,$(dir $(wildcard levels/*/header.h)))
 
 # Directories containing source files
 SRC_DIRS := src src/engine src/game src/audio src/menu src/buffers actors levels bin data assets asm lib sound
+
+# src/pipeline (the Nostr pipeline, spec #24) is deliberately NOT one of the
+# above SRC_DIRS: those feed C_FILES/O_FILES straight into $(ELF)'s link
+# inputs, and sm64.ld (see its SECTIONS block) places every input object's
+# .text explicitly by name for a byte-matching link. Nothing calls into the
+# pipeline yet (the capture/render glue lands in later sub-issues), so
+# linking its objects in now would either become unplaced ld orphans or
+# require sm64.ld churn for code nothing references -- and either way would
+# shift the matching ROM's bytes for no behavioral reason. Instead,
+# pipeline sources are compiled (not linked) via the dedicated
+# `pipeline-rom-objects` target below, using the exact same CC/CFLAGS the
+# ROM build would use, which is what sub-issue #25 needs to prove: that the
+# ROM toolchain compiles these pure sources unmodified. Wiring them into
+# the real link happens alongside the glue that calls them.
+PIPELINE_SRC_DIR := src/pipeline
 BIN_DIRS := bin bin/$(VERSION)
 
 ifeq ($(VERSION),cn)
@@ -313,6 +328,15 @@ else ifneq ($(call find-command,mips64-linux-gnu-ld),)
   CROSS := mips64-linux-gnu-
 else ifneq ($(call find-command,mips64-elf-ld),)
   CROSS := mips64-elf-
+else ifeq ($(MAKECMDGOALS),pipeline-test)
+  # pipeline-test only builds tools/pipeline_test with the host's own gcc
+  # (see tools/pipeline_test/Makefile) and never touches the ROM's O_FILES/
+  # $(ELF)/$(CROSS)-prefixed tools, so it must not require a MIPS toolchain
+  # to be installed just to parse this file. Deliberately an exact-string
+  # match (not $(filter)) so combined invocations like
+  # `make pipeline-test all` still hit the $(error) below instead of
+  # silently building a toolchain-less ROM target.
+  CROSS :=
 else
   $(error Unable to detect a suitable MIPS toolchain installed)
 endif
@@ -404,6 +428,37 @@ else
   CFLAGS += -non_shared -Wab,-r4300_mul -Xcpluscomm -Xfullwarn -signed -32
 endif
 
+# The pipeline's internal C99 ports (SHA-256, secp256k1 Schnorr, qrcodegen;
+# stubbed by port_stub_c99.c for now -- see spec #24, sub-issue #25) need a
+# C99-capable compiler. COMPILER is a whole-build knob with no per-file
+# split, and the default COMPILER=ido cannot compile C99 at all. Rather than
+# force the *entire* ROM build onto gcc just for these few files, carve out
+# just the C99 port objects and always force them through the cross gcc
+# with -std=gnu99, independent of the top-level COMPILER choice -- this
+# mirrors the existing iQue per-object carve-out above (IQUE_RECOMPILED),
+# which overrides CC/CFLAGS for a fixed object list regardless of COMPILER.
+PIPELINE_C99_PORT_SRC := $(PIPELINE_SRC_DIR)/port_stub_c99.c
+PIPELINE_C99_PORT_O   := $(foreach file,$(PIPELINE_C99_PORT_SRC),$(BUILD_DIR)/$(file:.c=.o))
+PIPELINE_C99_CFLAGS   := -std=gnu99 -G 0 $(OPT_FLAGS) $(TARGET_CFLAGS) $(DEF_INC_CFLAGS) -mno-shared -march=vr4300 -mfix4300 -mabi=32 -mhard-float -mdivide-breaks -fno-stack-protector -fno-common -fno-zero-initialized-in-bss -fno-PIC -mno-abicalls -fno-strict-aliasing -fno-inline-functions -ffreestanding -fwrapv -Wall -Wextra
+$(PIPELINE_C99_PORT_O): CC := $(CROSS)gcc
+$(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
+# The target-specific CC_CHECK_CFLAGS override (append, not replace) lives
+# further down, after CC_CHECK_CFLAGS's own -m32 fixup is finalized: since
+# CC_CHECK_CFLAGS is a simply-expanded (:=) variable, a target-specific
+# "+=" snapshots its value at the point this line is parsed, not at build
+# time -- appending here (before the -m32 fixup below) would silently miss
+# it.
+
+# The pure pipeline module itself (build_event.c) needs no C99 and no
+# special flags -- it compiles under whichever COMPILER is already active,
+# which is the point of it being host-and-ROM-compilable. Only the object
+# list matters here: neither object is added to O_FILES/the link (see the
+# comment above SRC_DIRS), so `all`/$(ROM) is untouched by this target.
+PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(PIPELINE_C99_PORT_O)
+
+.PHONY: pipeline-rom-objects
+pipeline-rom-objects: $(PIPELINE_ROM_OBJS)
+
 ASFLAGS   := -march=vr4300 -mabi=32 $(foreach i,$(INCLUDE_DIRS),-I$(i)) $(foreach d,$(DEFINES),--defsym $(d))
 RSPASMFLAGS := $(foreach d,$(DEFINES),-definelabel $(subst =, ,$(d)))
 
@@ -414,6 +469,12 @@ else
   # Ensure that gcc treats the code as 32-bit
   CC_CHECK_CFLAGS += -m32
 endif
+
+# See the comment by PIPELINE_C99_PORT_O above: this must come after the
+# -m32 fixup just above so the target-specific append picks it up too. The
+# last -std wins on gcc's command line, so this still forces C99 for the
+# syntax-check pass despite appending after the global -std=gnu90.
+$(PIPELINE_C99_PORT_O): CC_CHECK_CFLAGS += -std=gnu99
 
 # Prevent a crash with -sopt
 export LANG := C
@@ -489,6 +550,16 @@ distclean: clean
 test: $(ROM)
 	$(EMULATOR) $(EMU_FLAGS) $<
 
+# Host-built pipeline test tool (spec #24, sub-issue #25): builds and runs
+# the pipeline's pure sources a second time on the host, asserting a
+# byte-exact stub result. See tools/pipeline_test/Makefile. For the
+# companion proof that the *ROM's own* toolchain compiles the same sources
+# unmodified (without linking them in yet), see `make pipeline-rom-objects`
+# above.
+.PHONY: pipeline-test
+pipeline-test:
+	$(MAKE) -C $(TOOLS_DIR)/pipeline_test
+
 load: $(ROM)
 	$(LOADER) $(LOADER_FLAGS) $<
 
@@ -535,7 +606,7 @@ else
 endif
 $(BUILD_DIR)/bin/segment2.o: $(BUILD_DIR)/text/debug_text.raw.inc.c
 
-ALL_DIRS := $(BUILD_DIR) $(addprefix $(BUILD_DIR)/,$(SRC_DIRS) $(GODDARD_SRC_DIRS) $(ULTRA_SRC_DIRS) $(ULTRA_BIN_DIRS) $(LIBGCC_SRC_DIRS) $(BIN_DIRS) $(TEXTURE_DIRS) $(TEXT_DIRS) $(SOUND_SAMPLE_DIRS) $(addprefix levels/,$(LEVEL_DIRS)) rsp include) $(MIO0_DIR) $(addprefix $(MIO0_DIR)/,$(VERSION)) $(SOUND_BIN_DIR) $(SOUND_BIN_DIR)/sequences/$(VERSION)
+ALL_DIRS := $(BUILD_DIR) $(addprefix $(BUILD_DIR)/,$(SRC_DIRS) $(GODDARD_SRC_DIRS) $(ULTRA_SRC_DIRS) $(ULTRA_BIN_DIRS) $(LIBGCC_SRC_DIRS) $(BIN_DIRS) $(TEXTURE_DIRS) $(TEXT_DIRS) $(SOUND_SAMPLE_DIRS) $(addprefix levels/,$(LEVEL_DIRS)) rsp include $(PIPELINE_SRC_DIR)) $(MIO0_DIR) $(addprefix $(MIO0_DIR)/,$(VERSION)) $(SOUND_BIN_DIR) $(SOUND_BIN_DIR)/sequences/$(VERSION)
 
 # Make sure build directory exists before compiling anything
 DUMMY != mkdir -p $(ALL_DIRS)
