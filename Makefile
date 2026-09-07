@@ -249,6 +249,34 @@ SRC_DIRS := src src/engine src/game src/audio src/menu src/buffers actors levels
 # ROM toolchain compiles these pure sources unmodified. Wiring them into
 # the real link happens alongside the glue that calls them.
 PIPELINE_SRC_DIR := src/pipeline
+
+# Key injection + event profile / format descriptor generation (spec #24,
+# sub-issue #26). The per-event secret never lives in src/ or version
+# control: it is a gitignored raw 32-byte hex privkey under keys/ (see
+# keys/README.md for how to generate/supply one), and everything derived
+# from it is generated into $(BUILD_DIR)/include, never src/.
+PIPELINE_KEYS_DIR             := keys
+PIPELINE_PRIVKEY_FILE         := $(PIPELINE_KEYS_DIR)/event_privkey.hex
+PIPELINE_REGISTRY_FILE        := $(PIPELINE_KEYS_DIR)/registry.md
+PIPELINE_KEY_LABEL            ?= dev-event
+PIPELINE_EVENT_PROFILE_H_IN   := include/event_profile.h.in
+PIPELINE_EVENT_PROFILE_H      := $(BUILD_DIR)/include/event_profile.h
+PIPELINE_FORMAT_DESCRIPTOR_JSON := $(PIPELINE_SRC_DIR)/format_descriptor.json
+PIPELINE_FORMAT_DESCRIPTOR_H  := $(BUILD_DIR)/include/format_descriptor.h
+GEN_EVENT_PROFILE_PY          := $(TOOLS_DIR)/gen_event_profile.py
+GEN_FORMAT_DESCRIPTOR_PY      := $(TOOLS_DIR)/gen_format_descriptor.py
+
+# Fail closed: a normal build must never produce a keyless binary. This
+# mirrors the MIPS-toolchain $(error) check above (same exemptions: goals
+# that don't actually build the ROM never need the real per-event secret --
+# `pipeline-test` derives its own fixed KAT key independently, see
+# tools/pipeline_test/Makefile).
+ifeq ($(filter clean distclean print-% pipeline-test,$(MAKECMDGOALS)),)
+  ifeq ($(wildcard $(PIPELINE_PRIVKEY_FILE)),)
+    $(error Missing $(PIPELINE_PRIVKEY_FILE): the Nostr pipeline requires a per-event 32-byte hex secp256k1 private key to build (spec #24, sub-issue #26). Run 'python3 tools/gen_event_key.py' for a local/dev key, or see keys/README.md. The build refuses to produce a keyless binary)
+  endif
+endif
+
 BIN_DIRS := bin bin/$(VERSION)
 
 ifeq ($(VERSION),cn)
@@ -449,15 +477,43 @@ $(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
 # time -- appending here (before the -m32 fixup below) would silently miss
 # it.
 
-# The pure pipeline module itself (build_event.c) needs no C99 and no
-# special flags -- it compiles under whichever COMPILER is already active,
-# which is the point of it being host-and-ROM-compilable. Only the object
-# list matters here: neither object is added to O_FILES/the link (see the
-# comment above SRC_DIRS), so `all`/$(ROM) is untouched by this target.
-PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(PIPELINE_C99_PORT_O)
+# The pure pipeline modules themselves (build_event.c, and pack_adapter.c
+# from spec #24, sub-issue #26) need no C99 and no special flags -- they
+# compile under whichever COMPILER is already active, which is the point of
+# being host-and-ROM-compilable. Only the object list matters here: none of
+# these three objects are added to O_FILES/the link (see the comment above
+# SRC_DIRS), so `all`/$(ROM)'s own object graph is untouched by this target.
+# pack_adapter.c is here to prove the ROM side of the format-descriptor
+# single-source-of-truth wiring (see PIPELINE_FORMAT_DESCRIPTOR_H below).
+PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(PIPELINE_C99_PORT_O)
+
+# pack_adapter.o #includes format_descriptor.h; make sure it's generated
+# first. build_event.o doesn't currently use event_profile.h, but the
+# dependency is harmless and keeps the ROM side honest as it grows.
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o: $(PIPELINE_EVENT_PROFILE_H)
+
+# Event profile header: derives the x-only pubkey from the per-event secret
+# (PIPELINE_PRIVKEY_FILE, checked for existence above) and bakes it, plus
+# the fixed event shape (kind 8064, the two `t` tags, build-epoch
+# created_at), into a generated header -- following the same *.h.in ->
+# $(BUILD_DIR)/include recipe as text_strings.h/level_headers.h. Also
+# appends a row to the gitignored keys/registry.md.
+$(PIPELINE_EVENT_PROFILE_H): $(PIPELINE_EVENT_PROFILE_H_IN) $(PIPELINE_PRIVKEY_FILE) $(GEN_EVENT_PROFILE_PY) $(TOOLS_DIR)/nostr_secp256k1.py
+	$(call print,Generating event profile:,$<,$@)
+	$(V)$(PYTHON) $(GEN_EVENT_PROFILE_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_EVENT_PROFILE_H_IN) --out $@ --label $(PIPELINE_KEY_LABEL) --registry $(PIPELINE_REGISTRY_FILE)
+
+# Format descriptor header: single source of truth for the packed QR
+# payload's field layout, rendered from src/pipeline/format_descriptor.json.
+# The host test tool renders its own copy from the identical JSON (see
+# tools/pipeline_test/Makefile) so the ROM pack adapter and the host unpack
+# adapter can never disagree on offsets/sizes.
+$(PIPELINE_FORMAT_DESCRIPTOR_H): $(PIPELINE_FORMAT_DESCRIPTOR_JSON) $(GEN_FORMAT_DESCRIPTOR_PY)
+	$(call print,Generating format descriptor:,$<,$@)
+	$(V)$(PYTHON) $(GEN_FORMAT_DESCRIPTOR_PY) --json $(PIPELINE_FORMAT_DESCRIPTOR_JSON) --out $@
 
 .PHONY: pipeline-rom-objects
-pipeline-rom-objects: $(PIPELINE_ROM_OBJS)
+pipeline-rom-objects: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H) $(PIPELINE_ROM_OBJS)
 
 ASFLAGS   := -march=vr4300 -mabi=32 $(foreach i,$(INCLUDE_DIRS),-I$(i)) $(foreach d,$(DEFINES),--defsym $(d))
 RSPASMFLAGS := $(foreach d,$(DEFINES),-definelabel $(subst =, ,$(d)))
@@ -534,6 +590,11 @@ endef
 #==============================================================================#
 
 all: $(ROM)
+# The Nostr pipeline's event profile / format descriptor (spec #24,
+# sub-issue #26) are additional deliverables of a normal build, generated
+# alongside $(ROM) -- not inputs to it, so this doesn't touch $(ROM)'s own
+# object graph or its bytes (see the comment above PIPELINE_ROM_OBJS).
+all: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
 ifeq ($(COMPARE),1)
 	@$(PRINT) "$(GREEN)Checking if ROM matches.. $(NO_COL)\n"
 	@$(SHA1SUM) --quiet -c $(TARGET).sha1 && $(PRINT) "$(TARGET): $(GREEN)OK$(NO_COL)\n" || ($(PRINT) "$(YELLOW)Building the ROM file has succeeded, but does not match the original ROM.\nThis is expected, and not an error, if you are making modifications.\nTo silence this message, use 'make COMPARE=0.' $(NO_COL)\n" && false)

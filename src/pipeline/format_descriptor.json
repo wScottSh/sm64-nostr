@@ -1,0 +1,14 @@
+{
+  "_comment": "Machine-readable format descriptor for the packed QR payload (spec #24, sub-issue #26). Single source of truth: tools/gen_format_descriptor.py renders this into a C header consumed identically by the ROM pack adapter (src/pipeline/pack_adapter.c) and the host unpack adapter (tools/pipeline_test), so the two can never disagree on the wire layout. Field contents here are the sub-issue #26 minimal/stubbed shape proving the wiring; the full payload contents (serialize/sign/pack, #28/#29) land in later sub-issues.",
+  "format_tag": 1,
+  "fields": [
+    { "name": "FORMAT_TAG", "size": 1 },
+    { "name": "COURSE",     "size": 1 },
+    { "name": "ACT",        "size": 1 },
+    { "name": "COINS",      "size": 1 },
+    { "name": "FRAMES",     "size": 4 },
+    { "name": "NONCE16",    "size": 2 },
+    { "name": "KEY_ID",     "size": 1 },
+    { "name": "SIG",        "size": 64 }
+  ]
+}

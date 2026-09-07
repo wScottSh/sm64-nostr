@@ -70,3 +70,18 @@ build/*
 !/sound/**/*custom*/**/*.aiff
 !/assets/**/*custom*.bin
 !/assets/**/*custom*/**/*.bin
+
+# Nostr pipeline per-event secret key material and derived registry
+# (spec #24, sub-issue #26) -- never version-controlled.
+/keys/*
+!/keys/README.md
+
+# Python bytecode cache from the tools/ generator scripts.
+__pycache__/
+*.pyc
+
+# Host pipeline test tool's own generated headers/binary (spec #24,
+# sub-issue #26) -- see tools/pipeline_test/Makefile.
+/tools/pipeline_test/build/
+/tools/pipeline_test/pipeline_test
+/tools/pipeline_test/pipeline_test.exe
