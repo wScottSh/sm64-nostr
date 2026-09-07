@@ -159,6 +159,7 @@ s32 save_file_get_total_star_count(s32 fileIndex, s32 minCourse, s32 maxCourse);
 void save_file_set_flags(u32 flags);
 void save_file_clear_flags(u32 flags);
 u32 save_file_get_flags(void);
+// Sandbox seam B: star-requirement gate; currently always open (returns TRUE), ignoring its args.
 s32 save_file_star_gate_is_open(s32 numStars, s32 requiredStars);
 u32 save_file_get_star_flags(s32 fileIndex, s32 courseIndex);
 void save_file_set_star_flags(s32 fileIndex, s32 courseIndex, u32 starFlags);
