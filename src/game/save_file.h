@@ -106,6 +106,27 @@ extern s8 gLevelToCourseNumTable[];
 #define SAVE_FLAG_COLLECTED_MIPS_STAR_1  /* 0x08000000 */ (1 << 27)
 #define SAVE_FLAG_COLLECTED_MIPS_STAR_2  /* 0x10000000 */ (1 << 28)
 
+// Sandbox seam A: fixed mask of "unlocked" progress flags that is OR'd into the
+// non-credits/non-demo read path of save_file_get_flags() so a fresh file behaves
+// as an open sandbox. Deliberately excludes SAVE_FLAG_DDD_MOVED_BACK (sub stays put)
+// and all star-collection flags (HUD/course progress must stay honest).
+#define SAVE_FLAG_SANDBOX_UNLOCK_MASK ( \
+    SAVE_FLAG_HAVE_WING_CAP | \
+    SAVE_FLAG_HAVE_METAL_CAP | \
+    SAVE_FLAG_HAVE_VANISH_CAP | \
+    SAVE_FLAG_HAVE_KEY_1 | \
+    SAVE_FLAG_HAVE_KEY_2 | \
+    SAVE_FLAG_UNLOCKED_BASEMENT_DOOR | \
+    SAVE_FLAG_UNLOCKED_UPSTAIRS_DOOR | \
+    SAVE_FLAG_MOAT_DRAINED | \
+    SAVE_FLAG_UNLOCKED_PSS_DOOR | \
+    SAVE_FLAG_UNLOCKED_WF_DOOR | \
+    SAVE_FLAG_UNLOCKED_CCM_DOOR | \
+    SAVE_FLAG_UNLOCKED_JRB_DOOR | \
+    SAVE_FLAG_UNLOCKED_BITDW_DOOR | \
+    SAVE_FLAG_UNLOCKED_BITFS_DOOR | \
+    SAVE_FLAG_UNLOCKED_50_STAR_DOOR)
+
 #define SAVE_FLAG_TO_STAR_FLAG(cmd) (((cmd) >> 24) & 0x7F)
 #define STAR_FLAG_TO_SAVE_FLAG(cmd) ((cmd) << 24)
 
@@ -138,6 +159,7 @@ s32 save_file_get_total_star_count(s32 fileIndex, s32 minCourse, s32 maxCourse);
 void save_file_set_flags(u32 flags);
 void save_file_clear_flags(u32 flags);
 u32 save_file_get_flags(void);
+s32 save_file_star_gate_open(s32 numStars, s32 requiredStars);
 u32 save_file_get_star_flags(s32 fileIndex, s32 courseIndex);
 void save_file_set_star_flags(s32 fileIndex, s32 courseIndex, u32 starFlags);
 s32 save_file_get_course_coin_score(s32 fileIndex, s32 courseIndex);

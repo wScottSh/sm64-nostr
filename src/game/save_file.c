@@ -479,7 +479,21 @@ u32 save_file_get_flags(void) {
     if (gCurrCreditsEntry != NULL || gCurrDemoInput != NULL) {
         return 0;
     }
-    return gSaveBuffer.files[gCurrSaveFileNum - 1][0].flags;
+    // Sandbox seam A: force the fixed unlock mask on at read-time only. Nothing is
+    // written back to the save buffer/EEPROM, and the credits/demo early return above
+    // is untouched so attract demos and the credits sequence still see a zeroed flag set.
+    return gSaveBuffer.files[gCurrSaveFileNum - 1][0].flags | SAVE_FLAG_SANDBOX_UNLOCK_MASK;
+}
+
+/**
+ * Sandbox seam B: always-open star-requirement predicate. Substituted at the four
+ * live star-count comparison sites (star-count doors, castle endless-staircase
+ * instant-warp gate, MIPS activation, and the message-Toad "enough stars" checks) so
+ * every star gate is passable at 0 stars. Does not touch save_file_get_total_star_count,
+ * which continues to feed the HUD/level-select honestly.
+ */
+s32 save_file_star_gate_open(UNUSED s32 numStars, UNUSED s32 requiredStars) {
+    return TRUE;
 }
 
 /**
