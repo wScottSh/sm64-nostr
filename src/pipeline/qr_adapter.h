@@ -21,9 +21,10 @@
  * error correction level MEDIUM, with a SINGLE FIXED MASK (not
  * qrcodegen_Mask_AUTO). Bumped up from version 6 to make room for format
  * v2's self-contained payload (pubkey + created_at + tag, ~112-122 B,
- * docs/adr/0002) -- this sub-issue moves the OLD, unchanged v1 payload
- * (still 75 B) into the larger v7 symbol first, isolating the mechanical
- * geometry/mask change from the wire-format change (docs/qr-handoff-spec.md,
+ * docs/adr/0002). Sub-issue #53 landed this geometry/mask change first,
+ * against the OLD v1 payload (75 B), to isolate it from the wire-format
+ * change; sub-issue #54 has since landed format v2 itself, so this symbol
+ * now carries the 112-122 B self-contained payload (docs/qr-handoff-spec.md,
  * docs/research/qr-density-tradeoffs.md).
  *
  * getNumDataCodewords(7, MEDIUM) = getNumRawDataModules(7)/8 -
@@ -76,9 +77,9 @@
 /* Usable BYTE-mode payload capacity after the mandatory 4-bit mode
  * indicator + 8-bit character count header: 122 bytes. See the derivation
  * in the file header comment above. This is the real over-budget boundary
- * payloads are rejected against, comfortably above the ~112-122 B
- * self-contained format v2 payload budget (docs/adr/0002) and the current
- * 75 B format v1 payload this sub-issue still ships. */
+ * payloads are rejected against, comfortably above the 112-122 B
+ * self-contained format v2 payload budget (docs/adr/0002) this symbol now
+ * carries. */
 #define PIPELINE_QR_MAX_PAYLOAD_BYTES 122
 
 /*

@@ -741,7 +741,8 @@ static void test_qr_round_trip_representative_sizes(void)
     check_round_trip(1, "minimal payload");
     check_round_trip(4, "sub-issue #25 stub payload size");
     check_round_trip(24, "spec #24's ~24 B variable content estimate");
-    check_round_trip(75, "current format_descriptor.json total size");
+    check_round_trip(75, "the old format v1 total size (pre-#54 history)");
+    check_round_trip(PIPELINE_BUILT_PAYLOAD_SIZE, "this build's format v2 packed payload size (112 + TAG_LEN)");
     check_round_trip(88, "spec #24's ~88 B payload budget");
     check_round_trip(PIPELINE_QR_MAX_PAYLOAD_BYTES, "exact version 7 / ECC MEDIUM usable payload capacity (122 B)");
 }

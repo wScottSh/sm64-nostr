@@ -135,8 +135,9 @@ typedef struct BuiltEvent {
  * zero-nonce cases (schnorr_adapter.h) -- in which case out is left
  * entirely untouched -- or pipeline_qr_encode()'s over-budget rejection
  * (qr_adapter.h), which can only happen if PIPELINE_BUILT_PAYLOAD_SIZE ever
- * grows past PIPELINE_QR_MAX_PAYLOAD_BYTES (not with today's fixed 75 B
- * format descriptor); in that second case out->packed_payload has ALREADY
+ * grows past PIPELINE_QR_MAX_PAYLOAD_BYTES (not with format v2's fixed
+ * 112 + TAG_LEN B payload, e.g. 116 B for "sm64"); in that second case
+ * out->packed_payload has ALREADY
  * been written (pipeline_pack() ran first) even though the call overall
  * failed, and out->qr_bitmap is left at qr_adapter.h's own documented
  * invalid-size sentinel (qr_bitmap[0] == 0), not a usable bitmap. Either
