@@ -28,6 +28,7 @@
 #include "event_profile.h"
 #include "pipeline/build_event.h"
 #include "pipeline/capture.h"
+#include "qr_pending_star_event.h"
 
 #define INT_GROUND_POUND_OR_TWIRL (1 << 0) // 0x01
 #define INT_PUNCH                 (1 << 1) // 0x02
@@ -51,6 +52,41 @@
 
 u8 sDelayInvincTimer;
 s16 sInvulnerable;
+
+/*
+ * Nostr pipeline capture-glue -> qr_display bridge (spec #24, sub-issue
+ * #33). interact_star_or_key builds a BuiltEvent synchronously at grab
+ * (capture@grab, sub-issue #31), but display happens several frames later,
+ * at park time (display@park, parent spec #24), from a completely
+ * different function in a different file (mario_actions_cutscene.c) once
+ * the star dance/exit animation finishes. These two file-static globals are
+ * the hand-off: sPipelinePendingEvent holds the bytes, sPipelinePendingValid
+ * says whether they're real (a star, not a Bowser key -- see
+ * interact_star_or_key below) and not yet consumed. See
+ * pipeline_take_pending_star_event()'s own doc comment
+ * (qr_pending_star_event.h) for the one-shot "take" contract that keeps a
+ * stale event from an earlier grab from ever being read twice.
+ */
+static BuiltEvent sPipelinePendingEvent;
+static int sPipelinePendingValid = FALSE;
+
+int pipeline_take_pending_star_event(BuiltEvent *out) {
+    int wasValid = sPipelinePendingValid;
+    if (wasValid) {
+        *out = sPipelinePendingEvent;
+    }
+    /* Erase this hand-off copy the instant it's taken, win or lose: once
+     * qr_display owns the bytes (or once this call determines there was
+     * nothing pending), this copy must not linger in BSS as a second,
+     * unmanaged copy of a signed event outside qr_display's own erase-on-
+     * dismiss discipline (qr_display_update()). bzero (PR/os.h) mirrors
+     * this same function's own existing bzero use further down in
+     * interact_star_or_key's build_event() failure path. */
+    bzero(&sPipelinePendingEvent, sizeof(sPipelinePendingEvent));
+    sPipelinePendingValid = FALSE;
+    return wasValid;
+}
+
 u32 interact_coin(struct MarioState *, u32, struct Object *);
 u32 interact_water_ring(struct MarioState *, u32, struct Object *);
 u32 interact_star_or_key(struct MarioState *, u32, struct Object *);
@@ -874,6 +910,13 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
          * gGlobalTimer) and this frame's raw stick/buttons, so the nonce
          * doesn't collapse to a value fully recoverable from `frames`
          * alone even though gGlobalTimer itself is. */
+        /* Reset the pending-event hand-off (see its declaration above)
+         * unconditionally on every grab -- including a key grab, which
+         * falls through the `if` below untouched -- so a key grab can never
+         * leave a stale star event from an earlier grab marked valid for
+         * qr_display to pick up later (sub-issue #33). */
+        sPipelinePendingValid = FALSE;
+
         if (o->behavior != segmented_to_virtual(bhvBowserKey)) {
             int pipelineBuildOk;
 
@@ -914,6 +957,14 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
             pipelineBuildOk = build_event(&pipelineCapture, sPipelineEventPrivkey, &pipelineBuiltEvent);
             if (!pipelineBuildOk) {
                 bzero(&pipelineBuiltEvent, sizeof(pipelineBuiltEvent));
+            } else {
+                /* Hand off to qr_display's park-time consumer (sub-issue
+                 * #33): the exit course-complete site and the no-exit
+                 * DIALOG_013/014 site both call
+                 * pipeline_take_pending_star_event() once the dance/exit
+                 * animation parks, several frames from now. */
+                sPipelinePendingEvent = pipelineBuiltEvent;
+                sPipelinePendingValid = TRUE;
             }
         }
 

@@ -28,6 +28,8 @@
 #include "seq_ids.h"
 #include "sound_init.h"
 #include "rumble_init.h"
+#include "qr_display_n64.h"
+#include "qr_pending_star_event.h"
 
 static struct Object *sIntroWarpPipeObj;
 static struct Object *sEndPeachObj;
@@ -272,6 +274,66 @@ void handle_save_menu(struct MarioState *m) {
                 set_mario_action(m, ACT_IDLE, 0);
             }
         }
+    }
+}
+
+/*
+ * star_exit_show_qr: the Nostr pipeline qr_display glue (spec #24,
+ * sub-issue #33) for the exit-WITH-a-star flows -- act_exit_land_save_dialog()
+ * states 2 ("exit without cap") and 3 ("exit with cap") only. Replaces
+ * handle_save_menu() (the exit course-complete menu: MENU_MODE_RENDER_
+ * COURSE_COMPLETE_SCREEN + the save-and-continue/save-and-quit/continue-
+ * without-saving prompt, ingame_menu.c's render_course_complete_screen())
+ * for those two states. The key-exit flow (state 1) is a Bowser key, not a
+ * star -- interact_star_or_key never builds a pipeline event for a key
+ * grab (spec #24 user story 4, #17) -- so state 1 is left calling the
+ * ORIGINAL handle_save_menu() unmodified, preserving its existing
+ * course-complete/save UI exactly as before; only the two STAR states are
+ * rewired here.
+ *
+ * Mirrors handle_save_menu()'s own "wait for the [cap] animation to
+ * finish" gate (is_anim_past_end(m)) and its exact post-menu resume logic
+ * (disable_time_stop(), turn to face the camera, then either the star-count
+ * milestone dialog or plain ACT_IDLE) -- the only thing actually replaced
+ * is what happens IN PLACE of the interactive save menu while waiting.
+ */
+static void star_exit_show_qr(struct MarioState *m) {
+    s32 dialogID;
+    BuiltEvent pendingEvent;
+
+    if (!is_anim_past_end(m)) {
+        return;
+    }
+
+    /* pipeline_take_pending_star_event() is a one-shot take (qr_pending_star_event.h):
+     * it can only succeed on the FIRST frame this runs after the cap
+     * animation ends, since this whole function re-runs every subsequent
+     * frame while the QR stays up. qr_display_n64_present() re-arms the
+     * shared state for this fresh grab (see its own header comment on
+     * "session" scope) and is itself a no-op if somehow called twice for
+     * the same grab. */
+    if (pipeline_take_pending_star_event(&pendingEvent)) {
+        qr_display_n64_present(&pendingEvent);
+    }
+
+    if (qr_display_n64_is_active()) {
+        if (!qr_display_n64_step()) {
+            // still waiting on the debounced A dismiss
+            return;
+        }
+    }
+
+    // dismissed (or nothing to show at all -- build_event() failure, see
+    // build_event.h -- a defensive fallback, not an expected path): resume
+    // exactly like handle_save_menu() did once its own menu was done.
+    disable_time_stop();
+    m->faceAngle[1] += 0x8000;
+    dialogID = get_star_collection_dialog(m);
+    if (dialogID) {
+        play_peachs_jingle();
+        set_mario_action(m, ACT_READING_AUTOMATIC_DIALOG, dialogID);
+    } else {
+        set_mario_action(m, ACT_IDLE, 0);
     }
 }
 
@@ -613,17 +675,41 @@ void general_star_dance_handler(struct MarioState *m, s32 isInWater) {
                 if (!(m->actionArg & 1)) {
                     level_trigger_warp(m, WARP_OP_STAR_EXIT);
                 } else {
+                    /* Nostr pipeline qr_display glue (spec #24, sub-issue
+                     * #33): the no-exit save flow. This action arg (& 1,
+                     * i.e. INT_SUBTYPE_NO_EXIT) is only ever set for a real
+                     * star grab -- a Bowser key grab always exits (see
+                     * interact_star_or_key, INT_SUBTYPE_NO_EXIT), so the
+                     * event captured at grab is always present here; the
+                     * `else` branch below is a defensive fallback only
+                     * (build_event() failure -- astronomically unlikely,
+                     * see build_event.h), not an expected path. Time-stop
+                     * is enabled here (inherited by qr_display, per its own
+                     * header comment) exactly as the DIALOG_013/014 prompt
+                     * it replaces used to. */
+                    BuiltEvent pendingEvent;
                     enable_time_stop();
-                    create_dialog_box_with_response(gLastCompletedStarNum == 7 ? DIALOG_013 : DIALOG_014);
-                    m->actionState = 1;
+                    if (pipeline_take_pending_star_event(&pendingEvent)
+                        && qr_display_n64_present(&pendingEvent)) {
+                        m->actionState = 1;
+                    } else {
+                        m->actionState = 2;
+                    }
                 }
                 break;
         }
-    } else if (m->actionState == 1 && gDialogResponse != DIALOG_RESPONSE_NONE) {
-        if (gDialogResponse == DIALOG_RESPONSE_YES) {
-            save_file_do_save(gCurrSaveFileNum - 1);
+    } else if (m->actionState == 1) {
+        /* Pump the debounce state machine one frame; qr_display_n64_step()
+         * is a documented no-op when nothing is active. Dismissal already
+         * erased the never-re-summonable bitmap (qr_display_update()).
+         * Saving-on-dismiss is out of scope for this sandbox branch (see
+         * CONTEXT.md's "in-session star progression / saving" note) -- the
+         * QR IS the record now, so there is no save_file_do_save() call
+         * here where DIALOG_013/014's DIALOG_RESPONSE_YES branch used to
+         * be. */
+        if (qr_display_n64_step()) {
+            m->actionState = 2;
         }
-        m->actionState = 2;
     } else if (m->actionState == 2 && is_anim_at_end(m)) {
         disable_time_stop();
         enable_background_sound();
@@ -1080,20 +1166,36 @@ s32 act_exit_land_save_dialog(struct MarioState *m) {
             set_mario_animation(m, m->actionArg == 0 ? MARIO_ANIM_GENERAL_LAND
                                                      : MARIO_ANIM_LAND_FROM_SINGLE_JUMP);
             if (is_anim_past_end(m)) {
-                if (gLastCompletedCourseNum != COURSE_BITDW
-                    && gLastCompletedCourseNum != COURSE_BITFS) {
+                u32 isKeyExit = (gLastCompletedCourseNum == COURSE_BITDW
+                                  || gLastCompletedCourseNum == COURSE_BITFS);
+
+                if (!isKeyExit) {
                     enable_time_stop();
                 }
 
-                set_menu_mode(MENU_MODE_RENDER_COURSE_COMPLETE_SCREEN);
+                /* Nostr pipeline qr_display glue (spec #24, sub-issue #33):
+                 * the exit course-complete menu (MENU_MODE_RENDER_COURSE_
+                 * COMPLETE_SCREEN) is only set up for the key-exit path now
+                 * -- star exits (states 2/3, below) show the QR instead via
+                 * star_exit_show_qr(), never this menu. Bowser keys are out
+                 * of scope for the QR feature (#17) and out of scope for
+                 * this sandbox branch's save changes (CONTEXT.md), so the
+                 * key-exit flow is left entirely as it was. gSaveOptSelectIndex
+                 * is still reset unconditionally (matching the original,
+                 * unconditional behavior exactly) even though only the
+                 * key-exit path's menu ever reads it now, so no stale value
+                 * from an earlier course-complete menu can survive into a
+                 * later one. */
                 gSaveOptSelectIndex = MENU_OPT_NONE;
+                if (isKeyExit) {
+                    set_menu_mode(MENU_MODE_RENDER_COURSE_COMPLETE_SCREEN);
+                }
 
                 m->actionState = 3; // star exit with cap
                 if (!(m->flags & MARIO_CAP_ON_HEAD)) {
                     m->actionState = 2; // star exit without cap
                 }
-                if (gLastCompletedCourseNum == COURSE_BITDW
-                    || gLastCompletedCourseNum == COURSE_BITFS) {
+                if (isKeyExit) {
                     m->actionState = 1; // key exit
                 }
             }
@@ -1127,7 +1229,7 @@ s32 act_exit_land_save_dialog(struct MarioState *m) {
                 m->marioBodyState->eyeState = MARIO_EYES_HALF_CLOSED;
             }
 
-            handle_save_menu(m);
+            star_exit_show_qr(m);
             break;
         // exit with cap
         case 3:
@@ -1145,7 +1247,7 @@ s32 act_exit_land_save_dialog(struct MarioState *m) {
                     cutscene_put_cap_on(m);
                     break;
             }
-            handle_save_menu(m);
+            star_exit_show_qr(m);
             break;
     }
 

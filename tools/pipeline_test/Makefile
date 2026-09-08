@@ -76,9 +76,17 @@
 # the existing qr_host_decode() -- asserting the decoded bytes equal
 # build_event()'s own packed_payload exactly. This proves the blit is
 # faithful without an emulator/camera. GAME_DIR/-I below only ever reaches
-# qr_render.c/.h -- never qr_render_n64.c/.h, which include <ultra64.h> and
-# so are deliberately excluded from this host build (see qr_render_n64.h's
-# header comment).
+# qr_render.c/.h and (sub-issue #33) qr_display.c/.h -- never qr_render_n64.c/
+# .h or qr_display_n64.c/.h, which include <ultra64.h> and so are
+# deliberately excluded from this host build (see qr_render_n64.h's and
+# qr_display_n64.h's own header comments).
+
+# Sub-issue #33 adds ../../src/game/qr_display.c -- the shared qr_display
+# state machine's PURE core (debounced-A dismiss, one-shot erase, never-
+# re-summonable latch). Compiled here unmodified, exactly like qr_render.c;
+# qr_display_n64.c (the real-controller/real-renderer/real-time-stop N64
+# shell) is deliberately excluded for the same <ultra64.h> reason
+# qr_render_n64.c already is.
 
 CC           := gcc
 PYTHON       := python3
@@ -100,7 +108,7 @@ SRCS := main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c $(P
         $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c qr_host_decode.c \
         $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c \
         $(PIPELINE_DIR)/secp256k1.c $(PIPELINE_DIR)/schnorr_adapter.c \
-        $(PIPELINE_DIR)/capture.c $(GAME_DIR)/qr_render.c
+        $(PIPELINE_DIR)/capture.c $(GAME_DIR)/qr_render.c $(GAME_DIR)/qr_display.c
 BIN  := pipeline_test
 
 # BIP-340 test vector 0 (privkey=3): a fixed, published known-answer key,

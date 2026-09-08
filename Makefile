@@ -579,6 +579,24 @@ $(BUILD_DIR)/src/game/interaction.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORM
 $(BUILD_DIR)/src/game/qr_render.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/src/game/qr_render_n64.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 
+# qr_display.o/qr_display_n64.o (sub-issue #33, qr_display state machine)
+# #include qr_display.h -> pipeline/build_event.h -> format_descriptor.h --
+# the same generated-header hazard interaction.o's own prerequisite line
+# above already documents. mario_actions_cutscene.o (sub-issue #33's two
+# save-flow call sites) now #includes qr_display_n64.h AND
+# qr_pending_star_event.h, and game_init.o (sub-issue #33's render-hook call
+# site in display_and_vsync()) now #includes qr_display_n64.h -- all of
+# which reach pipeline/build_event.h the same way, so each needs the same
+# prerequisite -- interaction.h itself was deliberately NOT extended to
+# reach build_event.h (see qr_pending_star_event.h's own header comment)
+# specifically so this prerequisite would stay confined to the objects that
+# actually need it instead of spreading to every other src/game/*.c that
+# #includes interaction.h.
+$(BUILD_DIR)/src/game/qr_display.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/src/game/qr_display_n64.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/src/game/mario_actions_cutscene.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/src/game/game_init.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+
 # Event profile header: derives the x-only pubkey from the per-event secret
 # (PIPELINE_PRIVKEY_FILE, checked for existence above) and bakes it, plus
 # the fixed event shape (kind 8064, the two `t` tags, build-epoch

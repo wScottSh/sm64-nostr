@@ -86,6 +86,23 @@
  * module's color, and pixels just outside the block on both axes differ
  * whenever the neighboring module differs) -- proving the blit is faithful
  * without an emulator/camera (spec #24 acceptance criterion #16's spirit).
+ *
+ * #33 adds test_qr_display_state_machine() (../../src/game/qr_display.h/.c
+ * -- the shared qr_display state machine's PURE core, compiled a second
+ * time here exactly like qr_render.c already is). Feeds a real
+ * build_event() qr_bitmap through a QrDisplayState on synthetic input
+ * sequences and asserts the four behaviors sub-issue #33's acceptance
+ * criteria hinge on: (a) holding A across present() (the same press that
+ * triggered the star dance) never dismisses; (b) release-then-press held
+ * for QR_DISPLAY_MIN_HOLD_FRAMES consecutive frames does dismiss; (c) the
+ * held bitmap is erased (all-zero) immediately after that dismissal; (d) a
+ * present() attempt on that same, already-dismissed state is rejected (the
+ * never-re-summonable invariant). The N64-specific pump (real controller
+ * input, the real renderer, real time-stop coordination -- qr_display_n64.h/
+ * .c) is deliberately NOT compiled here: it includes <ultra64.h> and is
+ * exercised only on emulator (see this branch's own PR notes for what must
+ * be verified there: both save flows replaced, a debounced A dismiss, and
+ * memory erased).
  */
 #include <stdio.h>
 #include <string.h>
@@ -100,6 +117,7 @@
 #include "schnorr_adapter.h"
 #include "capture.h"
 #include "qr_render.h"
+#include "qr_display.h"
 
 static int g_failures = 0;
 
@@ -959,6 +977,94 @@ static void test_capture_matches_host_build_event(void)
           "for the same course/act/coins/frames/nonce");
 }
 
+/*
+ * test_qr_display_state_machine: the shared qr_display state machine's PURE
+ * core (spec #24, sub-issue #33) -- see this file's header comment. Drives
+ * ONE QrDisplayState through a synthetic input sequence and asserts all
+ * four acceptance-critical behaviors.
+ */
+static void test_qr_display_state_machine(void)
+{
+    StarCapture capture;
+    BuiltEvent event;
+    int buildOk;
+    QrDisplayState state;
+    int i;
+    int dismissed;
+    int anyNonZero;
+    int allZero;
+
+    capture.course  = 1;
+    capture.act     = 1;
+    capture.coins   = 8;
+    capture.frames  = 0x11223344u;
+    capture.nonce16 = 0x1234;
+    capture.keyId   = 0;
+
+    buildOk = build_event(&capture, kBuildEventPrivkey, &event);
+    check(buildOk != 0, "qr_display: build_event succeeds for the display test's StarCapture");
+    if (!buildOk) {
+        return;
+    }
+
+    /* Sanity: the bitmap under test is not already all-zero, so the erase
+     * assertion below (c) is actually meaningful. */
+    anyNonZero = 0;
+    for (i = 0; i < PIPELINE_BUILT_QR_BITMAP_SIZE; i++) {
+        if (event.qr_bitmap[i] != 0) {
+            anyNonZero = 1;
+            break;
+        }
+    }
+    check(anyNonZero, "qr_display: the built qr_bitmap under test is not already all-zero");
+
+    qr_display_init(&state);
+    check(!qr_display_is_active(&state), "qr_display: freshly-initialized state is not active");
+
+    check(qr_display_present(&state, event.qr_bitmap) != 0,
+          "qr_display: present() succeeds on a fresh state");
+    check(qr_display_is_active(&state), "qr_display: state is active immediately after present()");
+    check(memcmp(state.bitmap, event.qr_bitmap, PIPELINE_BUILT_QR_BITMAP_SIZE) == 0,
+          "qr_display: presented state holds a copy of the bitmap");
+
+    /* (a) holding A from the dance (the same press that triggered it,
+     * never yet released) does NOT dismiss, no matter how long it's held. */
+    for (i = 0; i < 10; i++) {
+        check(qr_display_update(&state, 1) == 0,
+              "qr_display: holding A with no prior release never dismisses");
+    }
+    check(qr_display_is_active(&state), "qr_display: still active after holding A with no release");
+
+    /* (b) release-then-press held for QR_DISPLAY_MIN_HOLD_FRAMES
+     * consecutive frames DOES dismiss -- not a single frame sooner. */
+    check(qr_display_update(&state, 0) == 0, "qr_display: a release frame itself never dismisses");
+    for (i = 1; i < QR_DISPLAY_MIN_HOLD_FRAMES; i++) {
+        check(qr_display_update(&state, 1) == 0,
+              "qr_display: a fresh press held under the minimum frame count doesn't dismiss yet");
+    }
+    dismissed = qr_display_update(&state, 1);
+    check(dismissed != 0,
+          "qr_display: release-then-press held for QR_DISPLAY_MIN_HOLD_FRAMES dismisses");
+    check(!qr_display_is_active(&state), "qr_display: state is no longer active after dismissal");
+
+    /* (c) after dismiss, the held bitmap buffer is erased (all-zero). */
+    allZero = 1;
+    for (i = 0; i < PIPELINE_BUILT_QR_BITMAP_SIZE; i++) {
+        if (state.bitmap[i] != 0) {
+            allZero = 0;
+            break;
+        }
+    }
+    check(allZero, "qr_display: bitmap is memset-erased (all-zero) after dismissal");
+
+    /* (d) a re-summon attempt (present() again on the SAME, already-
+     * dismissed state) is rejected -- the never-re-summonable invariant. */
+    check(qr_display_present(&state, event.qr_bitmap) == 0,
+          "qr_display: present() after a dismissal on the same state is rejected "
+          "(never re-summonable)");
+    check(!qr_display_is_active(&state), "qr_display: a rejected present() leaves the state inactive");
+}
+
 int main(void)
 {
     test_format_descriptor_round_trip();
@@ -975,6 +1081,7 @@ int main(void)
     test_capture_build_known_answer();
     test_capture_matches_host_build_event();
     test_qr_render_blit_round_trips_through_decode();
+    test_qr_display_state_machine();
 
     if (g_failures != 0) {
         printf("%d check(s) FAILED\n", g_failures);

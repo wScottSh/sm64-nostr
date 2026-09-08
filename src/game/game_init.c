@@ -19,6 +19,7 @@
 #include "segment2.h"
 #include "segment_symbols.h"
 #include "rumble_init.h"
+#include "qr_display_n64.h"
 
 // First 3 controller slots
 struct Controller gControllers[3];
@@ -370,6 +371,17 @@ void display_and_vsync(void) {
     exec_display_list(&gGfxPool->spTask);
     profiler_log_thread5_time(AFTER_DISPLAY_LISTS);
     osRecvMesg(&gGameVblankQueue, &gMainReceivedMesg, OS_MESG_BLOCK);
+    /* Nostr pipeline qr_display glue (spec #24, sub-issue #33): overlay the
+     * on-screen QR, if one is currently active, directly onto the physical
+     * framebuffer about to be swapped to the VI. gPhysicalFramebuffers[
+     * sRenderedFramebuffer] was fully rendered by the RDP a full frame ago
+     * (see qr_display_n64.h's own header comment for why this exact call
+     * site is the only one guaranteed not to be clobbered by this frame's
+     * own 3D scene render), so writing here is safe every frame the QR is
+     * up, keeping it on screen for the game's existing triple-buffered
+     * rendering exactly like any other frame's content. A no-op when no QR
+     * is active. */
+    qr_display_n64_render_if_active(gPhysicalFramebuffers[sRenderedFramebuffer]);
     osViSwapBuffer((void *) PHYSICAL_TO_VIRTUAL(gPhysicalFramebuffers[sRenderedFramebuffer]));
     profiler_log_thread5_time(THREAD5_END);
     osRecvMesg(&gGameVblankQueue, &gMainReceivedMesg, OS_MESG_BLOCK);
