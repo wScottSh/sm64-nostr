@@ -143,7 +143,7 @@ FORMAT_DESCRIPTOR_JSON := $(PIPELINE_DIR)/format_descriptor.json
 FORMAT_DESCRIPTOR_H    := $(INC_DIR)/format_descriptor.h
 EVENT_PROFILE_H_IN     := ../../include/event_profile.h.in
 EVENT_PROFILE_H        := $(INC_DIR)/event_profile.h
-REGISTRY_FILE          := $(BUILD_DIR)/registry.md
+EVENT_MANIFEST         := $(BUILD_DIR)/event_profile.manifest.json
 SECP256K1_BAKED_H_IN   := ../../include/secp256k1_baked.h.in
 SECP256K1_BAKED_H      := $(INC_DIR)/secp256k1_baked.h
 
@@ -161,7 +161,7 @@ $(FORMAT_DESCRIPTOR_H): $(FORMAT_DESCRIPTOR_JSON) $(TOOLS_DIR)/gen_format_descri
 
 $(EVENT_PROFILE_H): $(EVENT_PROFILE_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_event_profile.py $(TOOLS_DIR)/nostr_secp256k1.py
 	@mkdir -p $(INC_DIR)
-	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat --registry $(REGISTRY_FILE) --commit host-test --created-at $(TEST_CREATED_AT)
+	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat --manifest $(EVENT_MANIFEST) --commit host-test --created-at $(TEST_CREATED_AT)
 
 $(SECP256K1_BAKED_H): $(SECP256K1_BAKED_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_secp256k1_baked.py $(TOOLS_DIR)/nostr_secp256k1.py
 	@mkdir -p $(INC_DIR)

@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """
 Generate event_profile.h (spec #24, sub-issue #26) from include/event_profile.h.in
-plus a per-event 32-byte hex secp256k1 private key, and append a row to the
-gitignored keys/registry.md.
+plus a per-event 32-byte hex secp256k1 private key, and write a manifest sidecar
+(--manifest) describing the baked event identity.
+
+The manifest is the hand-off to stamp_rom_registry.py: the registry row is written
+at ROM-completion time (not here), so it can bind the finished ROM's sha1 to the
+identity baked into it. Writing the registry here -- decoupled from the artifact --
+was the record-keeping gap: a row recorded an identity but nothing tied it to which
+ROM (if any) actually shipped, and rebuilds re-minted created_at with no way to map a
+scanned QR (which only reveals created_at) or a .z64 back to a build.
 
 Bakes both the derived x-only pubkey AND the raw privkey bytes into the
 generated header (spec #24, sub-issue #31: the ROM's capture glue calls
@@ -16,10 +23,11 @@ also fails the build, never silently producing a keyless/garbage-keyed binary.
 
 Usage:
   gen_event_profile.py --privkey <path> --template <path> --out <path>
-                        --label <str> --registry <path> [--commit <sha>]
+                        --label <str> --manifest <path> [--commit <sha>]
                         [--created-at <epoch>]
 """
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -57,18 +65,11 @@ def resolve_commit_sha(explicit):
         return "unknown"
 
 
-def append_registry_row(registry_path, label, pubkey_hex, npub, build_date, commit_sha):
-    os.makedirs(os.path.dirname(os.path.abspath(registry_path)) or ".", exist_ok=True)
-    is_new = not os.path.exists(registry_path)
-    with open(registry_path, "a") as f:
-        if is_new:
-            f.write("# Nostr pipeline event key registry (gitignored; spec #24, sub-issue #26)\n\n")
-            f.write("| label | pubkey (hex) | npub | build date | commit |\n")
-            f.write("|---|---|---|---|---|\n")
-        f.write(
-            "| %s | %s | %s | %s | %s |\n"
-            % (label, pubkey_hex, npub, build_date, commit_sha)
-        )
+def write_manifest(manifest_path, manifest):
+    os.makedirs(os.path.dirname(os.path.abspath(manifest_path)) or ".", exist_ok=True)
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+        f.write("\n")
 
 
 def main():
@@ -77,7 +78,7 @@ def main():
     ap.add_argument("--template", required=True, help="path to event_profile.h.in")
     ap.add_argument("--out", required=True, help="output event_profile.h path")
     ap.add_argument("--label", required=True, help="event label for the registry row")
-    ap.add_argument("--registry", required=True, help="path to keys/registry.md")
+    ap.add_argument("--manifest", required=True, help="path to write the event identity manifest (JSON)")
     ap.add_argument("--commit", default=None)
     ap.add_argument("--created-at", type=int, default=None)
     args = ap.parse_args()
@@ -114,7 +115,18 @@ def main():
     with open(args.out, "w") as f:
         f.write(rendered)
 
-    append_registry_row(args.registry, args.label, pubkey_hex, npub, build_date, commit_sha)
+    write_manifest(
+        args.manifest,
+        {
+            "label": args.label,
+            "pubkey_hex": pubkey_hex,
+            "npub": npub,
+            "created_at": created_at,
+            "build_date": build_date,
+            "commit": commit_sha,
+            "event_profile_h": os.path.basename(args.out),
+        },
+    )
 
     return 0
 
