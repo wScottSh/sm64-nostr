@@ -283,9 +283,11 @@ PIPELINE_REGISTRY_FILE        := $(PIPELINE_KEYS_DIR)/registry.md
 PIPELINE_KEY_LABEL            ?= dev-event
 PIPELINE_EVENT_PROFILE_H_IN   := include/event_profile.h.in
 PIPELINE_EVENT_PROFILE_H      := $(BUILD_DIR)/include/event_profile.h
+PIPELINE_EVENT_MANIFEST       := $(BUILD_DIR)/include/event_profile.manifest.json
 PIPELINE_FORMAT_DESCRIPTOR_JSON := $(PIPELINE_SRC_DIR)/format_descriptor.json
 PIPELINE_FORMAT_DESCRIPTOR_H  := $(BUILD_DIR)/include/format_descriptor.h
 GEN_EVENT_PROFILE_PY          := $(TOOLS_DIR)/gen_event_profile.py
+STAMP_ROM_REGISTRY_PY         := $(TOOLS_DIR)/stamp_rom_registry.py
 GEN_FORMAT_DESCRIPTOR_PY      := $(TOOLS_DIR)/gen_format_descriptor.py
 
 # Baked secp256k1 public point (spec #43, sub-issue #46): P = d*G, computed
@@ -624,11 +626,13 @@ $(BUILD_DIR)/src/game/game_init.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 # (PIPELINE_PRIVKEY_FILE, checked for existence above) and bakes it, plus
 # the fixed event shape (kind 8064, the two `t` tags, build-epoch
 # created_at), into a generated header -- following the same *.h.in ->
-# $(BUILD_DIR)/include recipe as text_strings.h/level_headers.h. Also
-# appends a row to the gitignored keys/registry.md.
+# $(BUILD_DIR)/include recipe as text_strings.h/level_headers.h. Also writes
+# a manifest sidecar describing the baked identity; the registry row that binds
+# that identity to the finished ROM's sha1 is appended later, by the $(ROM)
+# recipe (see stamp_rom_registry.py), so a shipped .z64 is always traceable.
 $(PIPELINE_EVENT_PROFILE_H): $(PIPELINE_EVENT_PROFILE_H_IN) $(PIPELINE_PRIVKEY_FILE) $(GEN_EVENT_PROFILE_PY) $(TOOLS_DIR)/nostr_secp256k1.py
 	$(call print,Generating event profile:,$<,$@)
-	$(V)$(PYTHON) $(GEN_EVENT_PROFILE_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_EVENT_PROFILE_H_IN) --out $@ --label $(PIPELINE_KEY_LABEL) --registry $(PIPELINE_REGISTRY_FILE)
+	$(V)$(PYTHON) $(GEN_EVENT_PROFILE_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_EVENT_PROFILE_H_IN) --out $@ --label $(PIPELINE_KEY_LABEL) --manifest $(PIPELINE_EVENT_MANIFEST)
 
 # Format descriptor header: single source of truth for the packed QR
 # payload's field layout, rendered from src/pipeline/format_descriptor.json.
@@ -1195,6 +1199,7 @@ else
 	$(V)$(OBJCOPY) $(PAD_TO_GAP_FILL) $< $(@:.z64=.bin) -O binary
 	$(V)$(N64CKSUM) $(@:.z64=.bin) $@
 endif
+	$(V)$(PYTHON) $(STAMP_ROM_REGISTRY_PY) --rom $@ --manifest $(PIPELINE_EVENT_MANIFEST) --registry $(PIPELINE_REGISTRY_FILE)
 
 $(BUILD_DIR)/$(TARGET).objdump: $(ELF)
 	$(OBJDUMP) -D $< > $@
