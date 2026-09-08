@@ -65,6 +65,12 @@ ROM does not match the original US sha1 — hash comparison is expected to diffe
 also auto-disabled by any non-default option). Asset extraction still requires an **unmodified** US ROM at
 `./baserom.us.z64` (`sha1: 9bef1128717f958171a4afac3ed78ee2bb4e86ce`); assets are not distributed with the repo.
 
+The build uses **gcc** (the `mips-linux-gnu-` cross-compiler, already in the Docker image) — this is the default
+`COMPILER`, so no extra flag is needed. Because the ROM is intentionally non-matching, the IDO toolchain (whose only
+purpose is byte-matching the original ROM) buys nothing here and is **not** required; the vendored `ido-static-recomp`
+is additionally unreliable in this Docker environment. Pass `COMPILER=ido` only if you have a working IDO toolchain
+and specifically want a matching build.
+
 The underlying decomp still supports the other versions (`jp`, `eu`, `sh`, `cn`), but the sandbox and pipeline
 work is validated on US and run in [ares](https://ares-emu.net/) (Video Output = Integer, Aspect Correction =
 None, so the QR is not resampled).
@@ -136,6 +142,7 @@ make VERSION=us COMPARE=0 -j4
 Configurable variables (default first):
 
 * ``VERSION``: ``us``, ``jp``, ``eu``, ``sh``, ``cn``
+* ``COMPILER``: ``gcc`` (default for this fork, non-matching), ``ido`` (matching; needs a working IDO toolchain)
 * ``COMPARE``: ``1`` (compare ROM hash), ``0`` (do not) — use ``0`` here, the ROM is modified
 * ``GRUCODE``: ``f3d_old``, ``f3d_new``, ``f3dex``, ``f3dex2``, ``f3dzex``
 * ``NON_MATCHING``: use functionally equivalent C for non-matchings; also avoids undefined behavior

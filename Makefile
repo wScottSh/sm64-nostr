@@ -21,9 +21,19 @@ TARGET_N64 ?= 1
 
 # COMPILER - selects the C compiler to use
 #   ido - uses the SGI IRIS Development Option compiler, which is used to build
-#         an original matching N64 ROM
+#         an original *matching* N64 ROM
 #   gcc - uses the GNU C Compiler
-COMPILER ?= ido
+#
+# This fork defaults to gcc. The sm64-nostr ROM is intentionally non-matching
+# (the sandbox castle + in-game Nostr QR pipeline change the game, and COMPARE=0
+# is forced), so IDO's sole advantage -- byte-matching the original US ROM -- is
+# unreachable here. The vendored ido-static-recomp toolchain is also unreliable
+# in the Ubuntu 18.04 Docker build env (its recompiled `cfe` misexecutes and the
+# default -Os recomp build miscompiles into nondeterministic segfaults), so the
+# IDO path cannot currently produce a ROM here at all. gcc is the supported,
+# reproducible path and skips the recomp entirely. Override with `COMPILER=ido`
+# if you have a working IDO toolchain and specifically want a matching build.
+COMPILER ?= gcc
 $(eval $(call validate-option,COMPILER,ido gcc))
 
 
