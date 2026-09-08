@@ -470,7 +470,15 @@ endif
 # choice -- this mirrors the existing iQue per-object carve-out above
 # (IQUE_RECOMPILED), which overrides CC/CFLAGS for a fixed object list
 # regardless of COMPILER.
-PIPELINE_C99_PORT_SRC := $(PIPELINE_SRC_DIR)/port_stub_c99.c $(PIPELINE_SRC_DIR)/qrcodegen.c $(PIPELINE_SRC_DIR)/sha256.c
+# secp256k1.c (sub-issue #29) is the from-scratch C99 port of the
+# secp256k1 elliptic curve arithmetic (256-bit bignum + Jacobian point ops)
+# needed for BIP-340 Schnorr signing, hidden behind schnorr_adapter.h/.c
+# below. It leans on `unsigned long long` for 32x32->64-bit multiply/carry
+# widening throughout (the same built-in-type justification sha256.h gives
+# for its own bitlen field), so -- like sha256.c/qrcodegen.c -- it goes
+# through this C99 carve-out rather than the whole-build COMPILER knob,
+# regardless of whether IDO could parse its specific syntax.
+PIPELINE_C99_PORT_SRC := $(PIPELINE_SRC_DIR)/port_stub_c99.c $(PIPELINE_SRC_DIR)/qrcodegen.c $(PIPELINE_SRC_DIR)/sha256.c $(PIPELINE_SRC_DIR)/secp256k1.c
 PIPELINE_C99_PORT_O   := $(foreach file,$(PIPELINE_C99_PORT_SRC),$(BUILD_DIR)/$(file:.c=.o))
 PIPELINE_C99_CFLAGS   := -std=gnu99 -G 0 $(OPT_FLAGS) $(TARGET_CFLAGS) $(DEF_INC_CFLAGS) -mno-shared -march=vr4300 -mfix4300 -mabi=32 -mhard-float -mdivide-breaks -fno-stack-protector -fno-common -fno-zero-initialized-in-bss -fno-PIC -mno-abicalls -fno-strict-aliasing -fno-inline-functions -ffreestanding -fwrapv -Wall -Wextra
 $(PIPELINE_C99_PORT_O): CC := $(CROSS)gcc
@@ -496,7 +504,15 @@ $(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
 # (sub-issue #28) is the pipeline-internal serialize+id seam in front of the
 # C99 sha256.c port above; it #includes the generated event_profile.h for
 # the baked serialization prefix (pubkey/created_at/kind/tags).
-PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(PIPELINE_C99_PORT_O)
+# schnorr_adapter.c (sub-issue #29) is the pipeline-internal BIP-340
+# signing seam in front of the C99 secp256k1.c port above. Despite
+# #including sha256.h, it only ever calls that header's one-shot
+# pipeline_sha256() wrapper (building its own concatenation buffers via
+# explicit byte copies, never the streaming init/update/final API), so --
+# like event_id.c -- its own code contains no C99-only constructs (no
+# block-scoped for-loop declarations, no _Bool) and it needs no C99,
+# staying in this "pure" list rather than the carve-out.
+PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o $(PIPELINE_C99_PORT_O)
 
 # pack_adapter.o #includes format_descriptor.h; make sure it's generated
 # first. build_event.o doesn't currently use event_profile.h, but the

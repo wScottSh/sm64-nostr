@@ -40,6 +40,7 @@
 #include "qr_host_decode.h"
 #include "sha256.h"
 #include "event_id.h"
+#include "schnorr_adapter.h"
 
 static int g_failures = 0;
 
@@ -421,6 +422,83 @@ static void test_content_escaping_path(void)
     }
 }
 
+/*
+ * BIP-340 Schnorr signing tests (spec #24, sub-issue #29).
+ *
+ * The KAT below is the published BIP-340 test vector 0
+ * (bitcoin/bips/bip-0340/test-vectors.csv, row 0): secret key 3, aux_rand
+ * all-zero, message all-zero, expected signature as given. secret key 3 is
+ * the SAME BIP-340 KAT key already used for test_pubkey_known_answer()
+ * above and baked into this host tool's generated event_profile.h
+ * (TEST_PRIVKEY_HEX, see the Makefile) -- so kExpectedPubkeyHex there and
+ * kPubkey here must (and do) agree.
+ *
+ * Independent verification: this signature was independently checked
+ * against @noble/curves (a real, separately-maintained secp256k1/Schnorr
+ * JS library -- see tools/verify_schnorr_reference.js for the accept/
+ * tampered-reject run and why it's a genuine independent oracle, not a
+ * second implementation of this same code). test_schnorr_verify_* below
+ * uses this file's OWN pipeline_schnorr_verify() -- an internal
+ * self-consistency check only, explicitly NOT that independent oracle
+ * (see schnorr_adapter.h's own header comment on the distinction).
+ */
+static const pipeline_u8 kSchnorrPrivkey[PIPELINE_SCHNORR_PRIVKEY_SIZE] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+};
+static const pipeline_u8 kSchnorrMessageZero[PIPELINE_SCHNORR_MSG_SIZE] = {0};
+static const pipeline_u8 kSchnorrExpectedSig[PIPELINE_SCHNORR_SIG_SIZE] = {
+    0xe9, 0x07, 0x83, 0x1f, 0x80, 0x84, 0x8d, 0x10, 0x69, 0xa5, 0x37, 0x1b, 0x40, 0x24, 0x10, 0x36,
+    0x4b, 0xdf, 0x1c, 0x5f, 0x83, 0x07, 0xb0, 0x08, 0x4c, 0x55, 0xf1, 0xce, 0x2d, 0xca, 0x82, 0x15,
+    0x25, 0xf6, 0x6a, 0x4a, 0x85, 0xea, 0x8b, 0x71, 0xe4, 0x82, 0xa7, 0x4f, 0x38, 0x2d, 0x2c, 0xe5,
+    0xeb, 0xee, 0xe8, 0xfd, 0xb2, 0x17, 0x2f, 0x47, 0x7d, 0xf4, 0x90, 0x0d, 0x31, 0x05, 0x36, 0xc0,
+};
+
+static void test_schnorr_signing_known_answer(void)
+{
+    pipeline_u8 sig[PIPELINE_SCHNORR_SIG_SIZE];
+    int ok = pipeline_schnorr_sign(kSchnorrMessageZero, kSchnorrPrivkey, sig);
+
+    check(ok != 0, "pipeline_schnorr_sign succeeds for the BIP-340 KAT (privkey=3, aux_rand=0, msg=0)");
+    check(ok && memcmp(sig, kSchnorrExpectedSig, PIPELINE_SCHNORR_SIG_SIZE) == 0,
+          "pipeline_schnorr_sign matches the published BIP-340 test vector 0 signature exactly");
+}
+
+static void test_schnorr_verify_internal_self_consistency(void)
+{
+    /* PIPELINE_EVENT_PUBKEY_BYTES is generated from TEST_PRIVKEY_HEX
+     * (privkey 3, same as kSchnorrPrivkey above) -- see the Makefile and
+     * test_pubkey_known_answer(). */
+    static const pipeline_u8 pubkey[32] = PIPELINE_EVENT_PUBKEY_BYTES;
+    int verifyOk = pipeline_schnorr_verify(kSchnorrMessageZero, pubkey, kSchnorrExpectedSig);
+    pipeline_u8 tamperedMsg[PIPELINE_SCHNORR_MSG_SIZE];
+    int tamperedOk;
+
+    check(verifyOk != 0, "pipeline_schnorr_verify (internal) accepts the real KAT signature against the build's pubkey");
+
+    memcpy(tamperedMsg, kSchnorrMessageZero, PIPELINE_SCHNORR_MSG_SIZE);
+    tamperedMsg[0] ^= 1;
+    tamperedOk = pipeline_schnorr_verify(tamperedMsg, pubkey, kSchnorrExpectedSig);
+    check(tamperedOk == 0, "pipeline_schnorr_verify (internal) rejects the same signature against a tampered id");
+}
+
+static void test_schnorr_sign_is_deterministic(void)
+{
+    /* Full-pipeline determinism (spec #24's signing decision): signing the
+     * same (privkey, message) twice must yield byte-identical output --
+     * aux_rand is always the fixed all-zero value, never sourced from
+     * anything nondeterministic. */
+    pipeline_u8 sigA[PIPELINE_SCHNORR_SIG_SIZE];
+    pipeline_u8 sigB[PIPELINE_SCHNORR_SIG_SIZE];
+    int okA = pipeline_schnorr_sign(kSchnorrMessageZero, kSchnorrPrivkey, sigA);
+    int okB = pipeline_schnorr_sign(kSchnorrMessageZero, kSchnorrPrivkey, sigB);
+
+    check(okA && okB && memcmp(sigA, sigB, PIPELINE_SCHNORR_SIG_SIZE) == 0,
+          "pipeline_schnorr_sign is deterministic across repeated calls with the same inputs");
+}
+
 int main(void)
 {
     test_format_descriptor_round_trip();
@@ -431,6 +509,9 @@ int main(void)
     test_sha256_known_answer_vectors();
     test_event_id_matches_reference();
     test_content_escaping_path();
+    test_schnorr_signing_known_answer();
+    test_schnorr_verify_internal_self_consistency();
+    test_schnorr_sign_is_deterministic();
 
     if (g_failures != 0) {
         printf("%d check(s) FAILED\n", g_failures);

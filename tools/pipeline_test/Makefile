@@ -41,6 +41,19 @@
 # by the reference oracle (tools/reference_event_id.js, host/test-only,
 # never a ROM path) and by the pipeline's own id computation are guaranteed
 # to agree.
+#
+# Sub-issue #29 adds secp256k1.c and schnorr_adapter.c -- again the SAME
+# pure pipeline sources as the ROM side -- plus the BIP-340 signing KAT
+# (privkey = TEST_PRIVKEY_HEX = the published BIP-340 test vector 0 key,
+# aux_rand = 0), an internal sign-then-verify self-consistency check, and a
+# tampered-message-is-rejected check, all in main.c. The signature this KAT
+# pins was independently cross-checked against @noble/curves (a real,
+# separately-maintained JS secp256k1/Schnorr library) -- see
+# tools/verify_schnorr_reference.js (host/test-only, like
+# reference_event_id.js, never a ROM path) -- which is the GENUINELY
+# independent verifier spec #24/#29's acceptance criteria call for;
+# pipeline_schnorr_verify() in this host tool is only an internal
+# self-consistency check, not that independent oracle.
 
 CC           := gcc
 PYTHON       := python3
@@ -53,7 +66,8 @@ CFLAGS := -std=gnu99 -Wall -Wextra -I $(PIPELINE_DIR) -I $(INC_DIR)
 
 SRCS := main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c $(PIPELINE_DIR)/pack_adapter.c \
         $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c qr_host_decode.c \
-        $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c
+        $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c \
+        $(PIPELINE_DIR)/secp256k1.c $(PIPELINE_DIR)/schnorr_adapter.c
 BIN  := pipeline_test
 
 # BIP-340 test vector 0 (privkey=3): a fixed, published known-answer key,
