@@ -8,6 +8,7 @@
 
 #include "schnorr_adapter.h"
 #include "secp256k1.h"
+#include "secp256k1_baked.h"
 #include "sha256.h"
 
 /* BIP-340 tagged hash tags, as explicit byte arrays with explicit lengths
@@ -70,10 +71,17 @@ int pipeline_schnorr_sign(const pipeline_u8 msg32[PIPELINE_SCHNORR_MSG_SIZE],
      * signing decision: aux_rand = 0, live-deterministic k = f(d, m)). */
     static const pipeline_u8 kAuxRand[32] = {0};
 
+    /* P = d'*G, baked at build time (spec #43, sub-issue #46) since the
+     * per-event private key is itself a build-time constant -- see
+     * secp256k1_baked.h's own header comment. Only P's x bytes and y-parity
+     * are ever needed below (step 2's has_even_y(P) sign choice and
+     * BIP-340's bytes(P), used directly wherever pBytes used to be a
+     * separate copy of it); P's y value itself is never read, so it is
+     * deliberately not baked. */
+    static const pipeline_u8 kBakedPubkeyX[32] = PIPELINE_SECP256K1_BAKED_PUBKEY_X_BYTES;
+
     pipeline_secp256k1_num dPrime;
-    pipeline_secp256k1_point capP;
     pipeline_secp256k1_num d;
-    pipeline_u8 pBytes[32];
     pipeline_u8 t0[32];
     pipeline_u8 dBytes[32];
     pipeline_u8 t[32];
@@ -95,14 +103,16 @@ int pipeline_schnorr_sign(const pipeline_u8 msg32[PIPELINE_SCHNORR_MSG_SIZE],
         return 0;
     }
 
-    /* Step 2: P = d'*G; d = has_even_y(P) ? d' : n - d'. */
-    pipeline_secp256k1_point_mul_base(&dPrime, &capP);
-    if (pipeline_secp256k1_point_y_is_even(&capP)) {
+    /* Step 2: P = d'*G; d = has_even_y(P) ? d' : n - d'. P is a build-time
+     * constant (sub-issue #46), so this no longer runs a scalar
+     * multiplication (nor the affine-conversion inversion point_mul_base's
+     * Jacobian-to-affine step would otherwise need) -- it is just the
+     * baked x bytes plus a compile-time-known parity flag. */
+    if (PIPELINE_SECP256K1_BAKED_PUBKEY_Y_IS_EVEN) {
         d = dPrime;
     } else {
         pipeline_secp256k1_scalar_negate(&dPrime, &d);
     }
-    pipeline_secp256k1_num_to_bytes(&capP.x, pBytes);
 
     /* Step 3: t = bytes(d) XOR tagged_hash("BIP0340/aux", aux_rand). */
     {
@@ -120,7 +130,7 @@ int pipeline_schnorr_sign(const pipeline_u8 msg32[PIPELINE_SCHNORR_MSG_SIZE],
     {
         hash_part parts[3];
         parts[0].data = t;         parts[0].len = 32;
-        parts[1].data = pBytes;    parts[1].len = 32;
+        parts[1].data = kBakedPubkeyX; parts[1].len = 32;
         parts[2].data = msg32;     parts[2].len = PIPELINE_SCHNORR_MSG_SIZE;
         tagged_hash(kTagNonce, sizeof(kTagNonce), parts, 3, randBuf);
     }
@@ -146,7 +156,7 @@ int pipeline_schnorr_sign(const pipeline_u8 msg32[PIPELINE_SCHNORR_MSG_SIZE],
         hash_part parts[3];
         pipeline_secp256k1_num eRaw;
         parts[0].data = rBytes;    parts[0].len = 32;
-        parts[1].data = pBytes;    parts[1].len = 32;
+        parts[1].data = kBakedPubkeyX; parts[1].len = 32;
         parts[2].data = msg32;     parts[2].len = PIPELINE_SCHNORR_MSG_SIZE;
         tagged_hash(kTagChallenge, sizeof(kTagChallenge), parts, 3, eHash);
         pipeline_secp256k1_num_from_bytes(eHash, &eRaw);

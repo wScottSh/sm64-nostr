@@ -92,6 +92,15 @@
 # files -- secp256k1.c/.h are the SAME files, rewritten in place -- but
 # does add -DPIPELINE_SECP256K1_OP_COUNT below, plus main.c's field-multiply
 # differential sweep and op-count-proxy tests.
+#
+# Spec #43 sub-issue #46 (build-time public point) adds a third generated
+# header, secp256k1_baked.h: rendered by ../gen_secp256k1_baked.py from the
+# SAME fixed TEST_PRIVKEY_HEX below (never the real per-event secret --
+# same rule as EVENT_PROFILE_H's own comment above), mirroring how
+# EVENT_PROFILE_H is built here from that key. schnorr_adapter.c now
+# #includes this generated header instead of computing P = d*G at runtime;
+# main.c's differential-sweep test confirms the baked P matches a
+# reference-computed d*G for TEST_PRIVKEY_HEX.
 
 CC           := gcc
 PYTHON       := python3
@@ -135,6 +144,8 @@ FORMAT_DESCRIPTOR_H    := $(INC_DIR)/format_descriptor.h
 EVENT_PROFILE_H_IN     := ../../include/event_profile.h.in
 EVENT_PROFILE_H        := $(INC_DIR)/event_profile.h
 REGISTRY_FILE          := $(BUILD_DIR)/registry.md
+SECP256K1_BAKED_H_IN   := ../../include/secp256k1_baked.h.in
+SECP256K1_BAKED_H      := $(INC_DIR)/secp256k1_baked.h
 
 .PHONY: all test clean
 
@@ -152,7 +163,11 @@ $(EVENT_PROFILE_H): $(EVENT_PROFILE_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_
 	@mkdir -p $(INC_DIR)
 	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat --registry $(REGISTRY_FILE) --commit host-test --created-at $(TEST_CREATED_AT)
 
-$(BIN): $(SRCS) $(FORMAT_DESCRIPTOR_H) $(EVENT_PROFILE_H)
+$(SECP256K1_BAKED_H): $(SECP256K1_BAKED_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_secp256k1_baked.py $(TOOLS_DIR)/nostr_secp256k1.py
+	@mkdir -p $(INC_DIR)
+	$(PYTHON) $(TOOLS_DIR)/gen_secp256k1_baked.py --privkey $(TEST_PRIVKEY_FILE) --template $(SECP256K1_BAKED_H_IN) --out $@
+
+$(BIN): $(SRCS) $(FORMAT_DESCRIPTOR_H) $(EVENT_PROFILE_H) $(SECP256K1_BAKED_H)
 	$(CC) $(CFLAGS) -o $@ $(SRCS)
 
 test: $(BIN)

@@ -278,6 +278,14 @@ PIPELINE_FORMAT_DESCRIPTOR_H  := $(BUILD_DIR)/include/format_descriptor.h
 GEN_EVENT_PROFILE_PY          := $(TOOLS_DIR)/gen_event_profile.py
 GEN_FORMAT_DESCRIPTOR_PY      := $(TOOLS_DIR)/gen_format_descriptor.py
 
+# Baked secp256k1 public point (spec #43, sub-issue #46): P = d*G, computed
+# and validated at build time from the same PIPELINE_PRIVKEY_FILE above, so
+# the ROM's signing path never re-derives it at runtime -- see
+# include/secp256k1_baked.h.in's own header comment.
+PIPELINE_SECP256K1_BAKED_H_IN := include/secp256k1_baked.h.in
+PIPELINE_SECP256K1_BAKED_H    := $(BUILD_DIR)/include/secp256k1_baked.h
+GEN_SECP256K1_BAKED_PY        := $(TOOLS_DIR)/gen_secp256k1_baked.py
+
 # Fail closed: a normal build must never produce a keyless binary. This
 # mirrors the MIPS-toolchain $(error) check above (same exemptions: goals
 # that don't actually build the ROM never need the real per-event secret --
@@ -555,7 +563,7 @@ PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H) $(PIPELINE_SECP256K1_BAKED_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/sha256.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
@@ -616,8 +624,17 @@ $(PIPELINE_FORMAT_DESCRIPTOR_H): $(PIPELINE_FORMAT_DESCRIPTOR_JSON) $(GEN_FORMAT
 	$(call print,Generating format descriptor:,$<,$@)
 	$(V)$(PYTHON) $(GEN_FORMAT_DESCRIPTOR_PY) --json $(PIPELINE_FORMAT_DESCRIPTOR_JSON) --out $@
 
+# Baked secp256k1 public point header (spec #43, sub-issue #46): computes
+# P = d*G from the same per-event secret PIPELINE_PRIVKEY_FILE above and
+# bakes it as a constant, failing closed (nonzero exit, no header written)
+# if the key is malformed/out-of-range or P fails validation against the
+# reference EC math -- see gen_secp256k1_baked.py's own header comment.
+$(PIPELINE_SECP256K1_BAKED_H): $(PIPELINE_SECP256K1_BAKED_H_IN) $(PIPELINE_PRIVKEY_FILE) $(GEN_SECP256K1_BAKED_PY) $(TOOLS_DIR)/nostr_secp256k1.py
+	$(call print,Generating baked secp256k1 public point:,$<,$@)
+	$(V)$(PYTHON) $(GEN_SECP256K1_BAKED_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_SECP256K1_BAKED_H_IN) --out $@
+
 .PHONY: pipeline-rom-objects
-pipeline-rom-objects: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H) $(PIPELINE_ROM_OBJS)
+pipeline-rom-objects: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H) $(PIPELINE_SECP256K1_BAKED_H) $(PIPELINE_ROM_OBJS)
 
 ASFLAGS   := -march=vr4300 -mabi=32 $(foreach i,$(INCLUDE_DIRS),-I$(i)) $(foreach d,$(DEFINES),--defsym $(d))
 RSPASMFLAGS := $(foreach d,$(DEFINES),-definelabel $(subst =, ,$(d)))
@@ -701,7 +718,7 @@ all: $(ROM)
 # genuinely #include the generated headers (see the per-object prerequisite
 # rules below), so this line is now belt-and-suspenders alongside those
 # object-level prerequisites, not the only thing ensuring they exist.
-all: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
+all: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H) $(PIPELINE_SECP256K1_BAKED_H)
 ifeq ($(COMPARE),1)
 	@$(PRINT) "$(GREEN)Checking if ROM matches.. $(NO_COL)\n"
 	@$(SHA1SUM) --quiet -c $(TARGET).sha1 && $(PRINT) "$(TARGET): $(GREEN)OK$(NO_COL)\n" || ($(PRINT) "$(YELLOW)Building the ROM file has succeeded, but does not match the original ROM.\nThis is expected, and not an error, if you are making modifications.\nTo silence this message, use 'make COMPARE=0.' $(NO_COL)\n" && false)

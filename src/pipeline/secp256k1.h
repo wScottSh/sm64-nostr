@@ -46,6 +46,18 @@
  * single field inversion per multiplication, at the very end) rather than
  * naive per-step affine inversion.
  *
+ * Spec #43 sub-issue #46 removed one of the two pipeline_secp256k1_point_
+ * mul_base calls a signature used to make: the per-event private key is
+ * itself a build-time constant, so its public point P = d*G is one too --
+ * it is now computed and validated once at build time (see
+ * tools/gen_secp256k1_baked.py and the generated secp256k1_baked.h) and
+ * baked into schnorr_adapter.c as a constant, instead of being
+ * point_mul_base'd (and Jacobian-to-affine-inverted) on every signature.
+ * pipeline_secp256k1_point_mul_base itself is unchanged and still used for
+ * R = k'*G (k' is nonce-derived per signature, never a build-time
+ * constant) and by pipeline_schnorr_verify's internal self-consistency
+ * check.
+ *
  * Point arithmetic takes/returns the same affine (x, y) representation as
  * tools/nostr_secp256k1.py's scalar_mult/point_add (used at BUILD TIME
  * only, for pubkey derivation) -- that file's own header comment calls out
