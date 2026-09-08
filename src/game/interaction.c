@@ -1,4 +1,3 @@
-#include <PR/os.h>
 #include <PR/ultratypes.h>
 
 #include "area.h"

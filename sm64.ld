@@ -163,7 +163,7 @@ SECTIONS
          * src/pipeline/*.c (which the root Makefile's SRC_DIRS picks up by
          * wildcard): adding a new src/pipeline/*.c file without adding a
          * matching entry here (in all four of this section's
-         * .text/.data*/.rodata*/.bss* blocks) makes it a linker orphan --
+         * .text, .data, .rodata and .bss blocks) makes it a linker orphan --
          * ld places unmatched input sections somewhere in the output
          * without failing the link, so a missing entry is a silent
          * placement surprise, not a build error. As of sub-issue #31 there
