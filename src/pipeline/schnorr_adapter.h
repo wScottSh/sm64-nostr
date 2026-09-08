@@ -47,6 +47,21 @@
  * [1, n-1] scalar range, or the derived nonce happens to be exactly 0 mod
  * n (BIP-340's own documented failure cases) -- callers must check the
  * return value, never assume success.
+ *
+ * PRECONDITION (spec #43, sub-issue #46): privkey32 must be the SAME
+ * private key secp256k1_baked.h was generated from. Step 2's public point
+ * P = d'*G is now a build-time constant (secp256k1_baked.h -- see that
+ * generated header's own comment), not derived from privkey32 at runtime,
+ * so passing a privkey32 other than the one baked in silently produces a
+ * signature over the WRONG P with no error return -- this pipeline only
+ * ever has one signing identity (the per-event key baked into
+ * event_profile.h/secp256k1_baked.h from the same keys/event_privkey.hex),
+ * so every caller in this codebase already satisfies this by construction
+ * (build_event.c passes through whatever key its own caller supplies, and
+ * every real call site -- src/game/interaction.c's capture glue, and this
+ * file's own host tests -- supplies that same baked key), but it is no
+ * longer a general-purpose "sign with any key" function the way it was
+ * before this sub-issue.
  */
 int pipeline_schnorr_sign(const pipeline_u8 msg32[PIPELINE_SCHNORR_MSG_SIZE],
                            const pipeline_u8 privkey32[PIPELINE_SCHNORR_PRIVKEY_SIZE],

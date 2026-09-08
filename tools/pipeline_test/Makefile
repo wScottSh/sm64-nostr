@@ -87,6 +87,20 @@
 # qr_display_n64.c (the real-controller/real-renderer/real-time-stop N64
 # shell) is deliberately excluded for the same <ultra64.h> reason
 # qr_render_n64.c already is.
+#
+# Spec #43 sub-issue #44 (fast field mod-p reduction) adds no new source
+# files -- secp256k1.c/.h are the SAME files, rewritten in place -- but
+# does add -DPIPELINE_SECP256K1_OP_COUNT below, plus main.c's field-multiply
+# differential sweep and op-count-proxy tests.
+#
+# Spec #43 sub-issue #46 (build-time public point) adds a third generated
+# header, secp256k1_baked.h: rendered by ../gen_secp256k1_baked.py from the
+# SAME fixed TEST_PRIVKEY_HEX below (never the real per-event secret --
+# same rule as EVENT_PROFILE_H's own comment above), mirroring how
+# EVENT_PROFILE_H is built here from that key. schnorr_adapter.c now
+# #includes this generated header instead of computing P = d*G at runtime;
+# main.c's differential-sweep test confirms the baked P matches a
+# reference-computed d*G for TEST_PRIVKEY_HEX.
 
 CC           := gcc
 PYTHON       := python3
@@ -102,7 +116,14 @@ INC_DIR      := $(BUILD_DIR)/include
 # relative to src/, exactly like src/game/interaction.c's own
 # #include "pipeline/build_event.h" (spec #24, sub-issue #31) -- so it must
 # resolve identically here.
-CFLAGS := -std=gnu99 -Wall -Wextra -I $(SRC_DIR) -I $(PIPELINE_DIR) -I $(GAME_DIR) -I $(INC_DIR)
+# -DPIPELINE_SECP256K1_OP_COUNT (spec #43 sub-issue #44): turns on
+# secp256k1.c's host-side field-multiply/operation-count proxy counters,
+# host-test-tool-only -- the ROM build's PIPELINE_C99_CFLAGS in the root
+# Makefile deliberately never defines this, so the counters (and their
+# per-limb-operation increments on the signing hot path) compile to
+# nothing there. See secp256k1.h's own header comment on
+# pipeline_secp256k1_reset_op_count/_get_op_count.
+CFLAGS := -std=gnu99 -Wall -Wextra -DPIPELINE_SECP256K1_OP_COUNT -I $(SRC_DIR) -I $(PIPELINE_DIR) -I $(GAME_DIR) -I $(INC_DIR)
 
 SRCS := main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c $(PIPELINE_DIR)/pack_adapter.c \
         $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c qr_host_decode.c \
@@ -123,6 +144,8 @@ FORMAT_DESCRIPTOR_H    := $(INC_DIR)/format_descriptor.h
 EVENT_PROFILE_H_IN     := ../../include/event_profile.h.in
 EVENT_PROFILE_H        := $(INC_DIR)/event_profile.h
 REGISTRY_FILE          := $(BUILD_DIR)/registry.md
+SECP256K1_BAKED_H_IN   := ../../include/secp256k1_baked.h.in
+SECP256K1_BAKED_H      := $(INC_DIR)/secp256k1_baked.h
 
 .PHONY: all test clean
 
@@ -140,7 +163,11 @@ $(EVENT_PROFILE_H): $(EVENT_PROFILE_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_
 	@mkdir -p $(INC_DIR)
 	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat --registry $(REGISTRY_FILE) --commit host-test --created-at $(TEST_CREATED_AT)
 
-$(BIN): $(SRCS) $(FORMAT_DESCRIPTOR_H) $(EVENT_PROFILE_H)
+$(SECP256K1_BAKED_H): $(SECP256K1_BAKED_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_secp256k1_baked.py $(TOOLS_DIR)/nostr_secp256k1.py
+	@mkdir -p $(INC_DIR)
+	$(PYTHON) $(TOOLS_DIR)/gen_secp256k1_baked.py --privkey $(TEST_PRIVKEY_FILE) --template $(SECP256K1_BAKED_H_IN) --out $@
+
+$(BIN): $(SRCS) $(FORMAT_DESCRIPTOR_H) $(EVENT_PROFILE_H) $(SECP256K1_BAKED_H)
 	$(CC) $(CFLAGS) -o $@ $(SRCS)
 
 test: $(BIN)
