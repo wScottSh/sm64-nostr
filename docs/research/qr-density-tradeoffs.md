@@ -7,11 +7,13 @@ re-checked. Absence of evidence is called out explicitly.
 
 **Frame (design decision already made, not relitigated here):** the QR carries a
 COMPLETE, already-signed, broadcast-ready nostr event; the companion app is
-strictly READ-ONLY (decode bytes -> broadcast to relay, injects no value). The
-current on-wire payload is a 75-byte packed blob at QR version 6 / ECC MEDIUM /
-BYTE mode that OMITS `pubkey` and `created_at` (baked out-of-band in
-`event_profile.h`) — that omission is the defect. Goal: the smallest fully
-self-contained single QR, with the simplest/cheapest possible in-game encoder.
+strictly READ-ONLY (decode bytes -> broadcast to relay, injects no value). At
+the time of this analysis the on-wire payload was a 75-byte packed blob at QR
+version 6 / ECC MEDIUM / BYTE mode that OMITTED `pubkey` and `created_at`
+(baked out-of-band in `event_profile.h`) — that omission was the defect this
+work fixes (format v2 has since landed; see the "Superseded by format v2"
+note below and ADR-0002). Goal: the smallest fully self-contained single QR,
+with the simplest/cheapest possible in-game encoder.
 
 Sources used repeatedly, cited short below:
 - **BIP-340** = https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki

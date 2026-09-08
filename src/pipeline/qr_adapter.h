@@ -77,9 +77,11 @@
 /* Usable BYTE-mode payload capacity after the mandatory 4-bit mode
  * indicator + 8-bit character count header: 122 bytes. See the derivation
  * in the file header comment above. This is the real over-budget boundary
- * payloads are rejected against, comfortably above the 112-122 B
- * self-contained format v2 payload budget (docs/adr/0002) this symbol now
- * carries. */
+ * payloads are rejected against. This build's own format v2 payload (116 B
+ * for "sm64") sits comfortably under it; the v2 maximum (122 B at
+ * TAG_LEN=10, docs/adr/0002) is the exact ceiling -- a max-length tag fills
+ * the symbol with zero spare capacity, which the compile-time fits-QR guard
+ * (build_event.c, `<=`) enforces. */
 #define PIPELINE_QR_MAX_PAYLOAD_BYTES 122
 
 /*

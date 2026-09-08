@@ -43,8 +43,8 @@
  *
  * Format v2 (spec #52, sub-issue #54): TAG_0 is now the spec-pinned
  * constant "ag-lb" (was "cabinet-leaderboard" pre-v2) -- see
- * include/event_profile.h.in and docs/adr/0001. TAG_1 ("sm64", the
- * per-game tag) is unchanged.
+ * src/pipeline/event_id.h's PIPELINE_EVENT_TAG0_VALUE (its single source)
+ * and docs/adr/0001. TAG_1 ("sm64", the per-game tag) is unchanged.
  */
 const { getEventHash } = require('nostr-tools');
 
