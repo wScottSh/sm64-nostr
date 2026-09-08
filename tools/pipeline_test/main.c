@@ -1,5 +1,5 @@
 /*
- * Host test tool for the pipeline (spec #24, sub-issues #25 and #26).
+ * Host test tool for the pipeline (spec #24, sub-issues #25, #26, and #27).
  *
  * #25: feeds a fixed StarCapture + key into build_event() and asserts the
  * stub output is byte-exact -- proving the pure pipeline sources compile
@@ -15,6 +15,9 @@
  *     round-trip exactly -- proving the ROM pack side and this host unpack
  *     side genuinely agree on the wire layout because both are generated
  *     from the same format_descriptor.json.
+ *
+ * #27 adds the QR encode/decode round-trip and over-budget-rejection
+ * tests -- see the comment above test_qr_round_trip_representative_sizes().
  */
 #include <stdio.h>
 #include <string.h>
@@ -22,6 +25,8 @@
 #include "build_event.h"
 #include "pack_adapter.h"
 #include "event_profile.h"
+#include "qr_adapter.h"
+#include "qr_host_decode.h"
 
 static int g_failures = 0;
 
@@ -140,11 +145,94 @@ static void test_format_descriptor_round_trip(void)
     check(rc != 0, "unpack rejects a payload with the wrong format tag");
 }
 
+/*
+ * QR round-trip tests (spec #24, sub-issue #27). Exercises the internal
+ * seam directly: pipeline_qr_encode() (qr_adapter.h, which hides the
+ * ported qrcodegen.c behind it) followed by qr_host_decode() (host-only,
+ * tools/pipeline_test/qr_host_decode.c -- never linked into the ROM). See
+ * qr_adapter.h for the version 6 / ECC MEDIUM / 106-byte-usable-payload
+ * (108 total data codewords, minus the mode+count header) choice.
+ */
+static void fill_pattern(pipeline_u8 *buf, int len, pipeline_u8 seed)
+{
+    int i;
+    for (i = 0; i < len; i++) {
+        buf[i] = (pipeline_u8)(seed + i * 7 + (i * i) % 251);
+    }
+}
+
+static void check_round_trip(int len, const char *label)
+{
+    pipeline_u8 payload[PIPELINE_QR_MAX_PAYLOAD_BYTES];
+    pipeline_u8 qrcode[PIPELINE_QR_BUFFER_LEN];
+    unsigned char decoded[PIPELINE_QR_MAX_PAYLOAD_BYTES];
+    int decodedLen = -1;
+    int encodeOk, decodeOk;
+    char what[128];
+
+    fill_pattern(payload, len, (pipeline_u8)(len * 3 + 1));
+
+    encodeOk = pipeline_qr_encode(payload, (pipeline_u32)len, qrcode);
+    snprintf(what, sizeof(what), "QR encode succeeds for %s (%d bytes, within budget)", label, len);
+    check(encodeOk != 0, what);
+    if (!encodeOk) {
+        return;
+    }
+
+    decodeOk = qr_host_decode(qrcode, decoded, (int)sizeof(decoded), &decodedLen);
+    snprintf(what, sizeof(what), "QR decode succeeds for %s (%d bytes)", label, len);
+    check(decodeOk != 0, what);
+
+    snprintf(what, sizeof(what), "QR round-trip is byte-exact for %s (%d bytes)", label, len);
+    check(decodeOk && decodedLen == len && memcmp(decoded, payload, (size_t)len) == 0, what);
+}
+
+static void test_qr_round_trip_representative_sizes(void)
+{
+    check_round_trip(1, "minimal payload");
+    check_round_trip(4, "sub-issue #25 stub payload size");
+    check_round_trip(24, "spec #24's ~24 B variable content estimate");
+    check_round_trip(75, "current format_descriptor.json total size");
+    check_round_trip(88, "spec #24's ~88 B payload budget");
+    check_round_trip(PIPELINE_QR_MAX_PAYLOAD_BYTES, "exact version 6 / ECC MEDIUM usable payload capacity (106 B)");
+}
+
+static void test_qr_rejects_over_budget_cleanly(void)
+{
+    pipeline_u8 payload[PIPELINE_QR_MAX_PAYLOAD_BYTES + 1];
+    pipeline_u8 qrcode[PIPELINE_QR_BUFFER_LEN];
+    int encodeOk;
+
+    fill_pattern(payload, (int)sizeof(payload), 0x5A);
+
+    /* One byte over the real version 6 / ECC MEDIUM capacity: must be
+     * rejected cleanly (nonzero return, no truncated/partial QR Code
+     * written -- qrcode[0] is left at the documented invalid-size
+     * sentinel of 0), never silently truncated to fit. */
+    memset(qrcode, 0xFF, sizeof(qrcode));
+    encodeOk = pipeline_qr_encode(payload, (pipeline_u32)sizeof(payload), qrcode);
+    check(encodeOk == 0, "QR encode rejects a payload one byte over the 106 B usable payload capacity");
+    check(qrcode[0] == 0, "rejected QR encode leaves the invalid-size sentinel, not a truncated code");
+
+    /* Far over budget too (well past even the raw bitmap buffer size) --
+     * must still be a clean rejection, not a buffer overrun. */
+    {
+        pipeline_u8 hugePayload[PIPELINE_QR_BUFFER_LEN * 4];
+        memset(hugePayload, 0x42, sizeof(hugePayload));
+        memset(qrcode, 0xFF, sizeof(qrcode));
+        encodeOk = pipeline_qr_encode(hugePayload, (pipeline_u32)sizeof(hugePayload), qrcode);
+        check(encodeOk == 0, "QR encode rejects a grossly over-budget payload cleanly");
+        check(qrcode[0] == 0, "grossly-over-budget rejection also leaves the invalid-size sentinel");
+    }
+}
+
 int main(void)
 {
     test_format_descriptor_round_trip();
     test_pubkey_known_answer();
     test_build_event_stub();
+    test_qr_round_trip_representative_sizes();
+    test_qr_rejects_over_budget_cleanly();
 
     if (g_failures != 0) {
         printf("%d check(s) FAILED\n", g_failures);

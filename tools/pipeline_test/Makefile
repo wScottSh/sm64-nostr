@@ -1,4 +1,4 @@
-# Host test tool for the Nostr pipeline (spec #24, sub-issues #25 and #26).
+# Host test tool for the Nostr pipeline (spec #24, sub-issues #25, #26, and #27).
 #
 # Links the SAME pure pipeline sources compiled into the ROM
 # (../../src/pipeline/*.c) a second time, unmodified, into a native host
@@ -21,6 +21,16 @@
 #     FIXED KAT private key (not the real per-event secret in keys/, which
 #     this host tool must never read) -- see TEST_PRIVKEY below. This lets
 #     the host tool assert the derived pubkey against a known-answer vector.
+#
+# Sub-issue #27 adds the QR encode/decode round-trip test. qrcodegen.c and
+# qr_adapter.c are the SAME pure pipeline sources as the ROM side (see the
+# root Makefile's PIPELINE_C99_PORT_SRC/PIPELINE_ROM_OBJS). qr_host_decode.c
+# is different: it is a HOST-ONLY QR bitmap decoder (structural, driven by
+# the same qrcodegen layout constants -- see its own header comment) that
+# deliberately lives here under tools/pipeline_test, NOT under
+# src/pipeline/, so it can never be pulled into the ROM's object graph --
+# the ROM never needs to decode a QR Code, only render one (#32, out of
+# scope here).
 
 CC           := gcc
 PYTHON       := python3
@@ -31,7 +41,8 @@ INC_DIR      := $(BUILD_DIR)/include
 
 CFLAGS := -std=gnu99 -Wall -Wextra -I $(PIPELINE_DIR) -I $(INC_DIR)
 
-SRCS := main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c $(PIPELINE_DIR)/pack_adapter.c
+SRCS := main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c $(PIPELINE_DIR)/pack_adapter.c \
+        $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c qr_host_decode.c
 BIN  := pipeline_test
 
 # BIP-340 test vector 0 (privkey=3): a fixed, published known-answer key,

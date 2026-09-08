@@ -456,16 +456,19 @@ else
   CFLAGS += -non_shared -Wab,-r4300_mul -Xcpluscomm -Xfullwarn -signed -32
 endif
 
-# The pipeline's internal C99 ports (SHA-256, secp256k1 Schnorr, qrcodegen;
-# stubbed by port_stub_c99.c for now -- see spec #24, sub-issue #25) need a
-# C99-capable compiler. COMPILER is a whole-build knob with no per-file
-# split, and the default COMPILER=ido cannot compile C99 at all. Rather than
-# force the *entire* ROM build onto gcc just for these few files, carve out
-# just the C99 port objects and always force them through the cross gcc
-# with -std=gnu99, independent of the top-level COMPILER choice -- this
-# mirrors the existing iQue per-object carve-out above (IQUE_RECOMPILED),
-# which overrides CC/CFLAGS for a fixed object list regardless of COMPILER.
-PIPELINE_C99_PORT_SRC := $(PIPELINE_SRC_DIR)/port_stub_c99.c
+# The pipeline's internal C99 ports (SHA-256, secp256k1 Schnorr, qrcodegen)
+# need a C99-capable compiler. port_stub_c99.c stood in for all three in
+# sub-issue #25; qrcodegen.c (sub-issue #27, spec #24) is the first real one
+# to land -- a byte-mode-only C99 port of Project Nayuki's QR Code generator
+# library, hidden behind qr_adapter.h/.c (see the pure-pipeline-modules
+# comment below). COMPILER is a whole-build knob with no per-file split, and
+# the default COMPILER=ido cannot compile C99 at all. Rather than force the
+# *entire* ROM build onto gcc just for these few files, carve out just the
+# C99 port objects and always force them through the cross gcc with
+# -std=gnu99, independent of the top-level COMPILER choice -- this mirrors
+# the existing iQue per-object carve-out above (IQUE_RECOMPILED), which
+# overrides CC/CFLAGS for a fixed object list regardless of COMPILER.
+PIPELINE_C99_PORT_SRC := $(PIPELINE_SRC_DIR)/port_stub_c99.c $(PIPELINE_SRC_DIR)/qrcodegen.c
 PIPELINE_C99_PORT_O   := $(foreach file,$(PIPELINE_C99_PORT_SRC),$(BUILD_DIR)/$(file:.c=.o))
 PIPELINE_C99_CFLAGS   := -std=gnu99 -G 0 $(OPT_FLAGS) $(TARGET_CFLAGS) $(DEF_INC_CFLAGS) -mno-shared -march=vr4300 -mfix4300 -mabi=32 -mhard-float -mdivide-breaks -fno-stack-protector -fno-common -fno-zero-initialized-in-bss -fno-PIC -mno-abicalls -fno-strict-aliasing -fno-inline-functions -ffreestanding -fwrapv -Wall -Wextra
 $(PIPELINE_C99_PORT_O): CC := $(CROSS)gcc
@@ -477,15 +480,18 @@ $(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
 # time -- appending here (before the -m32 fixup below) would silently miss
 # it.
 
-# The pure pipeline modules themselves (build_event.c, and pack_adapter.c
-# from spec #24, sub-issue #26) need no C99 and no special flags -- they
-# compile under whichever COMPILER is already active, which is the point of
-# being host-and-ROM-compilable. Only the object list matters here: none of
-# these three objects are added to O_FILES/the link (see the comment above
-# SRC_DIRS), so `all`/$(ROM)'s own object graph is untouched by this target.
-# pack_adapter.c is here to prove the ROM side of the format-descriptor
-# single-source-of-truth wiring (see PIPELINE_FORMAT_DESCRIPTOR_H below).
-PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(PIPELINE_C99_PORT_O)
+# The pure pipeline modules themselves (build_event.c, pack_adapter.c from
+# spec #24 sub-issue #26, and qr_adapter.c from sub-issue #27) need no C99
+# and no special flags -- they compile under whichever COMPILER is already
+# active, which is the point of being host-and-ROM-compilable. Only the
+# object list matters here: none of these objects are added to O_FILES/the
+# link (see the comment above SRC_DIRS), so `all`/$(ROM)'s own object graph
+# is untouched by this target. pack_adapter.c is here to prove the ROM side
+# of the format-descriptor single-source-of-truth wiring (see
+# PIPELINE_FORMAT_DESCRIPTOR_H below). qr_adapter.c is the pipeline-internal
+# seam in front of the C99 qrcodegen.c port above -- it, not qrcodegen.c
+# directly, is what a future build_event.c would call.
+PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(PIPELINE_C99_PORT_O)
 
 # pack_adapter.o #includes format_descriptor.h; make sure it's generated
 # first. build_event.o doesn't currently use event_profile.h, but the
