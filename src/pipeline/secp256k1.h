@@ -25,16 +25,26 @@
  * mod p -- see fe_reduce_wide in secp256k1.c) instead of the generic
  * schoolbook binary long division (reduce_wide_mod), which was the
  * dominant cost of a signature (a 512-iteration bit-serial divide inside
- * every field multiply). reduce_wide_mod is retained for the scalar (mod
- * n) path and, doubly, as the differential-tested naive reference the
- * fast field reduction is checked against (see
- * pipeline_secp256k1_fe_mul_reference below and
- * tools/pipeline_test/main.c's differential sweep) -- it is no longer an
- * intentional correctness-first tradeoff on the field path, just a
- * generic reduction still used elsewhere and as an oracle. Scalar
- * multiplication uses Jacobian coordinates (a single field inversion per
- * multiplication, at the very end) rather than naive per-step affine
- * inversion.
+ * every field multiply).
+ *
+ * Spec #43 sub-issue #45 did the same for the scalar (mod n) path: scalar
+ * reduction/multiplication (pipeline_secp256k1_scalar_reduce/_mul below,
+ * used to reduce the BIP-340 nonce k and challenge e and to compute
+ * s = (k + e*d) mod n) now use reduction specialized to the curve order n
+ * via the same "fold 2^256 = c (mod n)" identity, just with n's own
+ * (larger, ~129-bit, multi-word) complement c = 2^256 - n instead of p's
+ * tiny single-word 977 -- see scalar_reduce_wide in secp256k1.c.
+ *
+ * reduce_wide_mod is RETAINED, used by neither runtime path any more, only
+ * as the differential-tested naive reference both fast reductions are
+ * checked against (see pipeline_secp256k1_fe_mul_reference/
+ * pipeline_secp256k1_scalar_reduce_reference/_mul_reference below and
+ * tools/pipeline_test/main.c's differential sweeps) -- it is no longer an
+ * intentional correctness-first tradeoff on either path, just a generic
+ * reduction kept solely as an oracle. Scalar multiplication (point scalar
+ * mul, not the mod-n scalar multiply above) uses Jacobian coordinates (a
+ * single field inversion per multiplication, at the very end) rather than
+ * naive per-step affine inversion.
  *
  * Point arithmetic takes/returns the same affine (x, y) representation as
  * tools/nostr_secp256k1.py's scalar_mult/point_add (used at BUILD TIME
@@ -158,14 +168,14 @@ void pipeline_secp256k1_point_add(const pipeline_secp256k1_point *p1, const pipe
 int pipeline_secp256k1_num_is_valid_field_element(const pipeline_secp256k1_num *a);
 
 /*
- * ---- Test-only diagnostic surface (spec #43 sub-issue #44) ----
+ * ---- Test-only diagnostic surface (spec #43 sub-issues #44/#45) ----
  *
  * Never called from signing/verification themselves (schnorr_adapter.c
- * only ever reaches field multiplication indirectly, through the point-
- * arithmetic entry points above) -- only from tools/pipeline_test, so a
- * rewrite of the internal field-multiply representation can be proven
- * behavior-preserving directly at the field-op boundary, not just through
- * whole-signature KATs.
+ * only ever reaches field/scalar multiplication indirectly, through the
+ * point-arithmetic/scalar entry points above) -- only from
+ * tools/pipeline_test, so a rewrite of the internal field/scalar-multiply
+ * representation can be proven behavior-preserving directly at the
+ * arithmetic-op boundary, not just through whole-signature KATs.
  */
 
 /* out = a * b mod p, via the fast field-specialized reduction (identical
@@ -178,17 +188,33 @@ void pipeline_secp256k1_fe_mul_fast(const pipeline_secp256k1_num *a, const pipel
 void pipeline_secp256k1_fe_mul_reference(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out);
 
 /*
+ * out = a mod n / out = a * b mod n, via the fast curve-order-specialized
+ * reduction (identical to what pipeline_secp256k1_scalar_reduce/_mul above
+ * use -- sub-issue #45). */
+void pipeline_secp256k1_scalar_reduce_fast(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out);
+void pipeline_secp256k1_scalar_mul_fast(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out);
+
+/* out = a mod n / out = a * b mod n, via the RETAINED naive generic-
+ * reduction path (reduce_wide_mod) -- the differential-test oracle for
+ * the two _fast functions above. */
+void pipeline_secp256k1_scalar_reduce_reference(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out);
+void pipeline_secp256k1_scalar_mul_reference(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out);
+
+/*
  * Host-side field-multiply / operation-count proxy (spec #43 sub-issue
- * #44, reused by later sub-issues in this spec's staged landing). Counts
- * primitive 32-bit-limb operations performed by the width-parameterized
- * compare/add/subtract/multiply-by-scalar array primitives
- * (arr_cmp/arr_sub/arr_add/arr_mul_small) and by reduce_wide_mod's per-bit
- * loop, since the last reset. reduce_wide_mod and fe_reduce_wide (field/
- * scalar reduction) are their main callers and dominate any real count,
- * but num_cmp/num_sub (used by a few non-reduction callers too, e.g.
- * addmod/submod/field negation) share the same width-parameterized
- * primitives and so are counted as well -- this is a general primitive-
- * operation counter, not one scoped narrowly to "reduction calls" only.
+ * #44, reused by later sub-issues in this spec's staged landing --
+ * including sub-issue #45's scalar-path fast reduction). Counts primitive
+ * 32-bit-limb operations performed by the width-parameterized
+ * compare/add/subtract/multiply-by-scalar/multiply-by-array array
+ * primitives (arr_cmp/arr_sub/arr_add/arr_mul_small/arr_mul_wide) and by
+ * reduce_wide_mod's per-bit loop, since the last reset. reduce_wide_mod,
+ * fe_reduce_wide (fast field reduction), and scalar_reduce_wide (fast
+ * scalar reduction, sub-issue #45) are their main callers and dominate any
+ * real count, but num_cmp/num_sub (used by a few non-reduction callers
+ * too, e.g. addmod/submod/field negation) share the same width-
+ * parameterized primitives and so are counted as well -- this is a general
+ * primitive-operation counter, not one scoped narrowly to "reduction
+ * calls" only.
  * Deliberately excluded: num_mul's own 32x32 schoolbook partial-product
  * loop, which is unchanged between the fast and naive field-multiply
  * paths and so would add nothing to a fast-vs-naive comparison. A deterministic,

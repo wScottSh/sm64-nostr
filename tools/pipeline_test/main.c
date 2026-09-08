@@ -121,6 +121,16 @@
  * does dramatically less primitive word-level work than the naive one --
  * NOT a wall-clock timing comparison, which wouldn't represent the target
  * VR4300.
+ *
+ * Spec #43 sub-issue #45 (fast scalar mod-n reduction, the second slice)
+ * adds test_scalar_differential_sweep() (reusing the same seeded-PRNG/
+ * differential-check-one/pinned-edge-vectors shape #44 established, just
+ * against pipeline_secp256k1_scalar_reduce_fast/_reference and
+ * pipeline_secp256k1_scalar_mul_fast/_reference instead of the field
+ * equivalents) and extends test_field_op_count_proxy() with an explicit
+ * scalar-path fast-vs-naive op-count comparison, plus tightens that
+ * function's own per-signature op-count bound now that the scalar path
+ * (previously still generic/untouched by #44) is fast too.
  */
 #include <stdio.h>
 #include <string.h>
@@ -1141,6 +1151,40 @@ static void field_test_random_num(pipeline_secp256k1_num *out)
     pipeline_secp256k1_num_from_bytes(bytes, out);
 }
 
+/*
+ * Twin of field_test_random_num above, biased toward the top of the
+ * [0, 2^256) range (spec #43 sub-issue #45). A uniformly random 256-bit
+ * value is virtually always < the curve order n (n = 2^256 - c, c < 2^129,
+ * so P(uniform random >= n) ~ 2^-127) -- meaning test_scalar_differential_
+ * sweep()'s scalar_reduce coverage, if it only drew from
+ * field_test_random_num(), would almost never actually exercise
+ * scalar_reduce_wide's fold-and-subtract path (every reduction would take
+ * the "already < n, nothing to fold away" shortcut), proving little beyond
+ * "reducing an already-reduced value is a no-op on both paths". Forcing
+ * the top 17 bytes (136 bits) to 0xFF guarantees the result is
+ * >= 2^256 - 2^120, comfortably >= n, so every draw from this function
+ * genuinely needs (and exercises) the fold rounds and the final
+ * conditional-subtract loop. test_scalar_differential_sweep() draws from
+ * both this and the plain uniform generator so the sweep covers both the
+ * "no reduction needed" and "reduction needed" shapes.
+ */
+static void field_test_random_num_biased_high(pipeline_secp256k1_num *out)
+{
+    pipeline_u8 bytes[PIPELINE_SECP256K1_BYTES];
+    int i;
+    for (i = 0; i < PIPELINE_SECP256K1_BYTES; i += 4) {
+        pipeline_u32 word = field_test_rng_next();
+        bytes[i + 0] = (pipeline_u8)((word >> 24) & 0xFFu);
+        bytes[i + 1] = (pipeline_u8)((word >> 16) & 0xFFu);
+        bytes[i + 2] = (pipeline_u8)((word >> 8) & 0xFFu);
+        bytes[i + 3] = (pipeline_u8)(word & 0xFFu);
+    }
+    for (i = 0; i < 17; i++) {
+        bytes[i] = 0xFF;
+    }
+    pipeline_secp256k1_num_from_bytes(bytes, out);
+}
+
 #define FIELD_MUL_SWEEP_ITERATIONS 4000
 #define FIELD_MUL_SWEEP_SEED 0xC0FFEE12u
 
@@ -1245,6 +1289,168 @@ static void test_field_mul_differential_sweep(void)
 }
 
 /*
+ * Scalar (mod n) differential sweep (spec #43 sub-issue #45). Reuses the
+ * same seeded-xorshift32-PRNG/field_test_random_num()/differential-check
+ * shape test_field_mul_differential_sweep() above established for #44 --
+ * see that function's header comment for the rationale (arbitrary 256-bit
+ * values, not pre-reduced ones, since the fast/reference reductions must
+ * agree for any input, not just already-canonical ones). Covers both
+ * pipeline_secp256k1_scalar_reduce (a single 256-bit value reduced mod n --
+ * the shape the BIP-340 nonce k and challenge e reduction actually uses)
+ * and pipeline_secp256k1_scalar_mul (which internally forms a full 512-bit
+ * product before reducing -- the shape s = (k + e*d) mod n's multiply
+ * uses, and the one that actually exercises scalar_reduce_wide's fold
+ * rounds against values anywhere near their full width).
+ */
+#define SCALAR_SWEEP_ITERATIONS 4000
+#define SCALAR_SWEEP_SEED 0x5CA1AB1Eu
+
+static void scalar_reduce_differential_check_one(const pipeline_secp256k1_num *a, int index, int *allMatch, int *firstMismatch)
+{
+    pipeline_secp256k1_num fast, reference;
+
+    pipeline_secp256k1_scalar_reduce_fast(a, &fast);
+    pipeline_secp256k1_scalar_reduce_reference(a, &reference);
+    if (memcmp(&fast, &reference, sizeof(fast)) != 0) {
+        *allMatch = 0;
+        if (*firstMismatch < 0) {
+            *firstMismatch = index;
+        }
+    }
+}
+
+static void scalar_mul_differential_check_one(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b,
+                                               int index, int *allMatch, int *firstMismatch)
+{
+    pipeline_secp256k1_num fast, reference;
+
+    pipeline_secp256k1_scalar_mul_fast(a, b, &fast);
+    pipeline_secp256k1_scalar_mul_reference(a, b, &reference);
+    if (memcmp(&fast, &reference, sizeof(fast)) != 0) {
+        *allMatch = 0;
+        if (*firstMismatch < 0) {
+            *firstMismatch = index;
+        }
+    }
+}
+
+static void test_scalar_differential_sweep(void)
+{
+    int i;
+    int allMatch;
+    int firstMismatch;
+
+    /* Pinned edge vectors: zero, one, the curve order's own max
+     * representable value (2^256-1) and n-1 (the max canonical scalar),
+     * squared/multiplied against themselves and each other -- same spirit
+     * as the field sweep's edge vectors above, probing scalar_reduce_wide's
+     * fold-round bookkeeping at its limits rather than relying on uniform
+     * random sampling to ever land there. */
+    {
+        pipeline_secp256k1_num zero, one, maxVal, nMinusOne;
+        int edgeAllMatch = 1;
+        int edgeFirstMismatch = -1;
+        static const pipeline_u8 kZeroBytes[PIPELINE_SECP256K1_BYTES] = {0};
+        static const pipeline_u8 kOneBytes[PIPELINE_SECP256K1_BYTES] = {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        };
+        static const pipeline_u8 kMaxBytes[PIPELINE_SECP256K1_BYTES] = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        };
+        /* n - 1, n = secp256k1 curve order = 0xFFFFFFFFFFFFFFFFFFFFFFFF
+         * FFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141 -- cross-checked
+         * directly against kCurveN in secp256k1.c (same words, bottom byte
+         * one less: ...D0364141 -> ...D0364140) AND independently against
+         * Python:
+         * (0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141 - 1).to_bytes(32, 'big'). */
+        static const pipeline_u8 kNMinusOneBytes[PIPELINE_SECP256K1_BYTES] = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+            0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x40,
+        };
+
+        pipeline_secp256k1_num_from_bytes(kZeroBytes, &zero);
+        pipeline_secp256k1_num_from_bytes(kOneBytes, &one);
+        pipeline_secp256k1_num_from_bytes(kMaxBytes, &maxVal);
+        pipeline_secp256k1_num_from_bytes(kNMinusOneBytes, &nMinusOne);
+
+        scalar_reduce_differential_check_one(&zero, 0, &edgeAllMatch, &edgeFirstMismatch);
+        scalar_reduce_differential_check_one(&one, 0, &edgeAllMatch, &edgeFirstMismatch);
+        scalar_reduce_differential_check_one(&maxVal, 0, &edgeAllMatch, &edgeFirstMismatch);
+        scalar_reduce_differential_check_one(&nMinusOne, 0, &edgeAllMatch, &edgeFirstMismatch);
+
+        scalar_mul_differential_check_one(&zero, &zero, 0, &edgeAllMatch, &edgeFirstMismatch);
+        scalar_mul_differential_check_one(&zero, &maxVal, 0, &edgeAllMatch, &edgeFirstMismatch);
+        scalar_mul_differential_check_one(&one, &maxVal, 0, &edgeAllMatch, &edgeFirstMismatch);
+        scalar_mul_differential_check_one(&maxVal, &maxVal, 0, &edgeAllMatch, &edgeFirstMismatch);
+        scalar_mul_differential_check_one(&nMinusOne, &nMinusOne, 0, &edgeAllMatch, &edgeFirstMismatch);
+        scalar_mul_differential_check_one(&one, &one, 0, &edgeAllMatch, &edgeFirstMismatch);
+        /* Mixed pairs, not just an operand against itself. */
+        scalar_mul_differential_check_one(&maxVal, &nMinusOne, 0, &edgeAllMatch, &edgeFirstMismatch);
+        scalar_mul_differential_check_one(&nMinusOne, &one, 0, &edgeAllMatch, &edgeFirstMismatch);
+
+        /* edgeFirstMismatch isn't a meaningful index here (every call above
+         * passes a fixed 0 -- there's no natural per-vector index for a
+         * short, individually-named pinned list the way the random sweep
+         * below has one), just a "did anything fail" latch shared with the
+         * differential_check_one helpers' signature; edgeAllMatch alone
+         * drives the actual assertion. */
+        check(edgeAllMatch, "scalar (mod n) differential sweep: fast reduction/multiply matches the naive "
+                             "reference on pinned edge vectors (0, 1, 2^256-1, n-1)");
+    }
+
+    allMatch = 1;
+    firstMismatch = -1;
+    field_test_rng_seed(SCALAR_SWEEP_SEED);
+    for (i = 0; i < SCALAR_SWEEP_ITERATIONS; i++) {
+        pipeline_secp256k1_num a;
+
+        /* Alternate plain-uniform and biased-high draws (see
+         * field_test_random_num_biased_high's header comment): uniform
+         * alone would almost never land >= n, so half the iterations bias
+         * toward the top of [0, 2^256) to actually exercise
+         * scalar_reduce_wide's fold-and-subtract path, not just its
+         * "already reduced" shortcut. */
+        if (i & 1) {
+            field_test_random_num_biased_high(&a);
+        } else {
+            field_test_random_num(&a);
+        }
+        scalar_reduce_differential_check_one(&a, i, &allMatch, &firstMismatch);
+    }
+    if (!allMatch) {
+        printf("  scalar_reduce_differential_sweep: first mismatch at iteration %d "
+               "(seed 0x%08lX, %d iterations) -- reproduce exactly with these constants\n",
+               firstMismatch, (unsigned long)SCALAR_SWEEP_SEED, SCALAR_SWEEP_ITERATIONS);
+    }
+    check(allMatch,
+          "scalar reduce differential sweep: fast curve-order-specialized reduction matches the "
+          "retained naive-reduction reference over 4000 seeded random 256-bit values "
+          "(half plain-uniform, half biased >= n to exercise the fold-and-subtract path)");
+
+    allMatch = 1;
+    firstMismatch = -1;
+    field_test_rng_seed(SCALAR_SWEEP_SEED ^ 0xA5A5A5A5u);
+    for (i = 0; i < SCALAR_SWEEP_ITERATIONS; i++) {
+        pipeline_secp256k1_num a, b;
+
+        field_test_random_num(&a);
+        field_test_random_num(&b);
+        scalar_mul_differential_check_one(&a, &b, i, &allMatch, &firstMismatch);
+    }
+    if (!allMatch) {
+        printf("  scalar_mul_differential_sweep: first mismatch at iteration %d "
+               "(seed 0x%08lX, %d iterations) -- reproduce exactly with these constants\n",
+               firstMismatch, (unsigned long)(SCALAR_SWEEP_SEED ^ 0xA5A5A5A5u), SCALAR_SWEEP_ITERATIONS);
+    }
+    check(allMatch,
+          "scalar multiply differential sweep: fast curve-order-specialized reduction matches the "
+          "retained naive-reduction reference over 4000 seeded random 256-bit operand pairs "
+          "(exercises the full 512-bit-product reduction shape s = (k + e*d) mod n's multiply uses)");
+}
+
+/*
  * Host-side field-multiply / operation-count proxy (spec #43 sub-issue
  * #44's other required proof mechanism). Two independent assertions:
  *
@@ -1254,20 +1460,33 @@ static void test_field_mul_differential_sweep(void)
  *     comparison, since the naive reduce_wide_mod path IS what fe_mul
  *     used to be before this sub-issue (see
  *     pipeline_secp256k1_fe_mul_reference's header comment).
- * (2) Per-signature: a real BIP-340 signature's total op count (which
- *     also includes the still-generic scalar (mod n) path, untouched by
- *     this sub-issue) stays within a small bound -- empirically measured
- *     (once, manually, during this sub-issue's development, by
- *     temporarily forcing fe_mul back to the naive reduce_wide_mod path
- *     and re-running this same measurement) at ~283K ops with the fast
- *     field path in place, versus ~28.0M ops for the same signature with
- *     the naive field path -- a ~99x drop. That manual before/after
- *     comparison isn't itself re-derivable from this file (there is no
- *     "sign with the naive field path" entry point to call here), so the
- *     bound below is set at roughly 3x the measured ~283K -- tight enough
- *     to catch a real regression, loose enough to tolerate incidental
- *     op-count drift from unrelated future changes. Wall-clock time is
- *     deliberately not used here (it does not represent the target
+ * (2) Per-signature: a real BIP-340 signature's total op count stays
+ *     within a small bound -- empirically measured (once, manually, during
+ *     sub-issue #44's development, by temporarily forcing fe_mul back to
+ *     the naive reduce_wide_mod path and re-running this same measurement)
+ *     at ~283K ops with only the field path fast (scalar still naive at
+ *     that point), versus ~28.0M ops with neither path fast -- a ~99x
+ *     drop. That manual before/after comparison isn't itself re-derivable
+ *     from this file (there is no "sign with the naive field path" entry
+ *     point to call here), so the bound below is set with headroom over
+ *     what's actually measured at the bottom of this function.
+ *
+ * (3)/(4) below (sub-issue #45) add the same fast-vs-naive comparison for
+ *     the scalar (mod n) path, and re-measure the per-signature bound now
+ *     that BOTH paths are fast: with the scalar path's own bit-serial
+ *     division gone too, total signature op count drops only modestly
+ *     further (~283K -> ~279K, measured), NOT dramatically -- because
+ *     point_mul_base's k*G (256 double-and-add iterations, each several
+ *     field multiplies) already dominates total signature cost once the
+ *     field path alone is fast, and scalar reduction/multiplication (3
+ *     calls per signature: reducing k, reducing e, computing e*d) was
+ *     always a small fraction of that total even before this sub-issue.
+ *     The scalar path's own large relative speedup (see (3) below, a
+ *     >10x drop on the operation itself) is real and is sub-issue #45's
+ *     acceptance criterion; it just isn't the dominant term in the
+ *     whole-signature total until a later sub-issue (#46/#47) replaces
+ *     k*G's double-and-add with a fixed-base comb table. Wall-clock time
+ *     is deliberately not used here (it does not represent the target
  *     VR4300 -- see secp256k1.h's header comment).
  */
 static void test_field_op_count_proxy(void)
@@ -1295,15 +1514,53 @@ static void test_field_op_count_proxy(void)
           "op-count proxy: the fast field multiply's operation count is more than 10x lower "
           "than the retained naive reference's, for the same operands");
 
+    /* (3) Scalar path (sub-issue #45): same fast-vs-naive comparison as (1)
+     * above, but for scalar_reduce (the shape k/e reduction uses) instead
+     * of field multiply -- the direct proof that the scalar path itself
+     * dropped its bit-serial division, independent of the whole-signature
+     * bound in (4) below. */
+    {
+        pipeline_secp256k1_num scalarA, scalarFast, scalarRef;
+        unsigned long long scalarFastOps, scalarRefOps;
+
+        field_test_rng_seed(SCALAR_SWEEP_SEED);
+        field_test_random_num(&scalarA);
+
+        pipeline_secp256k1_reset_op_count();
+        pipeline_secp256k1_scalar_reduce_fast(&scalarA, &scalarFast);
+        scalarFastOps = pipeline_secp256k1_get_op_count();
+
+        pipeline_secp256k1_reset_op_count();
+        pipeline_secp256k1_scalar_reduce_reference(&scalarA, &scalarRef);
+        scalarRefOps = pipeline_secp256k1_get_op_count();
+
+        check(scalarFastOps > 0 && scalarRefOps > 0,
+              "op-count proxy: both scalar-reduce paths perform a nonzero number of counted operations");
+        check(scalarFastOps * 10 < scalarRefOps,
+              "op-count proxy: the fast scalar (mod n) reduction's operation count is more than 10x "
+              "lower than the retained naive reference's, for the same operand -- the scalar path's own "
+              "cost dropping (sub-issue #45's acceptance criterion), independent of the field path");
+    }
+
     pipeline_secp256k1_reset_op_count();
     signOk = pipeline_schnorr_sign(kSchnorrMessageZero, kSchnorrPrivkey, sig);
     signOps = pipeline_secp256k1_get_op_count();
 
     check(signOk != 0, "op-count proxy: the signature used to measure per-signature op count still succeeds");
-    check(signOps < 900000ULL,
+    /* 320,000 is a tighter margin (~15% over the measured ~279K) than #44's
+     * own bound (roughly 3x its measured ~283K) -- deliberately: unlike
+     * #44's bound (which had to tolerate not yet knowing #45's exact
+     * eventual contribution), this bound is set right after directly
+     * measuring the number it's checking, on the same code this sub-issue
+     * lands, so a looser multiplier would only hide a real regression
+     * without buying tolerance for anything currently unknown. */
+    check(signOps < 320000ULL,
           "op-count proxy: a full BIP-340 signature's total primitive-word-op count stays under "
-          "900,000 (measured ~283K with the fast field path; the naive field path alone measures "
-          "~28.0M for the same signature -- a ~99x drop, see this function's header comment)");
+          "320,000 now that BOTH the field (mod p, sub-issue #44) and scalar (mod n, sub-issue #45) "
+          "paths are fast -- measured ~279K with both fast paths in place (~283K with only the field "
+          "path fast, the bound sub-issue #44 landed; ~28.0M with neither fast, the original naive "
+          "baseline) -- see this function's header comment for why the scalar path's own large "
+          "relative speedup doesn't yet move this whole-signature total by much");
 }
 
 int main(void)
@@ -1324,6 +1581,7 @@ int main(void)
     test_qr_render_blit_round_trips_through_decode();
     test_qr_display_state_machine();
     test_field_mul_differential_sweep();
+    test_scalar_differential_sweep();
     test_field_op_count_proxy();
 
     if (g_failures != 0) {

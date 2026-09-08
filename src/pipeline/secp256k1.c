@@ -43,6 +43,22 @@ static const pipeline_secp256k1_num kCurveN = {{
     0xFFFFFFFEu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu,
 }};
 
+/*
+ * n's complement c = 2^256 - n (spec #43 sub-issue #45's scalar-path
+ * analogue of kFieldP's 977 -- the constant scalar_reduce_wide below folds
+ * 2^256 = c (mod n) with). Unlike p = 2^256 - 2^32 - 977 (a single 32-bit
+ * word), n has no comparably tiny pseudo-Mersenne complement: c is a
+ * ~129-bit value, CN_C_WORDS (5) 32-bit words wide (index 4, the top word,
+ * holds exactly 1; index 5 and up are zero and so are not stored). Value
+ * cross-checked independently against Python:
+ * hex(2**256 - 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141)
+ * == 0x14551231950b75fc4402da1732fc9bebf, and against libsecp256k1's own
+ * published SECP256K1_N_C_0..4 constants for the same value. */
+#define CN_C_WORDS 5
+static const pipeline_u32 kCurveNComplement[CN_C_WORDS] = {
+    0x2FC9BEBFu, 0x402DA173u, 0x50B75FC4u, 0x45512319u, 0x00000001u,
+};
+
 /* Base point (generator) G's affine coordinates. */
 static const pipeline_secp256k1_num kGx = {{
     0x16F81798u, 0x59F2815Bu, 0x2DCE28D9u, 0x029BFCDBu,
@@ -182,6 +198,44 @@ static void arr_mul_small(const pipeline_u32 *a, int n, pipeline_u32 s, pipeline
     out[n] = (pipeline_u32)carry;
 }
 
+/* out[0 .. awidth+bwidth) = a[0..awidth) * b[0..bwidth), a general width-
+ * parameterized schoolbook multiply -- the width-parameterized twin of
+ * num_mul (fixed NUM_WORDS x NUM_WORDS) below, used by scalar_reduce_wide
+ * (sub-issue #45) to fold the high half of a wide value against the curve
+ * order's complement (kCurveNComplement), which -- unlike the field
+ * prime's single-word 977 constant folded by arr_mul_small above -- needs
+ * a multi-word multiplicand. Deliberately not implemented by delegating to
+ * num_mul with zero-padded NUM_WORDS-width operands: that would inflate
+ * the op-count proxy's tick count with padding-word no-op multiplies,
+ * muddying the fast-vs-naive comparison the proxy exists to make. */
+static void arr_mul_wide(const pipeline_u32 *a, int awidth, const pipeline_u32 *b, int bwidth, pipeline_u32 *out)
+{
+    int i, j;
+    int outWidth = awidth + bwidth;
+    for (i = 0; i < outWidth; i++) {
+        out[i] = 0;
+    }
+    for (i = 0; i < awidth; i++) {
+        unsigned long long carry = 0;
+        for (j = 0; j < bwidth; j++) {
+            unsigned long long prod = (unsigned long long)a[i] * b[j] + out[i + j] + carry;
+            FIELD_OP_COUNT_TICK();
+            out[i + j] = (pipeline_u32)prod;
+            carry = prod >> 32;
+        }
+        {
+            int k = i + bwidth;
+            while (carry != 0) {
+                unsigned long long sum = (unsigned long long)out[k] + carry;
+                FIELD_OP_COUNT_TICK();
+                out[k] = (pipeline_u32)sum;
+                carry = sum >> 32;
+                k++;
+            }
+        }
+    }
+}
+
 static int num_cmp(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b)
 {
     return arr_cmp(a->w, b->w, NUM_WORDS);
@@ -262,12 +316,13 @@ static void num_mul(const pipeline_secp256k1_num *a, const pipeline_secp256k1_nu
  * As of spec #43 sub-issue #44, this generic reduction is no longer used
  * on the field (mod p) path -- fe_reduce_wide below replaces it there with
  * reduction specialized to p's pseudo-Mersenne form (2^256 - 2^32 - 977).
- * It is RETAINED for two reasons: (1) the scalar (mod n) path still uses
- * it via mulmod()/pipeline_secp256k1_scalar_reduce() below -- fast scalar
- * reduction is sibling issue #45's scope, not this one's; (2) it is the
- * differential-test oracle pipeline_secp256k1_fe_mul_reference() (see
- * secp256k1.h) checks the fast field reduction against. See secp256k1.h's
- * header comment for the fuller picture.
+ * As of sub-issue #45, it is no longer used on the scalar (mod n) path
+ * either -- scalar_reduce_wide (further below) replaces it there the same
+ * way, specialized to the curve order n instead. It is RETAINED solely as
+ * the differential-test oracle pipeline_secp256k1_fe_mul_reference() /
+ * pipeline_secp256k1_scalar_reduce_reference() / _scalar_mul_reference()
+ * (see secp256k1.h) check the two fast reductions against. See
+ * secp256k1.h's header comment for the fuller picture.
  */
 static void reduce_wide_mod(const wide_num *x, const pipeline_secp256k1_num *m, pipeline_secp256k1_num *out)
 {
@@ -442,6 +497,113 @@ static void fe_reduce_wide(const wide_num *x, pipeline_secp256k1_num *out)
     }
 }
 
+/*
+ * Word-width of the fold accumulator used by scalar_reduce_wide below.
+ * WIDE_WORDS (16, 512 bits) is both the minimum needed (the very first
+ * fold round must hold the full 512-bit input x without truncation) and
+ * comfortably sufficient for every later round too -- see
+ * scalar_reduce_wide's header comment for the round-by-round magnitude
+ * trace, which never exceeds ~386 bits (13 words) after any round. Unlike
+ * fe_reduce_wide's single-word complement (977, folded by arr_mul_small),
+ * n's complement (kCurveNComplement, CN_C_WORDS words, ~129 bits) needs a
+ * multi-word fold multiply (arr_mul_wide) whose growth per round is more
+ * awkward to bound exactly by hand than the field path's; the correctness
+ * that this width (and SCALAR_FINAL_SUB_ROUNDS below) is meant to protect
+ * is proven empirically by the differential sweep
+ * (test_scalar_differential_sweep in tools/pipeline_test/main.c) against
+ * the retained naive reduce_wide_mod oracle, not asserted from the
+ * derivation alone.
+ */
+#define SCALAR_ACC_WORDS WIDE_WORDS
+#define SCALAR_FOLD_ROUNDS 3
+/* The round-3 trace below bounds acc at that point to comfortably under
+ * 2n, so a single conditional subtraction of n already suffices; 4 rounds
+ * is a small, cheap, fixed safety margin over that, not a tight
+ * requirement -- see the differential sweep for the actual proof. */
+#define SCALAR_FINAL_SUB_ROUNDS 4
+
+/*
+ * scalar_reduce_wide: out = x mod n, specialized to secp256k1's curve
+ * order n via the same "fold the high half against 2^256 mod n" identity
+ * fe_reduce_wide above uses for the field prime p (sub-issue #44) --
+ * REPLACING reduce_wide_mod's generic 512-iteration bit-serial long
+ * division on the SCALAR path (sub-issue #45: reducing the BIP-340 nonce k
+ * and challenge e, and computing s = (k + e*d) mod n, all go through
+ * pipeline_secp256k1_scalar_reduce/_mul below, which now call this
+ * instead).
+ *
+ * Unlike p = 2^256 - 2^32 - 977 (a single 32-bit-word complement, 977), n's
+ * complement c = 2^256 - n (kCurveNComplement above) is a ~129-bit,
+ * multi-word (CN_C_WORDS = 5) value -- n has no comparably tiny
+ * pseudo-Mersenne form. Folding therefore uses a general multi-word
+ * multiply (arr_mul_wide) rather than a multiply-by-one-word
+ * (arr_mul_small), and needs more fold rounds for hi*c to shrink down near
+ * n's own size. Tracking the actual (unpadded) magnitude of x's part above
+ * 2^256 round by round, for a 512-bit input x < 2^512:
+ *   round 1: hi < 2^256, hi*c < 2^256 * 2^129 = 2^385, acc < 2^385 + 2^256
+ *            (lo) < ~2^386.
+ *   round 2: hi < 2^386/2^256 = 2^130, hi*c < 2^130*2^129 = 2^259,
+ *            acc < 2^259 + 2^256 (lo) < ~2^260.
+ *   round 3: hi < 2^260/2^256 = 2^4, hi*c < 2^4*2^129 = 2^133,
+ *            acc < 2^133 + 2^256 (lo) -- just barely over 2^256, comfortably
+ *            under 2n (n is itself just under 2^256).
+ * SCALAR_FOLD_ROUNDS (3) leaves acc within a small fixed multiple of n; the
+ * final SCALAR_FINAL_SUB_ROUNDS (4, a small safety margin over the single
+ * subtraction the trace above implies is actually needed) conditional-
+ * subtract loop brings it under n -- a fixed, small trip count, NOT one
+ * that scales with the 512-bit input the way reduce_wide_mod's does. This
+ * derivation is the
+ * design rationale, not the proof of correctness: see
+ * test_scalar_differential_sweep (tools/pipeline_test/main.c) for the
+ * actual proof, against the retained naive reduce_wide_mod oracle over a
+ * wide seeded random sweep plus pinned edge vectors.
+ */
+static void scalar_reduce_wide(const wide_num *x, pipeline_secp256k1_num *out)
+{
+    pipeline_u32 acc[SCALAR_ACC_WORDS];
+    pipeline_u32 mext[SCALAR_ACC_WORDS];
+    int i, round;
+
+    /* SCALAR_ACC_WORDS is defined as WIDE_WORDS above specifically so this
+     * copy can never truncate x -- the "i < WIDE_WORDS" guard is a no-op
+     * today (SCALAR_ACC_WORDS == WIDE_WORDS) kept only as a defensive
+     * reminder: SCALAR_ACC_WORDS must never be redefined smaller than
+     * WIDE_WORDS, or this copy would silently drop x's high words. */
+    for (i = 0; i < SCALAR_ACC_WORDS; i++) {
+        acc[i] = (i < WIDE_WORDS) ? x->w[i] : 0;
+    }
+
+    for (round = 0; round < SCALAR_FOLD_ROUNDS; round++) {
+        pipeline_u32 hi[SCALAR_ACC_WORDS - NUM_WORDS];
+        pipeline_u32 lo[SCALAR_ACC_WORDS];
+        pipeline_u32 hiC[SCALAR_ACC_WORDS];
+
+        for (i = 0; i < SCALAR_ACC_WORDS - NUM_WORDS; i++) {
+            hi[i] = acc[i + NUM_WORDS];
+        }
+        for (i = 0; i < SCALAR_ACC_WORDS; i++) {
+            lo[i] = (i < NUM_WORDS) ? acc[i] : 0;
+            hiC[i] = 0;
+        }
+
+        arr_mul_wide(hi, SCALAR_ACC_WORDS - NUM_WORDS, kCurveNComplement, CN_C_WORDS, hiC);
+        arr_add(lo, hiC, SCALAR_ACC_WORDS, acc);
+    }
+
+    for (i = 0; i < SCALAR_ACC_WORDS; i++) {
+        mext[i] = (i < NUM_WORDS) ? kCurveN.w[i] : 0;
+    }
+    for (i = 0; i < SCALAR_FINAL_SUB_ROUNDS; i++) {
+        if (arr_cmp(acc, mext, SCALAR_ACC_WORDS) >= 0) {
+            arr_sub(acc, mext, SCALAR_ACC_WORDS, acc);
+        }
+    }
+
+    for (i = 0; i < NUM_WORDS; i++) {
+        out->w[i] = acc[i];
+    }
+}
+
 /* ---- byte conversion ---- */
 
 void pipeline_secp256k1_num_from_bytes(const pipeline_u8 in[PIPELINE_SECP256K1_BYTES], pipeline_secp256k1_num *out)
@@ -541,7 +703,49 @@ static void fe_inv(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out)
 
 /* ---- scalar arithmetic (mod n) ---- */
 
+/* out = a * b mod n, via the fast curve-order-specialized reduction
+ * (scalar_reduce_wide) -- the signing path's one scalar multiply (e*d
+ * inside s = (k + e*d) mod n) goes through here (sub-issue #45). */
+static void scalar_mulmod(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out)
+{
+    wide_num wide;
+    num_mul(a, b, &wide);
+    scalar_reduce_wide(&wide, out);
+}
+
 void pipeline_secp256k1_scalar_reduce(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out)
+{
+    wide_num wide;
+    int i;
+    for (i = 0; i < NUM_WORDS; i++) {
+        wide.w[i] = a->w[i];
+    }
+    for (i = NUM_WORDS; i < WIDE_WORDS; i++) {
+        wide.w[i] = 0;
+    }
+    scalar_reduce_wide(&wide, out);
+}
+
+void pipeline_secp256k1_scalar_add(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out) { addmod(a, b, &kCurveN, out); }
+void pipeline_secp256k1_scalar_mul(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out) { scalar_mulmod(a, b, out); }
+
+/*
+ * Test-only diagnostic surface (spec #43 sub-issue #45). Exposes the fast
+ * scalar reduce/multiply (identical to pipeline_secp256k1_scalar_reduce/
+ * _mul above) and the RETAINED naive generic-reduction equivalents
+ * (identical to what those two functions used to be, before this
+ * sub-issue) directly, so the host test tool's differential sweep can
+ * compare fast-vs-naive scalar reduction/multiplication over arbitrary
+ * scalars without going through a full signature. Never called by
+ * signing/verification themselves -- only by tools/pipeline_test, mirroring
+ * pipeline_secp256k1_fe_mul_fast/_reference above (sub-issue #44).
+ */
+void pipeline_secp256k1_scalar_reduce_fast(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out)
+{
+    pipeline_secp256k1_scalar_reduce(a, out);
+}
+
+void pipeline_secp256k1_scalar_reduce_reference(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out)
 {
     wide_num wide;
     int i;
@@ -554,8 +758,15 @@ void pipeline_secp256k1_scalar_reduce(const pipeline_secp256k1_num *a, pipeline_
     reduce_wide_mod(&wide, &kCurveN, out);
 }
 
-void pipeline_secp256k1_scalar_add(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out) { addmod(a, b, &kCurveN, out); }
-void pipeline_secp256k1_scalar_mul(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out) { mulmod(a, b, &kCurveN, out); }
+void pipeline_secp256k1_scalar_mul_fast(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out)
+{
+    scalar_mulmod(a, b, out);
+}
+
+void pipeline_secp256k1_scalar_mul_reference(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out)
+{
+    mulmod(a, b, &kCurveN, out);
+}
 
 void pipeline_secp256k1_scalar_negate(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out)
 {
