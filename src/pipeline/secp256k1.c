@@ -170,10 +170,28 @@ static unsigned long long g_field_op_count = 0;
 #define FIELD_OP_COUNT_TICK() ((void)0)
 #endif
 
+/*
+ * Host-side field-INVERSION count (spec #43 sub-issue #48's own proof
+ * mechanism, alongside the pre-existing op-count proxy above). Counts calls
+ * to fe_inv -- the ONE field-inversion primitive the signing path still
+ * runs (jac_to_affine's Jacobian-to-affine conversion of R = k'*G; P = d*G
+ * was baked at build time by sub-issue #46 and needs no runtime inversion
+ * at all) -- so tools/pipeline_test can assert directly that a signature
+ * performs AT MOST ONE modular inversion, not just that inversion got
+ * cheaper. Same PIPELINE_SECP256K1_OP_COUNT gating and reset/read pairing
+ * as g_field_op_count above; not a separate compile-time knob. */
+#ifdef PIPELINE_SECP256K1_OP_COUNT
+static unsigned long long g_field_inv_count = 0;
+#define FIELD_INV_COUNT_TICK() (g_field_inv_count++)
+#else
+#define FIELD_INV_COUNT_TICK() ((void)0)
+#endif
+
 void pipeline_secp256k1_reset_op_count(void)
 {
 #ifdef PIPELINE_SECP256K1_OP_COUNT
     g_field_op_count = 0;
+    g_field_inv_count = 0;
 #endif
 }
 
@@ -181,6 +199,15 @@ unsigned long long pipeline_secp256k1_get_op_count(void)
 {
 #ifdef PIPELINE_SECP256K1_OP_COUNT
     return g_field_op_count;
+#else
+    return 0;
+#endif
+}
+
+unsigned long long pipeline_secp256k1_get_inversion_count(void)
+{
+#ifdef PIPELINE_SECP256K1_OP_COUNT
+    return g_field_inv_count;
 #else
     return 0;
 #endif
@@ -724,9 +751,17 @@ void pipeline_secp256k1_fe_mul_reference(const pipeline_secp256k1_num *a, const 
     mulmod(a, b, &kFieldP, out);
 }
 
-/* out = base^exponent mod p, via square-and-multiply. Shared by fe_inv
- * (exponent = p-2, Fermat's little theorem) and the modular square root
- * used by lift_x (exponent = (p+1)/4, valid since p = 3 mod 4). */
+/*
+ * out = base^exponent mod p, via generic full-width square-and-multiply
+ * (one squaring AND, per set bit, one multiply, for every one of the
+ * exponent's 256 bits). As of spec #43 sub-issue #48, the ONLY remaining
+ * caller is lift_x's modular square root (exponent = (p+1)/4, valid since
+ * p = 3 mod 4) -- fe_inv below no longer calls this; it now uses the fixed
+ * addition chain instead, which is cheaper specifically because it is
+ * hand-derived for the one fixed exponent p-2, a shortcut this generic
+ * routine (built for an arbitrary caller-supplied exponent, here (p+1)/4)
+ * has no equivalent for.
+ */
 static void fe_pow(const pipeline_secp256k1_num *base, const pipeline_secp256k1_num *exponent, pipeline_secp256k1_num *out)
 {
     pipeline_secp256k1_num result;
@@ -747,9 +782,116 @@ static void fe_pow(const pipeline_secp256k1_num *base, const pipeline_secp256k1_
     *out = result;
 }
 
-/* out = a^-1 mod p (Fermat's little theorem: a^(p-2) mod p). a must be
- * nonzero. */
+/* out = a squared n times (out = a^(2^n)). Shared helper for the fixed
+ * addition chain in fe_inv below, where every step is either "square k
+ * times" or "square k times then multiply by a previously-computed power" --
+ * see fe_inv's own header comment. fe_sqr (like fe_mul) is safe to call with
+ * its input and output aliased to the same object, so this squares directly
+ * into *out across all n iterations rather than round-tripping through a
+ * separate temporary each time. */
+static void fe_sqrn(const pipeline_secp256k1_num *a, int n, pipeline_secp256k1_num *out)
+{
+    int i;
+    *out = *a;
+    for (i = 0; i < n; i++) {
+        fe_sqr(out, out);
+    }
+}
+
+/*
+ * out = a^-1 mod p, via the published fixed secp256k1 addition chain for
+ * the exponent p-2 (spec #43, sub-issue #48) -- REPLACING the full 256-bit
+ * square-and-multiply Fermat exponentiation (fe_pow(a, p-2)) this function
+ * used to call. Fermat's little theorem (a^(p-2) = a^-1 mod p, a != 0) is
+ * still the underlying identity; what changes is HOW a^(p-2) is computed.
+ * fe_pow's generic square-and-multiply touches one squaring per exponent
+ * bit unconditionally, PLUS one field multiply for every bit that is set --
+ * for p-2's essentially-all-ones 256-bit exponent that is ~256 squarings
+ * *and* ~256 multiplies (~512 field multiplies total). The chain below is
+ * the published fixed addition chain for exactly this exponent
+ * (originally published for libsecp256k1's field_5x52_impl.h/
+ * field_10x26_impl.h secp256k1_fe_inv, and widely re-derived/cited since):
+ * it builds up x^(2^k-1) values (x2=a^3, x3=a^7, x6, x9, x11, x22, x44, x88,
+ * x176, x220, x223) via double-and-add-style repeated squaring, each step
+ * reusing a previously-computed power instead of restarting from a, then
+ * finishes with a short explicit tail -- 255 squarings + 15 multiplications
+ * total, exactly matching p-2's bit pattern with none of fe_pow's per-bit
+ * branching or wasted squarings on a's lower bits. a must be nonzero.
+ *
+ * a's own value is only ever read (never written), so this chain is safe
+ * even when a and out alias the same object at the call site.
+ */
 static void fe_inv(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out)
+{
+    pipeline_secp256k1_num x2, x3, x6, x9, x11, x22, x44, x88, x176, x220, x223, t1;
+
+    FIELD_INV_COUNT_TICK();
+
+    fe_sqr(a, &x2);
+    fe_mul(&x2, a, &x2);           /* x2 = a^(2^2-1) = a^3 */
+
+    fe_sqr(&x2, &x3);
+    fe_mul(&x3, a, &x3);           /* x3 = a^(2^3-1) = a^7 */
+
+    fe_sqrn(&x3, 3, &x6);
+    fe_mul(&x6, &x3, &x6);         /* x6 = a^(2^6-1) */
+
+    fe_sqrn(&x6, 3, &x9);
+    fe_mul(&x9, &x3, &x9);         /* x9 = a^(2^9-1) */
+
+    fe_sqrn(&x9, 2, &x11);
+    fe_mul(&x11, &x2, &x11);       /* x11 = a^(2^11-1) */
+
+    fe_sqrn(&x11, 11, &x22);
+    fe_mul(&x22, &x11, &x22);      /* x22 = a^(2^22-1) */
+
+    fe_sqrn(&x22, 22, &x44);
+    fe_mul(&x44, &x22, &x44);      /* x44 = a^(2^44-1) */
+
+    fe_sqrn(&x44, 44, &x88);
+    fe_mul(&x88, &x44, &x88);      /* x88 = a^(2^88-1) */
+
+    fe_sqrn(&x88, 88, &x176);
+    fe_mul(&x176, &x88, &x176);    /* x176 = a^(2^176-1) */
+
+    fe_sqrn(&x176, 44, &x220);
+    fe_mul(&x220, &x44, &x220);    /* x220 = a^(2^220-1) */
+
+    fe_sqrn(&x220, 3, &x223);
+    fe_mul(&x223, &x3, &x223);     /* x223 = a^(2^223-1) */
+
+    /* Tail: p-2's low-order bit pattern below the run of 223 leading ones,
+     * assembled explicitly rather than via another named power. */
+    fe_sqrn(&x223, 23, &t1);
+    fe_mul(&t1, &x22, &t1);
+    fe_sqrn(&t1, 5, &t1);
+    fe_mul(&t1, a, &t1);
+    fe_sqrn(&t1, 3, &t1);
+    fe_mul(&t1, &x2, &t1);
+    fe_sqrn(&t1, 2, &t1);
+    fe_mul(a, &t1, out);
+}
+
+/*
+ * Test-only diagnostic surface (spec #43 sub-issue #48), mirroring the
+ * fast/reference pairing sub-issues #44/#45 established for field/scalar
+ * multiplication (pipeline_secp256k1_fe_mul_fast/_reference,
+ * pipeline_secp256k1_scalar_reduce_fast/_reference, etc. above/below).
+ * Exposes the fast addition-chain inversion (identical to fe_inv above) and
+ * a RETAINED naive Fermat full-exponentiation inversion (identical to what
+ * fe_inv used to be, before this sub-issue) directly, so the host test
+ * tool's differential sweep can compare fast-vs-naive field inversion over
+ * arbitrary nonzero field elements -- including that both agree the result
+ * is the TRUE modular inverse (a * inv(a) = 1 mod p) -- without going
+ * through a full point operation. Never called by signing/verification
+ * themselves -- only by tools/pipeline_test.
+ */
+void pipeline_secp256k1_fe_inv_fast(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out)
+{
+    fe_inv(a, out);
+}
+
+void pipeline_secp256k1_fe_inv_reference(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out)
 {
     pipeline_secp256k1_num exponent;
     pipeline_secp256k1_num two;

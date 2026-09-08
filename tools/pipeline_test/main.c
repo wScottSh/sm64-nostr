@@ -1416,6 +1416,152 @@ static void test_field_mul_differential_sweep(void)
           "retained naive-reduction reference over 4000 seeded random 256-bit operand pairs");
 }
 
+/* Draws a canonical nonzero field element (0 < a < p) via rejection
+ * sampling on field_test_random_num() above -- fe_inv requires a nonzero
+ * field element, unlike field_test_random_num()'s own arbitrary-256-bit-
+ * value contract (see that function's header comment). p is within 2^32+977
+ * of 2^256, so the reject rate is astronomically small; this loop is a
+ * correctness safeguard, not a practical perf concern. */
+static void field_test_random_nonzero_field_element(pipeline_secp256k1_num *out)
+{
+    for (;;) {
+        field_test_random_num(out);
+        if (!pipeline_secp256k1_num_is_zero(out) && pipeline_secp256k1_num_is_valid_field_element(out)) {
+            return;
+        }
+    }
+}
+
+/*
+ * Field-inversion differential sweep (spec #43 sub-issue #48). Same seeded-
+ * xorshift32-PRNG/differential-check shape test_field_mul_differential_
+ * sweep() above established for #44, but over
+ * pipeline_secp256k1_fe_inv_fast (the addition-chain path) versus
+ * pipeline_secp256k1_fe_inv_reference (the retained naive full-256-bit
+ * Fermat exponentiation path) -- see secp256k1.h's header comment on both.
+ * Beyond "fast == reference", each draw also checks the TRUE modular-
+ * inverse property directly (a * inv(a) = 1 mod p), via
+ * pipeline_secp256k1_fe_mul_reference (the naive, independently-trusted
+ * multiplication path -- deliberately not fe_mul_fast, so this check does
+ * not depend on the fast multiply also being correct) -- issue #48's
+ * acceptance criterion requires the fast inverse to be "identical to the
+ * Fermat result", and this is the direct proof that the Fermat result
+ * itself (and therefore the fast result, once shown equal to it) really is
+ * a modular inverse, not just "fast agrees with reference" alone.
+ */
+#define FIELD_INV_SWEEP_ITERATIONS 4000
+#define FIELD_INV_SWEEP_SEED 0xFEEDFACEu
+
+static void test_field_inv_differential_sweep(void)
+{
+    int i;
+    int allMatch = 1;
+    int firstMismatch = -1;
+    int allTrueInverse = 1;
+    int firstNonInverse = -1;
+    pipeline_secp256k1_num one;
+    static const pipeline_u8 kOneBytes[PIPELINE_SECP256K1_BYTES] = {
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+    };
+
+    pipeline_secp256k1_num_from_bytes(kOneBytes, &one);
+
+    /* Pinned edge vectors: 1 (its own inverse) and p-1 (also its own
+     * inverse, since (p-1)^2 = p^2 - 2p + 1 = 1 mod p) -- both boundary
+     * cases uniform random sampling would essentially never hit. */
+    {
+        pipeline_secp256k1_num pMinusOne;
+        static const pipeline_u8 kPMinusOneBytes[PIPELINE_SECP256K1_BYTES] = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xFF, 0xFF, 0xFC, 0x2E,
+        };
+        pipeline_secp256k1_num fast, reference, product;
+        int edgeAllMatch = 1;
+        int edgeAllTrueInverse = 1;
+
+        pipeline_secp256k1_num_from_bytes(kPMinusOneBytes, &pMinusOne);
+
+        pipeline_secp256k1_fe_inv_fast(&one, &fast);
+        pipeline_secp256k1_fe_inv_reference(&one, &reference);
+        if (memcmp(&fast, &reference, sizeof(fast)) != 0) {
+            printf("  field_inv_differential_sweep: edge vector 1 -- fast/reference mismatch\n");
+            edgeAllMatch = 0;
+        }
+        pipeline_secp256k1_fe_mul_reference(&one, &fast, &product);
+        if (memcmp(&product, &one, sizeof(product)) != 0) {
+            printf("  field_inv_differential_sweep: edge vector 1 -- fast result is not a true inverse\n");
+            edgeAllTrueInverse = 0;
+        }
+
+        pipeline_secp256k1_fe_inv_fast(&pMinusOne, &fast);
+        pipeline_secp256k1_fe_inv_reference(&pMinusOne, &reference);
+        if (memcmp(&fast, &reference, sizeof(fast)) != 0) {
+            printf("  field_inv_differential_sweep: edge vector p-1 -- fast/reference mismatch\n");
+            edgeAllMatch = 0;
+        }
+        pipeline_secp256k1_fe_mul_reference(&pMinusOne, &fast, &product);
+        if (memcmp(&product, &one, sizeof(product)) != 0) {
+            printf("  field_inv_differential_sweep: edge vector p-1 -- fast result is not a true inverse\n");
+            edgeAllTrueInverse = 0;
+        }
+
+        allMatch = edgeAllMatch;
+        allTrueInverse = edgeAllTrueInverse;
+    }
+    check(allMatch, "field inversion differential sweep: fast addition-chain inversion matches the "
+                     "naive Fermat-exponentiation reference on pinned edge vectors (1, p-1)");
+    check(allTrueInverse, "field inversion differential sweep: fast inversion is the TRUE modular "
+                           "inverse (a * inv(a) = 1 mod p) on pinned edge vectors (1, p-1)");
+
+    allMatch = 1;
+    firstMismatch = -1;
+    allTrueInverse = 1;
+    firstNonInverse = -1;
+    field_test_rng_seed(FIELD_INV_SWEEP_SEED);
+    for (i = 0; i < FIELD_INV_SWEEP_ITERATIONS; i++) {
+        pipeline_secp256k1_num a, fast, reference, product;
+
+        field_test_random_nonzero_field_element(&a);
+
+        pipeline_secp256k1_fe_inv_fast(&a, &fast);
+        pipeline_secp256k1_fe_inv_reference(&a, &reference);
+        if (memcmp(&fast, &reference, sizeof(fast)) != 0) {
+            allMatch = 0;
+            if (firstMismatch < 0) {
+                firstMismatch = i;
+            }
+        }
+
+        pipeline_secp256k1_fe_mul_reference(&a, &fast, &product);
+        if (memcmp(&product, &one, sizeof(product)) != 0) {
+            allTrueInverse = 0;
+            if (firstNonInverse < 0) {
+                firstNonInverse = i;
+            }
+        }
+    }
+
+    if (!allMatch) {
+        printf("  field_inv_differential_sweep: first mismatch at iteration %d "
+               "(seed 0x%08lX, %d iterations) -- reproduce exactly with these constants\n",
+               firstMismatch, (unsigned long)FIELD_INV_SWEEP_SEED, FIELD_INV_SWEEP_ITERATIONS);
+    }
+    check(allMatch,
+          "field inversion differential sweep: fast addition-chain inversion matches the retained "
+          "naive Fermat-exponentiation reference over 4000 seeded random nonzero field elements");
+
+    if (!allTrueInverse) {
+        printf("  field_inv_differential_sweep: first non-inverse product at iteration %d "
+               "(seed 0x%08lX, %d iterations) -- reproduce exactly with these constants\n",
+               firstNonInverse, (unsigned long)FIELD_INV_SWEEP_SEED, FIELD_INV_SWEEP_ITERATIONS);
+    }
+    check(allTrueInverse,
+          "field inversion differential sweep: the fast inverse is the TRUE modular inverse "
+          "(a * inv(a) = 1 mod p, checked via the independently-trusted naive multiply) over the "
+          "same 4000 seeded random nonzero field elements");
+}
+
 /*
  * Scalar (mod n) differential sweep (spec #43 sub-issue #45). Reuses the
  * same seeded-xorshift32-PRNG/field_test_random_num()/differential-check
@@ -1794,6 +1940,18 @@ static void test_point_mul_base_comb_differential_sweep(void)
  *     this sub-issue), isolated from signing entirely -- see below, and
  *     tools/pipeline_test/main.c's test_point_mul_base_comb_differential_
  *     sweep() for the correctness half of this sub-issue's proof.
+ *
+ * (7) Sub-issue #48 replaces fe_inv's own algorithm (used by jac_to_affine,
+ *     the ONE field inversion a signature still runs -- see fe_inv's header
+ *     comment in secp256k1.c): full 256-bit square-and-multiply Fermat
+ *     exponentiation (fe_pow(a, p-2)) becomes the published fixed addition
+ *     chain (255 squarings + 15 multiplications). Two direct proofs below,
+ *     mirroring (6): a fast-vs-naive op-count comparison isolated from
+ *     signing entirely (pipeline_secp256k1_fe_inv_fast vs _reference, for
+ *     the same field element), and a check that a real signature performs
+ *     exactly one inversion (pipeline_secp256k1_get_inversion_count()),
+ *     proving the "at most one modular inversion per signature" acceptance
+ *     criterion directly rather than inferring it from the total op count.
  */
 static void test_field_op_count_proxy(void)
 {
@@ -1853,6 +2011,19 @@ static void test_field_op_count_proxy(void)
     signOps = pipeline_secp256k1_get_op_count();
 
     check(signOk != 0, "op-count proxy: the signature used to measure per-signature op count still succeeds");
+    /* (7) Sub-issue #48's own direct per-signature proof: the signature just
+     * measured above performs EXACTLY one field inversion (jac_to_affine's
+     * conversion of R = k'*G -- P = d*G needs none, baked at build time by
+     * sub-issue #46) -- directly proving spec #43's "at most one modular
+     * inversion runs per signature" implementation decision via the
+     * dedicated inversion counter, rather than inferring it from the total
+     * op count. Asserted at exactly 1 (the stronger, more specific claim),
+     * not merely "<= 1" -- a signature that ran zero inversions would be a
+     * bug (R would never be converted to affine), not a pass. */
+    check(pipeline_secp256k1_get_inversion_count() == 1ULL,
+          "op-count proxy: a full BIP-340 signature performs exactly one field inversion "
+          "(pipeline_secp256k1_get_inversion_count()) -- R = k'*G's Jacobian-to-affine conversion "
+          "is the only one; P = d*G needs none, having been baked at build time (sub-issue #46)");
     /* 90,000 sits comfortably below the ~81,470 this function itself
      * measures below (printed nowhere, but reproducible: same fixed KAT
      * key/message/aux_rand every run), yet well BELOW #46's own ~249,450
@@ -1924,6 +2095,47 @@ static void test_field_op_count_proxy(void)
               "op-count proxy: the comb and reference point_mul_base calls measured above also "
               "agree on the resulting point (correctness alongside cost, for this exact scalar)");
     }
+
+    /*
+     * (7) continued: fe_inv's own isolated fast-vs-naive comparison,
+     * exactly mirroring (1)/(3)/(6) above -- pipeline_secp256k1_fe_inv_fast
+     * (the addition chain) against the RETAINED naive reference
+     * pipeline_secp256k1_fe_inv_reference (the exact fe_pow(a, p-2) Fermat
+     * exponentiation fe_inv itself used before this sub-issue), for the
+     * SAME field element, isolated from the rest of signing entirely.
+     */
+    {
+        pipeline_secp256k1_num invA, invFast, invRef;
+        unsigned long long invFastOps, invRefOps;
+
+        field_test_rng_seed(FIELD_INV_SWEEP_SEED ^ 0xABCD1234u);
+        field_test_random_nonzero_field_element(&invA);
+
+        pipeline_secp256k1_reset_op_count();
+        pipeline_secp256k1_fe_inv_fast(&invA, &invFast);
+        invFastOps = pipeline_secp256k1_get_op_count();
+
+        pipeline_secp256k1_reset_op_count();
+        pipeline_secp256k1_fe_inv_reference(&invA, &invRef);
+        invRefOps = pipeline_secp256k1_get_op_count();
+
+        check(invFastOps > 0 && invRefOps > 0,
+              "op-count proxy: both field-inversion paths perform a nonzero number of counted operations");
+        /* fe_pow(a, p-2)'s square-and-multiply touches ~256 squarings plus
+         * ~256 multiplies (p-2's bit pattern is essentially all ones) --
+         * roughly double the fast chain's 255 squarings + 15 multiplications
+         * (270 fe_mul calls total). Asserted at a conservative 1.5x rather
+         * than the ~1.9x this ratio implies, for margin against fe_mul's
+         * internal op count varying slightly with the specific operands. */
+        check(invFastOps * 3 < invRefOps * 2,
+              "op-count proxy: the fast addition-chain field inversion's operation count is more "
+              "than 1.5x lower than the retained naive Fermat-exponentiation reference's, for the "
+              "same operand -- sub-issue #48's own acceptance criterion (\"the host op-count proxy "
+              "shows inversion cost dropping\"), independent of the whole-signature bound above");
+        check(memcmp(&invFast, &invRef, sizeof(invFast)) == 0,
+              "op-count proxy: the fast and reference field-inversion calls measured above also "
+              "agree on the result (correctness alongside cost, for this exact operand)");
+    }
 }
 
 int main(void)
@@ -1946,6 +2158,7 @@ int main(void)
     test_qr_render_blit_round_trips_through_decode();
     test_qr_display_state_machine();
     test_field_mul_differential_sweep();
+    test_field_inv_differential_sweep();
     test_scalar_differential_sweep();
     test_point_mul_base_comb_differential_sweep();
     test_field_op_count_proxy();

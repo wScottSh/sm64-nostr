@@ -44,7 +44,8 @@
  * reduction kept solely as an oracle. Scalar multiplication (point scalar
  * mul, not the mod-n scalar multiply above) uses Jacobian coordinates (a
  * single field inversion per multiplication, at the very end) rather than
- * naive per-step affine inversion.
+ * naive per-step affine inversion, and (as of sub-issue #48 below) that one
+ * inversion itself is no longer slow either.
  *
  * Spec #43 sub-issue #46 removed one of the two pipeline_secp256k1_point_
  * mul_base calls a signature used to make: the per-event private key is
@@ -74,6 +75,21 @@
  * pipeline_secp256k1_point_mul_base_reference below (this sub-issue's own
  * differential-test oracle, exactly mirroring how #44/#45 kept
  * reduce_wide_mod around solely as their fast reductions' oracle).
+ *
+ * Spec #43 sub-issue #48 replaced the field inversion fe_inv performs
+ * (mod-p inversion, used once per signature by jac_to_affine when R = k'*G
+ * is converted from Jacobian back to affine coordinates -- the only field
+ * inversion a signature still runs, now that sub-issue #46 baked P = d*G
+ * at build time and removed the second one): it no longer computes a^-1 mod
+ * p via full 256-bit square-and-multiply Fermat exponentiation
+ * (fe_pow(a, p-2), one squaring AND, per set exponent bit, one multiply,
+ * for all 256 bits). It now uses the published fixed secp256k1 addition
+ * chain for that exact exponent instead (255 squarings + 15 multiplications
+ * total -- see fe_inv in secp256k1.c) -- roughly half the field multiplies
+ * of the generic path, for the identical result. fe_pow itself is RETAINED,
+ * used only by lift_x's modular square root (a different, caller-supplied
+ * exponent this hand-derived chain does not apply to), and as
+ * pipeline_secp256k1_fe_inv_reference below's naive oracle.
  *
  * Point arithmetic takes/returns the same affine (x, y) representation as
  * tools/nostr_secp256k1.py's scalar_mult/point_add (used at BUILD TIME
@@ -198,7 +214,7 @@ void pipeline_secp256k1_point_add(const pipeline_secp256k1_point *p1, const pipe
 int pipeline_secp256k1_num_is_valid_field_element(const pipeline_secp256k1_num *a);
 
 /*
- * ---- Test-only diagnostic surface (spec #43 sub-issues #44/#45/#47) ----
+ * ---- Test-only diagnostic surface (spec #43 sub-issues #44/#45/#47/#48) ----
  *
  * Never called from signing/verification themselves (schnorr_adapter.c
  * only ever reaches field/scalar/point multiplication indirectly, through
@@ -239,6 +255,14 @@ void pipeline_secp256k1_scalar_reduce_reference(const pipeline_secp256k1_num *a,
 void pipeline_secp256k1_scalar_mul_reference(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out);
 
 /*
+ * out = a^-1 mod p, via the fast fixed addition-chain inversion (identical
+ * to what jac_to_affine's single per-signature inversion uses -- sub-issue
+ * #48) / via the RETAINED naive full-256-bit Fermat exponentiation path --
+ * the differential-test oracle for the _fast function. a must be nonzero. */
+void pipeline_secp256k1_fe_inv_fast(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out);
+void pipeline_secp256k1_fe_inv_reference(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out);
+
+/*
  * Host-side field-multiply / operation-count proxy (spec #43 sub-issue
  * #44, reused by later sub-issues in this spec's staged landing --
  * including sub-issue #45's scalar-path fast reduction). Counts primitive
@@ -269,5 +293,19 @@ void pipeline_secp256k1_scalar_mul_reference(const pipeline_secp256k1_num *a, co
  */
 void pipeline_secp256k1_reset_op_count(void);
 unsigned long long pipeline_secp256k1_get_op_count(void);
+
+/*
+ * Host-side field-INVERSION count (spec #43 sub-issue #48). Counts calls
+ * to the one field-inversion primitive the signing path runs (fe_inv,
+ * reached via jac_to_affine when R = k'*G is converted to affine
+ * coordinates) since the last pipeline_secp256k1_reset_op_count() call --
+ * lets tools/pipeline_test assert directly that a signature performs AT
+ * MOST ONE modular inversion (this sub-issue's own acceptance criterion),
+ * not just that inversion got cheaper. Same PIPELINE_SECP256K1_OP_COUNT
+ * gating (always 0 unless that macro is defined) and reset pairing as
+ * pipeline_secp256k1_get_op_count() above -- not a separate compile-time
+ * knob.
+ */
+unsigned long long pipeline_secp256k1_get_inversion_count(void);
 
 #endif /* PIPELINE_SECP256K1_H */
