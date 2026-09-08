@@ -1,5 +1,10 @@
 # Set the default behavior, in case people don't have core.autocrlf set.
-* text=auto
+# eol=lf forces LF in the working tree on all platforms: the ROM is built in a
+# Linux container (see Dockerfile), and the IDO `cfe` compiler chokes on CR
+# bytes in C sources/headers. Without this, a Windows checkout (core.autocrlf
+# =true, or the explicit `text` marks below + core.eol=native) yields CRLF and
+# the build fails with garbled cfe errors.
+* text=auto eol=lf
 
 # List text files in case git doesn't characterize correctly
 *.c text
