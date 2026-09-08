@@ -4,6 +4,11 @@ Generate event_profile.h (spec #24, sub-issue #26) from include/event_profile.h.
 plus a per-event 32-byte hex secp256k1 private key, and append a row to the
 gitignored keys/registry.md.
 
+Bakes both the derived x-only pubkey AND the raw privkey bytes into the
+generated header (spec #24, sub-issue #31: the ROM's capture glue calls
+build_event(capture, key, ...) with a real key, so it needs the same
+per-event secret in byte form, not just its derived pubkey).
+
 The build fails closed on a missing key: see the Makefile's PIPELINE_PRIVKEY_FILE
 check, which runs before this script is ever invoked. This script additionally
 validates the key file's contents so a malformed (not 32-byte-hex) secret
@@ -97,10 +102,12 @@ def main():
         template = f.read()
 
     pubkey_bytes_literal = "{ " + ", ".join("0x%02x" % b for b in pubkey_bytes) + " }"
+    privkey_bytes_literal = "{ " + ", ".join("0x%02x" % b for b in privkey_bytes) + " }"
     rendered = (
         template.replace("@CREATED_AT@", str(created_at))
         .replace("@PUBKEY_HEX@", pubkey_hex)
         .replace("@PUBKEY_BYTES@", pubkey_bytes_literal)
+        .replace("@PRIVKEY_BYTES@", privkey_bytes_literal)
     )
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

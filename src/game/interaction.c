@@ -1,3 +1,4 @@
+#include <PR/os.h>
 #include <PR/ultratypes.h>
 
 #include "area.h"
@@ -23,6 +24,10 @@
 #include "sm64.h"
 #include "sound_init.h"
 #include "rumble_init.h"
+
+#include "event_profile.h"
+#include "pipeline/build_event.h"
+#include "pipeline/capture.h"
 
 #define INT_GROUND_POUND_OR_TWIRL (1 << 0) // 0x01
 #define INT_PUNCH                 (1 << 1) // 0x02
@@ -771,6 +776,22 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
     u32 starGrabAction = ACT_STAR_DANCE_EXIT;
     u32 noExit = (o->oInteractionSubtype & INT_SUBTYPE_NO_EXIT) != 0;
     u32 grandStar = (o->oInteractionSubtype & INT_SUBTYPE_GRAND_STAR) != 0;
+    /* Nostr pipeline capture glue (spec #24, sub-issue #31). The two
+     * capture/event structs and the baked key are declared here, at the
+     * top of the function (this file compiles under IDO's C89-only parser
+     * -- see the root Makefile's COMPILER=ido default -- which requires
+     * every declaration at the start of ITS OWN block, not necessarily the
+     * function's; a lone `int` further below is declared at the top of its
+     * own nested `if` block instead, which is equally C89-legal). The
+     * per-event private key is baked into the generated event_profile.h at
+     * build time (PIPELINE_EVENT_PRIVKEY_BYTES -- see that header's own
+     * comment and gen_event_profile.py) from the same gitignored
+     * keys/event_privkey.hex the build already fails closed without; it is
+     * `static const` because it never changes across calls, not because
+     * anything about the capture below is stateful. */
+    StarCapture pipelineCapture;
+    BuiltEvent pipelineBuiltEvent;
+    static const pipeline_u8 sPipelineEventPrivkey[PIPELINE_KEY_SIZE] = PIPELINE_EVENT_PRIVKEY_BYTES;
 
     if (m->health >= 0x100) {
         mario_stop_riding_and_holding(m);
@@ -809,6 +830,93 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
         m->usedObj = o;
 
         starIndex = (o->oBhvParams >> 24) & 0x1F;
+
+        /* Fires for every star grab -- exit and no-exit alike (100-coin,
+         * Toad, MIPS, grand stars) -- but never for a Bowser key (spec #24
+         * user story 4, #17): a key grab reaches this SAME handler (see
+         * bowser_key.inc.c's sBowserKeyHitbox, which also declares
+         * INTERACT_STAR_OR_KEY), so keys are excluded by behavior-script
+         * identity, mirroring the existing o->behavior ==
+         * segmented_to_virtual(bhvBowser) precedent (object_helpers.c) --
+         * the one reliable way to tell a key object from a star object at
+         * this shared call site. A course-range check (e.g.
+         * COURSE_IS_MAIN_COURSE) would be the wrong tool here: it would
+         * also wrongly exclude legitimate secret-course stars (PSS, TOTWC,
+         * VCUTM, WMOTR, SA, COTMC are all "bonus" courses per
+         * levels/course_defines.h that DO award a real star).
+         *
+         * Capture happens synchronously right here, at grab (capture@grab,
+         * spec #24 sub-issue #31's acceptance criteria): every field below
+         * is read from the exact values live in this frame, before any of
+         * them can change under the star-dance action that follows.
+         * pipeline_capture_build() (src/pipeline/capture.h) is the ONE
+         * shared pure function that hashes the content nonce -- this glue
+         * supplies live N64 entropy (osGetCount(), gGlobalTimer, the
+         * player's raw stick/buttons this frame); the host test
+         * (tools/pipeline_test) supplies fixed stand-ins for that same
+         * entropy and asserts the resulting build_event() bytes match this
+         * ROM path's structurally-identical call exactly (byte-identity by
+         * construction, not by running the ROM).
+         *
+         * `frames` is deliberately gGlobalTimer -- the console's own
+         * monotonic since-boot frame counter, ticking regardless of
+         * course/pause state. No per-attempt/per-course elapsed-frames
+         * counter exists today that runs for every course (the HUD's own
+         * gHudDisplay.timer -- level_update.c's sTimerRunning -- is only
+         * driven for a handful of timed courses, capped at 17999, and reset
+         * on course entry): gGlobalTimer is the best available always-on
+         * frame source for this field without adding new per-run timing
+         * infrastructure, which is outside #31's capture-glue scope. It is
+         * ALSO one of the four values #31's acceptance criteria mandates
+         * hashing into the content nonce below -- reusing the same read
+         * for both is intentional, not an oversight: nonce16 still mixes
+         * in osGetCount() (free-running CPU cycle count, unrelated to
+         * gGlobalTimer) and this frame's raw stick/buttons, so the nonce
+         * doesn't collapse to a value fully recoverable from `frames`
+         * alone even though gGlobalTimer itself is. */
+        if (o->behavior != segmented_to_virtual(bhvBowserKey)) {
+            int pipelineBuildOk;
+
+            /* m->numCoins is s16; StarCapture.coins is a pipeline_u8 (the
+             * packed wire field is one byte). This truncates mod 256 with
+             * no clamp, exactly mirroring save_file_collect_star_or_key's
+             * own documented 8-bit truncation of the same value
+             * (save_file.c: "Compares the coin score as a 16 bit value,
+             * but only writes the 8 bit truncation") -- an existing,
+             * accepted quirk in this codebase for this exact field, not a
+             * new one introduced here. */
+            pipeline_capture_build((pipeline_u8) gCurrCourseNum, (pipeline_u8) gCurrActNum,
+                                    (pipeline_u8) m->numCoins, (pipeline_u32) gGlobalTimer,
+                                    (pipeline_u8) starIndex, (pipeline_u32) osGetCount(),
+                                    (pipeline_u32) gGlobalTimer,
+                                    (pipeline_u8) gPlayer1Controller->rawStickX,
+                                    (pipeline_u8) gPlayer1Controller->rawStickY,
+                                    (pipeline_u16) gPlayer1Controller->buttonDown, &pipelineCapture);
+
+            /* #31 stops here: on success, pipelineBuiltEvent now holds the
+             * exact bytes the host tool predicts for these capture values
+             * (see tools/pipeline_test's test_capture_matches_host_build_event()
+             * host assertion). Rendering it as a QR (#32) and driving the
+             * shared qr_display state machine in place of the save menu
+             * (#33) are later sub-issues -- this glue does not display,
+             * does not time-stop, and does not touch the save UI; it only
+             * builds and holds the event for the remainder of this
+             * function's stack frame (an intentionally minimal hold per
+             * #31's scope -- #32/#33 are what will actually give
+             * pipelineBuiltEvent storage that outlives this call and
+             * consume it). build_event()'s own documented failure cases
+             * (schnorr_adapter.h/qr_adapter.h) are astronomically unlikely
+             * for a live, correctly-ranged key and today's fixed-size
+             * payload (see build_event.h), but the return value IS checked
+             * here (per build_event.h's own documented contract: "out is
+             * left entirely untouched" on failure) so pipelineBuiltEvent is
+             * never left as uninitialized stack garbage. */
+            pipelineBuildOk = build_event(&pipelineCapture, sPipelineEventPrivkey, &pipelineBuiltEvent);
+            if (!pipelineBuildOk) {
+                bzero(&pipelineBuiltEvent, sizeof(pipelineBuiltEvent));
+            }
+        }
+
         save_file_collect_star_or_key(m->numCoins, starIndex);
 
         m->numStars =

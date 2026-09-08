@@ -13,6 +13,15 @@
  * these travel in the packed QR payload (see format_descriptor.h) -- the
  * downstream id/sig verifier recomputes the event and checks against a
  * pubkey it already knows out-of-band.
+ *
+ * Also carries the raw 32-byte per-event privkey (spec #24, sub-issue #31):
+ * capture glue at interact_star_or_key calls build_event(capture, key, ...)
+ * with a real key argument, so the ROM needs the same per-event secret
+ * gen_event_profile.py already reads (to derive the pubkey above) baked in
+ * byte form too -- there is deliberately no second/separate key-injection
+ * mechanism. Live signing still happens on-console at grab time (per spec
+ * #24's "live-deterministic k=f(d,m)" decision); this is not a precomputed
+ * signature, just the key material.
  */
 
 #define PIPELINE_EVENT_KIND       8064
@@ -27,5 +36,8 @@
 /* Derived x-only pubkey (32 bytes), hex and byte-list forms. */
 #define PIPELINE_EVENT_PUBKEY_HEX "@PUBKEY_HEX@"
 #define PIPELINE_EVENT_PUBKEY_BYTES @PUBKEY_BYTES@
+
+/* Raw 32-byte per-event secp256k1 private key, byte-list form. */
+#define PIPELINE_EVENT_PRIVKEY_BYTES @PRIVKEY_BYTES@
 
 #endif /* PIPELINE_EVENT_PROFILE_H */

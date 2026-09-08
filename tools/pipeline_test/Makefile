@@ -54,6 +54,15 @@
 # independent verifier spec #24/#29's acceptance criteria call for;
 # pipeline_schnorr_verify() in this host tool is only an internal
 # self-consistency check, not that independent oracle.
+#
+# Sub-issue #31 adds capture.c -- the pure capture-glue half (field
+# extraction + content-nonce hashing, see capture.h) called both by the
+# ROM's real capture glue at interact_star_or_key (src/game/interaction.c)
+# and, here, by main.c's test_capture_matches_host_build_event(), which
+# feeds it fixed capture-time inputs and asserts the resulting build_event()
+# bytes are byte-identical to a StarCapture built directly. Since both
+# paths call the SAME pipeline_capture_build() and the SAME build_event(),
+# byte-identity holds by construction rather than by executing the ROM.
 
 CC           := gcc
 PYTHON       := python3
@@ -67,7 +76,8 @@ CFLAGS := -std=gnu99 -Wall -Wextra -I $(PIPELINE_DIR) -I $(INC_DIR)
 SRCS := main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c $(PIPELINE_DIR)/pack_adapter.c \
         $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c qr_host_decode.c \
         $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c \
-        $(PIPELINE_DIR)/secp256k1.c $(PIPELINE_DIR)/schnorr_adapter.c
+        $(PIPELINE_DIR)/secp256k1.c $(PIPELINE_DIR)/schnorr_adapter.c \
+        $(PIPELINE_DIR)/capture.c
 BIN  := pipeline_test
 
 # BIP-340 test vector 0 (privkey=3): a fixed, published known-answer key,

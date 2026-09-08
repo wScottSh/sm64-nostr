@@ -233,21 +233,33 @@ ACTOR_DIR      := actors
 LEVEL_DIRS     := $(patsubst levels/%,%,$(dir $(wildcard levels/*/header.h)))
 
 # Directories containing source files
-SRC_DIRS := src src/engine src/game src/audio src/menu src/buffers actors levels bin data assets asm lib sound
+SRC_DIRS := src src/engine src/game src/audio src/menu src/buffers actors levels bin data assets asm lib sound src/pipeline
 
-# src/pipeline (the Nostr pipeline, spec #24) is deliberately NOT one of the
-# above SRC_DIRS: those feed C_FILES/O_FILES straight into $(ELF)'s link
-# inputs, and sm64.ld (see its SECTIONS block) places every input object's
-# .text explicitly by name for a byte-matching link. Nothing calls into the
-# pipeline yet (the capture/render glue lands in later sub-issues), so
-# linking its objects in now would either become unplaced ld orphans or
-# require sm64.ld churn for code nothing references -- and either way would
-# shift the matching ROM's bytes for no behavioral reason. Instead,
-# pipeline sources are compiled (not linked) via the dedicated
-# `pipeline-rom-objects` target below, using the exact same CC/CFLAGS the
-# ROM build would use, which is what sub-issue #25 needs to prove: that the
-# ROM toolchain compiles these pure sources unmodified. Wiring them into
-# the real link happens alongside the glue that calls them.
+# src/pipeline (the Nostr pipeline, spec #24) is now one of the above
+# SRC_DIRS (spec #24, sub-issue #31): the capture glue added at
+# interact_star_or_key (src/game/interaction.c) calls build_event(), so its
+# object must actually resolve at link time. Through sub-issue #30,
+# src/pipeline was deliberately excluded here -- nothing called into the
+# pipeline yet, so linking its objects in would either become unplaced ld
+# orphans or require sm64.ld churn for code nothing referenced, shifting the
+# matching ROM's bytes for no behavioral reason. That reason is gone now
+# that #31 makes the call: sm64.ld's SECTIONS block (see the comment beside
+# the new BUILD_DIR/src/pipeline/*.o(.text) entries, right after
+# interaction.o, in each of its .text/.data*/.rodata*/.bss* blocks) now
+# explicitly places every pipeline object next to the one caller, exactly
+# mirroring how every other SRC_DIRS object is placed. This fork's ROM bytes
+# already diverge from vanilla the moment a star grab calls new code, so
+# COMPARE=1's sha1 check is expected (and, per its own printed message,
+# harmless) to fail from here on -- object placement order inside the link
+# no longer carries the byte-matching significance it used to.
+#
+# src/pipeline's own files still need the C99 carve-out
+# (PIPELINE_C99_PORT_O below) and the generated-header prerequisites
+# (PIPELINE_FORMAT_DESCRIPTOR_H/PIPELINE_EVENT_PROFILE_H) exactly as they
+# did when only `pipeline-rom-objects` built them: those overrides and
+# prerequisites are keyed off the objects' file paths (which are identical
+# whether reached via O_FILES or the explicit PIPELINE_ROM_OBJS list below),
+# so make applies them regardless of which route triggers the build.
 PIPELINE_SRC_DIR := src/pipeline
 
 # Key injection + event profile / format descriptor generation (spec #24,
@@ -493,10 +505,12 @@ $(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
 # The pure pipeline modules themselves (build_event.c, pack_adapter.c from
 # spec #24 sub-issue #26, and qr_adapter.c from sub-issue #27) need no C99
 # and no special flags -- they compile under whichever COMPILER is already
-# active, which is the point of being host-and-ROM-compilable. Only the
-# object list matters here: none of these objects are added to O_FILES/the
-# link (see the comment above SRC_DIRS), so `all`/$(ROM)'s own object graph
-# is untouched by this target. pack_adapter.c is here to prove the ROM side
+# active, which is the point of being host-and-ROM-compilable. As of
+# sub-issue #31, src/pipeline IS one of SRC_DIRS (see the comment there), so
+# these same object paths are also part of O_FILES/$(ROM)'s real object
+# graph now; PIPELINE_ROM_OBJS/`pipeline-rom-objects` below remain useful as
+# a standalone way to compile (not link) just this list, unchanged since
+# sub-issue #25. pack_adapter.c is here to prove the ROM side
 # of the format-descriptor single-source-of-truth wiring (see
 # PIPELINE_FORMAT_DESCRIPTOR_H below). qr_adapter.c is the pipeline-internal
 # seam in front of the C99 qrcodegen.c port above -- it, not qrcodegen.c
@@ -512,7 +526,14 @@ $(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
 # like event_id.c -- its own code contains no C99-only constructs (no
 # block-scoped for-loop declarations, no _Bool) and it needs no C99,
 # staying in this "pure" list rather than the carve-out.
-PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o $(PIPELINE_C99_PORT_O)
+#
+# capture.o (sub-issue #31) is the pure capture-glue half: field-extraction
+# + content-nonce hashing (capture.h/.c). It #includes sha256.h directly
+# (the one non-event_id.c caller sha256.h's own header comment anticipates)
+# but, like schnorr_adapter.c, only calls its one-shot pipeline_sha256()
+# wrapper and contains no C99-only constructs, so it stays in this "pure"
+# list too.
+PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o $(PIPELINE_C99_PORT_O)
 
 # pack_adapter.o #includes format_descriptor.h directly; event_id.o
 # genuinely does #include event_profile.h (the baked serialization prefix).
@@ -524,19 +545,30 @@ PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)
 # secp256k1.h (both #include "build_event.h" too, for the pipeline_u8/
 # pipeline_u32 typedefs) -- format_descriptor.h is transitively required to
 # compile every one of these six objects, not just the four sub-issue #30
-# actually touched. Listed explicitly here (rather than left to transitive
-# #include order happening to already be right) so a clean/parallel build
-# can't compile any of them before the generated header exists. sha256.o/
-# secp256k1.o are built via the C99 carve-out rule below (different CC/
-# CFLAGS override), but a prerequisite is still a prerequisite regardless
-# of which rule ultimately builds the object.
+# actually touched. capture.o (sub-issue #31) is the same story: capture.h
+# #includes build_event.h too. Listed explicitly here (rather than left to
+# transitive #include order happening to already be right) so a
+# clean/parallel build can't compile any of them before the generated
+# header exists. sha256.o/secp256k1.o are built via the C99 carve-out rule
+# below (different CC/CFLAGS override), but a prerequisite is still a
+# prerequisite regardless of which rule ultimately builds the object.
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/sha256.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/secp256k1.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+
+# interaction.o (sub-issue #31) is the first NON-pipeline object to #include
+# a pipeline generated header: it #includes event_profile.h directly (for
+# PIPELINE_EVENT_PRIVKEY_BYTES) and, transitively via pipeline/build_event.h,
+# format_descriptor.h too. Without this prerequisite, a clean/parallel build
+# could compile interaction.o (src/game sorts before src/pipeline in
+# SRC_DIRS, and `all: $(PIPELINE_EVENT_PROFILE_H) ...` is declared after
+# `all: $(ROM)`) before either generated header exists.
+$(BUILD_DIR)/src/game/interaction.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
 
 # Event profile header: derives the x-only pubkey from the per-event secret
 # (PIPELINE_PRIVKEY_FILE, checked for existence above) and bakes it, plus
@@ -636,9 +668,12 @@ endef
 
 all: $(ROM)
 # The Nostr pipeline's event profile / format descriptor (spec #24,
-# sub-issue #26) are additional deliverables of a normal build, generated
-# alongside $(ROM) -- not inputs to it, so this doesn't touch $(ROM)'s own
-# object graph or its bytes (see the comment above PIPELINE_ROM_OBJS).
+# sub-issue #26) are generated alongside $(ROM). Through sub-issue #30 they
+# were deliverables only (no pipeline object actually needed them at link
+# time); as of sub-issue #31, build_event.o/event_id.o/etc. in O_FILES
+# genuinely #include the generated headers (see the per-object prerequisite
+# rules below), so this line is now belt-and-suspenders alongside those
+# object-level prerequisites, not the only thing ensuring they exist.
 all: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
 ifeq ($(COMPARE),1)
 	@$(PRINT) "$(GREEN)Checking if ROM matches.. $(NO_COL)\n"

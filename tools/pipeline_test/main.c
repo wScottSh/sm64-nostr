@@ -41,6 +41,30 @@
  * (@noble/curves oracle, see tools/verify_schnorr_reference.js's
  * conventions) and verifies, and (c) flip one payload content byte and
  * assert verification against the original signature now fails.
+ *
+ * #31 adds capture.c's tests (src/pipeline/capture.h -- the pure capture-
+ * glue half the ROM's real glue at interact_star_or_key also calls, spec
+ * #24 sub-issue #31):
+ *   - test_capture_build_known_answer(): fixed capture-time inputs (course,
+ *     act, coins, frames, starIndex, osCount, globalTimer, rawStickX/Y,
+ *     buttonMask) through pipeline_capture_build(), asserting every
+ *     StarCapture field lands correctly AND that nonce16 matches a
+ *     known-answer value computed with Python's own hashlib (a genuinely
+ *     independent SHA-256 implementation, not this repo's ported one) over
+ *     the exact same 12-byte big-endian concatenation
+ *     (osCount||globalTimer||rawStickX||rawStickY||buttonMask) capture.h's
+ *     own contract documents;
+ *   - test_capture_matches_host_build_event(): builds a BuiltEvent via
+ *     pipeline_capture_build() + build_event() (the SAME two calls the ROM
+ *     glue makes) and a second BuiltEvent via a StarCapture constructed by
+ *     hand with the identical field values (including that same
+ *     known-answer nonce16) + build_event(), then asserts both
+ *     packed_payload and qr_bitmap are byte-identical -- the sub-issue #31
+ *     acceptance criterion ("the ROM's produced payload for a run is
+ *     byte-identical to the host tool's output for the same
+ *     course/act/coins/frames/nonce") demonstrated by construction: both
+ *     paths call the same pipeline_capture_build()/build_event(), so
+ *     identical inputs structurally cannot diverge.
  */
 #include <stdio.h>
 #include <string.h>
@@ -53,6 +77,7 @@
 #include "sha256.h"
 #include "event_id.h"
 #include "schnorr_adapter.h"
+#include "capture.h"
 
 static int g_failures = 0;
 
@@ -629,6 +654,145 @@ static void test_schnorr_sign_is_deterministic(void)
           "pipeline_schnorr_sign is deterministic across repeated calls with the same inputs");
 }
 
+/*
+ * Fixed capture-time input vector shared by both capture tests below.
+ * nonce16's expected value (0xDB3B) was computed independently with
+ * Python's hashlib over the exact 12-byte big-endian concatenation
+ * capture.h documents (osCount||globalTimer||rawStickX||rawStickY||
+ * buttonMask = 11 22 33 44 55 66 77 88 0a f6 80 01), taking the first two
+ * SHA-256 digest bytes -- NOT re-derived from this repo's own ported
+ * sha256.c, so it genuinely pins pipeline_capture_build()'s nonce-hashing
+ * contract rather than merely reflecting whatever the port happens to
+ * compute.
+ */
+#define PIPELINE_TEST_CAPTURE_COURSE      4u
+#define PIPELINE_TEST_CAPTURE_ACT         2u
+#define PIPELINE_TEST_CAPTURE_COINS       50u
+#define PIPELINE_TEST_CAPTURE_STAR_INDEX  12u
+#define PIPELINE_TEST_CAPTURE_OS_COUNT    0x11223344u
+#define PIPELINE_TEST_CAPTURE_GLOBAL_TIMER 0x55667788u
+/* Mirrors the ROM glue's actual call shape at interact_star_or_key, which
+ * passes gGlobalTimer for BOTH the `frames` argument and one of the nonce
+ * hash inputs (see interaction.c's own comment on that reuse) -- this test
+ * vector does the same rather than using two different values, so it
+ * exercises the real call shape, not a hypothetical one. */
+#define PIPELINE_TEST_CAPTURE_FRAMES      PIPELINE_TEST_CAPTURE_GLOBAL_TIMER
+#define PIPELINE_TEST_CAPTURE_RAW_STICK_X 10u
+#define PIPELINE_TEST_CAPTURE_RAW_STICK_Y 246u
+#define PIPELINE_TEST_CAPTURE_BUTTONS     0x8001u
+#define PIPELINE_TEST_CAPTURE_EXPECTED_NONCE16 0xDB3Bu
+
+static void test_capture_build_known_answer(void)
+{
+    StarCapture capture;
+
+    pipeline_capture_build((pipeline_u8) PIPELINE_TEST_CAPTURE_COURSE,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_ACT,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_COINS,
+                            (pipeline_u32) PIPELINE_TEST_CAPTURE_FRAMES,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_STAR_INDEX,
+                            (pipeline_u32) PIPELINE_TEST_CAPTURE_OS_COUNT,
+                            (pipeline_u32) PIPELINE_TEST_CAPTURE_GLOBAL_TIMER,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_RAW_STICK_X,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_RAW_STICK_Y,
+                            (pipeline_u16) PIPELINE_TEST_CAPTURE_BUTTONS,
+                            &capture);
+
+    check(capture.course == PIPELINE_TEST_CAPTURE_COURSE
+              && capture.act == PIPELINE_TEST_CAPTURE_ACT
+              && capture.coins == PIPELINE_TEST_CAPTURE_COINS
+              && capture.frames == PIPELINE_TEST_CAPTURE_FRAMES
+              && capture.keyId == PIPELINE_TEST_CAPTURE_STAR_INDEX,
+          "pipeline_capture_build carries course/act/coins/frames/starIndex(keyId) through exactly");
+
+    check(capture.nonce16 == PIPELINE_TEST_CAPTURE_EXPECTED_NONCE16,
+          "pipeline_capture_build's nonce16 matches the independent Python-hashlib known-answer vector (0xDB3B)");
+}
+
+static void test_capture_matches_host_build_event(void)
+{
+    /* Path A: the SAME two calls the ROM's real capture glue at
+     * interact_star_or_key makes -- pipeline_capture_build() then
+     * build_event() -- using this test's fixed input vector in place of
+     * live N64 values. */
+    StarCapture capturedViaGlue;
+    BuiltEvent eventFromGlue;
+    int buildOkA;
+
+    /* Path B: a StarCapture assembled by hand for the "same run" (same
+     * course/act/coins/frames, and the SAME known-answer nonce16 --
+     * standing in for "the host tool's output for the same
+     * course/act/coins/frames/nonce", per sub-issue #31's acceptance
+     * criteria), then build_event() again. */
+    StarCapture capturedByHand;
+    BuiltEvent eventFromHand;
+    int buildOkB;
+
+    pipeline_capture_build((pipeline_u8) PIPELINE_TEST_CAPTURE_COURSE,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_ACT,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_COINS,
+                            (pipeline_u32) PIPELINE_TEST_CAPTURE_FRAMES,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_STAR_INDEX,
+                            (pipeline_u32) PIPELINE_TEST_CAPTURE_OS_COUNT,
+                            (pipeline_u32) PIPELINE_TEST_CAPTURE_GLOBAL_TIMER,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_RAW_STICK_X,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_RAW_STICK_Y,
+                            (pipeline_u16) PIPELINE_TEST_CAPTURE_BUTTONS,
+                            &capturedViaGlue);
+    buildOkA = build_event(&capturedViaGlue, kBuildEventPrivkey, &eventFromGlue);
+
+    capturedByHand.course  = (pipeline_u8) PIPELINE_TEST_CAPTURE_COURSE;
+    capturedByHand.act     = (pipeline_u8) PIPELINE_TEST_CAPTURE_ACT;
+    capturedByHand.coins   = (pipeline_u8) PIPELINE_TEST_CAPTURE_COINS;
+    capturedByHand.frames  = (pipeline_u32) PIPELINE_TEST_CAPTURE_FRAMES;
+    capturedByHand.keyId   = (pipeline_u8) PIPELINE_TEST_CAPTURE_STAR_INDEX;
+    capturedByHand.nonce16 = (pipeline_u16) PIPELINE_TEST_CAPTURE_EXPECTED_NONCE16;
+    buildOkB = build_event(&capturedByHand, kBuildEventPrivkey, &eventFromHand);
+
+    check(buildOkA != 0 && buildOkB != 0,
+          "build_event succeeds for both the capture-glue path and the hand-built StarCapture path");
+
+    /* The memcmp-based checks below only prove build_event is a (deterministic)
+     * function of its StarCapture argument -- they can't fail by construction
+     * when both paths are handed field-identical StarCaptures. To actually pin
+     * down what "byte-identical to the host tool's output for the same
+     * course/act/coins/frames/nonce" (sub-issue #31's acceptance criteria)
+     * means at the wire level, check eventFromGlue.packed_payload's bytes
+     * directly against this vector's literal expected values, at the offsets
+     * format_descriptor.h independently generates from
+     * src/pipeline/format_descriptor.json (not from pipeline_pack.c itself). */
+    if (buildOkA) {
+        int fieldsOk =
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_FORMAT_TAG] == 1 &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_COURSE] == PIPELINE_TEST_CAPTURE_COURSE &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_ACT] == PIPELINE_TEST_CAPTURE_ACT &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_COINS] == PIPELINE_TEST_CAPTURE_COINS &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_FRAMES + 0] == 0x55 &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_FRAMES + 1] == 0x66 &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_FRAMES + 2] == 0x77 &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_FRAMES + 3] == 0x88 &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_NONCE16 + 0] == 0xDB &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_NONCE16 + 1] == 0x3B &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_KEY_ID] == PIPELINE_TEST_CAPTURE_STAR_INDEX;
+
+        check(fieldsOk,
+              "capture-glue path's packed_payload bytes match this vector's literal expected values "
+              "at format_descriptor.h's independently-generated field offsets");
+    }
+
+    check(buildOkA && buildOkB
+              && memcmp(eventFromGlue.packed_payload, eventFromHand.packed_payload,
+                         PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
+          "byte-identity: capture-glue path's packed_payload == hand-built-StarCapture path's packed_payload "
+          "for the same course/act/coins/frames/nonce");
+
+    check(buildOkA && buildOkB
+              && memcmp(eventFromGlue.qr_bitmap, eventFromHand.qr_bitmap,
+                         PIPELINE_BUILT_QR_BITMAP_SIZE) == 0,
+          "byte-identity: capture-glue path's qr_bitmap == hand-built-StarCapture path's qr_bitmap "
+          "for the same course/act/coins/frames/nonce");
+}
+
 int main(void)
 {
     test_format_descriptor_round_trip();
@@ -642,6 +806,8 @@ int main(void)
     test_schnorr_verify_internal_self_consistency();
     test_schnorr_sign_is_deterministic();
     test_build_event_end_to_end();
+    test_capture_build_known_answer();
+    test_capture_matches_host_build_event();
 
     if (g_failures != 0) {
         printf("%d check(s) FAILED\n", g_failures);
