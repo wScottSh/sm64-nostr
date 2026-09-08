@@ -98,7 +98,19 @@ static void buildFunctionModuleMap(int version, int qrsize)
             markRect(alignPatPos[i] - 2, alignPatPos[j] - 2, 5, 5);
         }
     }
-    // No version-info blocks below version 7; PIPELINE_QR_VERSION (6) never needs them.
+
+    // Version-info blocks (versions 7+ only; PIPELINE_QR_VERSION is now 7,
+    // spec #52 sub-issue #53). Mirrors qrcodegen.c's drawVersion(): two
+    // copies of an 18-bit version-info field, one at x in [size-11,size-9]
+    // / y in [0,5] (3 wide x 6 tall), one at its transpose, x in [0,5] / y
+    // in [size-11,size-9] (6 wide x 3 tall). These modules carry real data
+    // (the version-info bits, not payload codewords), so they must be
+    // excluded from the zigzag data walk exactly like the finder/format/
+    // timing/alignment patterns above.
+    if (version >= 7) {
+        markRect(qrsize - 11, 0, 3, 6);
+        markRect(0, qrsize - 11, 6, 3);
+    }
 }
 
 static bool maskInvert(enum qrcodegen_Mask mask, int x, int y)
@@ -118,8 +130,10 @@ static bool maskInvert(enum qrcodegen_Mask mask, int x, int y)
 
 // Reads the first copy of the 15-bit format-info field (same positions
 // qrcodegen.c's drawFormatBits() writes), recovering both the mask pattern
-// (chosen dynamically by qrcodegen_Mask_AUTO at encode time -- this is a
-// real decode of it, not an assumption) and the ECC level, which must
+// (qr_adapter.h now pins one fixed mask -- PIPELINE_QR_MASK -- at encode
+// time, but this decoder still recovers it from the format-info bits
+// rather than assuming that constant, exactly as a real reader must) and
+// the ECC level, which must
 // match the fixed `expectedEcl` this decoder was built for. No BCH error
 // correction is applied to the 15 bits (this decodes a bitmap this same
 // process built in memory, never a noisy scan), so a mismatch here means
@@ -231,7 +245,14 @@ int qr_host_decode(const unsigned char *qrcode, unsigned char *out, int outCap, 
     numBlocks      = NUM_ERROR_CORRECTION_BLOCKS[(int)ecl][version];
     dataCodewords  = rawCodewords - blockEccLen * numBlocks;
 
-    if (dataCodewords > PIPELINE_QR_DATA_CODEWORDS) {
+    /* Exact equality, not just an overflow bound: PIPELINE_QR_DATA_CODEWORDS
+     * (qr_adapter.h) is a hand-derived constant documenting this exact
+     * version/ECC combination's real capacity (see that header's own
+     * derivation comment) -- if it and the structural tables above ever
+     * disagree, that is a drift bug in the documented contract, not just a
+     * dataBytes[] sizing risk, so it must fail loudly here rather than
+     * silently decoding against a stale capacity. */
+    if (dataCodewords != PIPELINE_QR_DATA_CODEWORDS) {
         return 0;
     }
 

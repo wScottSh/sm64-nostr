@@ -5,8 +5,8 @@
  * The renderer glue's PURE core (spec #24, sub-issue #32). Consumes a
  * finished qr_bitmap (build_event.h's BuiltEvent::qr_bitmap, produced by
  * the pipeline's qr_adapter.h -- see that header for the fixed version
- * 6 / ECC MEDIUM choice, 41x41 modules) and blits it into a caller-supplied
- * plain RGBA16 pixel array.
+ * 7 / ECC MEDIUM / fixed-mask choice, 45x45 modules, spec #52 sub-issue #53)
+ * and blits it into a caller-supplied plain RGBA16 pixel array.
  *
  * This file is deliberately pure, mirroring src/pipeline/'s own pure-core
  * convention: no MarioState, no globals, no N64 headers (no ultra64.h, no
@@ -38,13 +38,14 @@
  * of 4 framebuffer pixels per QR module, and a fixed quiet-zone border of
  * 4 modules on every side (the minimum quiet zone the QR spec itself
  * recommends around a symbol, chosen here as the FIXED border acceptance
- * criterion #32 calls for). For the pipeline's fixed version-6 QR
- * (PIPELINE_QR_MODULE_SIZE == 41 modules, see qr_adapter.h):
- *   grid width/height  = 41 + 2*4  = 49 modules
- *   image width/height = 49 * 4    = 196 pixels
+ * criterion #32 calls for). For the pipeline's fixed version-7 QR (spec
+ * #52 sub-issue #53; PIPELINE_QR_MODULE_SIZE == 45 modules, see
+ * qr_adapter.h):
+ *   grid width/height  = 45 + 2*4  = 53 modules
+ *   image width/height = 53 * 4    = 212 pixels
  * which fits comfortably inside the N64's 320x240 RGBA16 framebuffer
- * (config.h's SCREEN_WIDTH/SCREEN_HEIGHT) with room to spare (124 px of
- * horizontal margin, 44 px of vertical margin) -- centered by the origin
+ * (config.h's SCREEN_WIDTH/SCREEN_HEIGHT) with room to spare (108 px of
+ * horizontal margin, 28 px of vertical margin) -- centered by the origin
  * computed in qr_render_blit_rgba16() itself, so a caller only ever needs
  * to supply the framebuffer's own actual width/height.
  */

@@ -65,21 +65,21 @@ typedef struct StarCapture {
 #define PIPELINE_BUILT_PAYLOAD_SIZE PIPELINE_FMT_TOTAL_SIZE
 
 /*
- * QR bitmap buffer sizing: mirrors qrcodegen_BUFFER_LEN_FOR_VERSION(6) --
+ * QR bitmap buffer sizing: mirrors qrcodegen_BUFFER_LEN_FOR_VERSION(7) --
  * ((version*4+17)^2 + 7) / 8 + 1 -- from qrcodegen.h/qr_adapter.h's fixed
- * version 6 choice, WITHOUT #including qrcodegen.h here. qr_adapter.h's own
- * header comment documents that qrcodegen.h/qrcodegen.c must stay hidden
- * behind the qr_adapter.h seam (never visible to callers outside
- * src/pipeline/, including future game glue, #31/#32) -- #including it
- * from this file, which every pipeline-internal header transitively pulls
- * in via StarCapture/pipeline_u8, would leak qrcodegen's whole public
- * surface (qrcodegen_encodeBinary, its enums, ...) to every build_event.h
- * consumer. build_event.c's own compile-time checks (comparing
- * PIPELINE_BUILT_QR_VERSION/PIPELINE_BUILT_QR_BITMAP_SIZE against
- * qr_adapter.h's PIPELINE_QR_VERSION/PIPELINE_QR_BUFFER_LEN) are what keep
- * this duplicated formula from silently drifting instead.
+ * version 7 choice (spec #52, sub-issue #53), WITHOUT #including
+ * qrcodegen.h here. qr_adapter.h's own header comment documents that
+ * qrcodegen.h/qrcodegen.c must stay hidden behind the qr_adapter.h seam
+ * (never visible to callers outside src/pipeline/, including game glue,
+ * #31/#32) -- #including it from this file, which every pipeline-internal
+ * header transitively pulls in via StarCapture/pipeline_u8, would leak
+ * qrcodegen's whole public surface (qrcodegen_encodeBinary, its enums, ...)
+ * to every build_event.h consumer. build_event.c's own compile-time checks
+ * (comparing PIPELINE_BUILT_QR_VERSION/PIPELINE_BUILT_QR_BITMAP_SIZE
+ * against qr_adapter.h's PIPELINE_QR_VERSION/PIPELINE_QR_BUFFER_LEN) are
+ * what keep this duplicated formula from silently drifting instead.
  */
-#define PIPELINE_BUILT_QR_VERSION 6
+#define PIPELINE_BUILT_QR_VERSION 7
 #define PIPELINE_BUILT_QR_BITMAP_SIZE \
     ((((PIPELINE_BUILT_QR_VERSION) * 4 + 17) * ((PIPELINE_BUILT_QR_VERSION) * 4 + 17) + 7) / 8 + 1)
 

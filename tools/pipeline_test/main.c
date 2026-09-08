@@ -377,7 +377,7 @@ static void test_qr_render_blit_round_trips_through_decode(void)
     originY = (QR_RENDER_TEST_FB_HEIGHT - imageSize) / 2;
 
     check(imageSize == QR_RENDER_IMAGE_SIZE_PX,
-          "qr_render: computed image size matches QR_RENDER_IMAGE_SIZE_PX (196x196 for v6/scale4/quiet4)");
+          "qr_render: computed image size matches QR_RENDER_IMAGE_SIZE_PX (212x212 for v7/scale4/quiet4)");
     check(imageSize <= QR_RENDER_TEST_FB_WIDTH && imageSize <= QR_RENDER_TEST_FB_HEIGHT,
           "qr_render: image fits within the 320x240 N64 framebuffer");
     if (imageSize > QR_RENDER_TEST_FB_WIDTH || imageSize > QR_RENDER_TEST_FB_HEIGHT) {
@@ -541,8 +541,9 @@ static void test_format_descriptor_round_trip(void)
  * seam directly: pipeline_qr_encode() (qr_adapter.h, which hides the
  * ported qrcodegen.c behind it) followed by qr_host_decode() (host-only,
  * tools/pipeline_test/qr_host_decode.c -- never linked into the ROM). See
- * qr_adapter.h for the version 6 / ECC MEDIUM / 106-byte-usable-payload
- * (108 total data codewords, minus the mode+count header) choice.
+ * qr_adapter.h for the version 7 / ECC MEDIUM / fixed-mask /
+ * 122-byte-usable-payload (124 total data codewords, minus the mode+count
+ * header) choice (spec #52, sub-issue #53).
  */
 static void fill_pattern(pipeline_u8 *buf, int len, pipeline_u8 seed)
 {
@@ -585,7 +586,7 @@ static void test_qr_round_trip_representative_sizes(void)
     check_round_trip(24, "spec #24's ~24 B variable content estimate");
     check_round_trip(75, "current format_descriptor.json total size");
     check_round_trip(88, "spec #24's ~88 B payload budget");
-    check_round_trip(PIPELINE_QR_MAX_PAYLOAD_BYTES, "exact version 6 / ECC MEDIUM usable payload capacity (106 B)");
+    check_round_trip(PIPELINE_QR_MAX_PAYLOAD_BYTES, "exact version 7 / ECC MEDIUM usable payload capacity (122 B)");
 }
 
 static void test_qr_rejects_over_budget_cleanly(void)
@@ -596,13 +597,13 @@ static void test_qr_rejects_over_budget_cleanly(void)
 
     fill_pattern(payload, (int)sizeof(payload), 0x5A);
 
-    /* One byte over the real version 6 / ECC MEDIUM capacity: must be
+    /* One byte over the real version 7 / ECC MEDIUM capacity: must be
      * rejected cleanly (nonzero return, no truncated/partial QR Code
      * written -- qrcode[0] is left at the documented invalid-size
      * sentinel of 0), never silently truncated to fit. */
     memset(qrcode, 0xFF, sizeof(qrcode));
     encodeOk = pipeline_qr_encode(payload, (pipeline_u32)sizeof(payload), qrcode);
-    check(encodeOk == 0, "QR encode rejects a payload one byte over the 106 B usable payload capacity");
+    check(encodeOk == 0, "QR encode rejects a payload one byte over the 122 B usable payload capacity");
     check(qrcode[0] == 0, "rejected QR encode leaves the invalid-size sentinel, not a truncated code");
 
     /* Far over budget too (well past even the raw bitmap buffer size) --
