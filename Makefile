@@ -186,7 +186,7 @@ TOOLS_DIR := tools
 
 PYTHON := python3
 
-ifeq ($(filter clean distclean print-%,$(MAKECMDGOALS)),)
+ifeq ($(filter clean distclean print-% pipeline-test,$(MAKECMDGOALS)),)
 
   # Make sure assets exist
   NOEXTRACT ?= 0
@@ -233,7 +233,62 @@ ACTOR_DIR      := actors
 LEVEL_DIRS     := $(patsubst levels/%,%,$(dir $(wildcard levels/*/header.h)))
 
 # Directories containing source files
-SRC_DIRS := src src/engine src/game src/audio src/menu src/buffers actors levels bin data assets asm lib sound
+SRC_DIRS := src src/engine src/game src/audio src/menu src/buffers actors levels bin data assets asm lib sound src/pipeline
+
+# src/pipeline (the Nostr pipeline, spec #24) is now one of the above
+# SRC_DIRS (spec #24, sub-issue #31): the capture glue added at
+# interact_star_or_key (src/game/interaction.c) calls build_event(), so its
+# object must actually resolve at link time. Through sub-issue #30,
+# src/pipeline was deliberately excluded here -- nothing called into the
+# pipeline yet, so linking its objects in would either become unplaced ld
+# orphans or require sm64.ld churn for code nothing referenced, shifting the
+# matching ROM's bytes for no behavioral reason. That reason is gone now
+# that #31 makes the call: sm64.ld's SECTIONS block (see the comment beside
+# the new BUILD_DIR/src/pipeline/*.o(.text) entries, right after
+# interaction.o, in each of its .text/.data*/.rodata*/.bss* blocks) now
+# explicitly places every pipeline object next to the one caller, exactly
+# mirroring how every other SRC_DIRS object is placed. This fork's ROM bytes
+# already diverge from vanilla the moment a star grab calls new code, so
+# COMPARE=1's sha1 check is expected (and, per its own printed message,
+# harmless) to fail from here on -- object placement order inside the link
+# no longer carries the byte-matching significance it used to.
+#
+# src/pipeline's own files still need the C99 carve-out
+# (PIPELINE_C99_PORT_O below) and the generated-header prerequisites
+# (PIPELINE_FORMAT_DESCRIPTOR_H/PIPELINE_EVENT_PROFILE_H) exactly as they
+# did when only `pipeline-rom-objects` built them: those overrides and
+# prerequisites are keyed off the objects' file paths (which are identical
+# whether reached via O_FILES or the explicit PIPELINE_ROM_OBJS list below),
+# so make applies them regardless of which route triggers the build.
+PIPELINE_SRC_DIR := src/pipeline
+
+# Key injection + event profile / format descriptor generation (spec #24,
+# sub-issue #26). The per-event secret never lives in src/ or version
+# control: it is a gitignored raw 32-byte hex privkey under keys/ (see
+# keys/README.md for how to generate/supply one), and everything derived
+# from it is generated into $(BUILD_DIR)/include, never src/.
+PIPELINE_KEYS_DIR             := keys
+PIPELINE_PRIVKEY_FILE         := $(PIPELINE_KEYS_DIR)/event_privkey.hex
+PIPELINE_REGISTRY_FILE        := $(PIPELINE_KEYS_DIR)/registry.md
+PIPELINE_KEY_LABEL            ?= dev-event
+PIPELINE_EVENT_PROFILE_H_IN   := include/event_profile.h.in
+PIPELINE_EVENT_PROFILE_H      := $(BUILD_DIR)/include/event_profile.h
+PIPELINE_FORMAT_DESCRIPTOR_JSON := $(PIPELINE_SRC_DIR)/format_descriptor.json
+PIPELINE_FORMAT_DESCRIPTOR_H  := $(BUILD_DIR)/include/format_descriptor.h
+GEN_EVENT_PROFILE_PY          := $(TOOLS_DIR)/gen_event_profile.py
+GEN_FORMAT_DESCRIPTOR_PY      := $(TOOLS_DIR)/gen_format_descriptor.py
+
+# Fail closed: a normal build must never produce a keyless binary. This
+# mirrors the MIPS-toolchain $(error) check above (same exemptions: goals
+# that don't actually build the ROM never need the real per-event secret --
+# `pipeline-test` derives its own fixed KAT key independently, see
+# tools/pipeline_test/Makefile).
+ifeq ($(filter clean distclean print-% pipeline-test,$(MAKECMDGOALS)),)
+  ifeq ($(wildcard $(PIPELINE_PRIVKEY_FILE)),)
+    $(error Missing $(PIPELINE_PRIVKEY_FILE): the Nostr pipeline requires a per-event 32-byte hex secp256k1 private key to build (spec #24, sub-issue #26). Run 'python3 tools/gen_event_key.py' for a local/dev key, or see keys/README.md. The build refuses to produce a keyless binary)
+  endif
+endif
+
 BIN_DIRS := bin bin/$(VERSION)
 
 ifeq ($(VERSION),cn)
@@ -313,6 +368,15 @@ else ifneq ($(call find-command,mips64-linux-gnu-ld),)
   CROSS := mips64-linux-gnu-
 else ifneq ($(call find-command,mips64-elf-ld),)
   CROSS := mips64-elf-
+else ifeq ($(MAKECMDGOALS),pipeline-test)
+  # pipeline-test only builds tools/pipeline_test with the host's own gcc
+  # (see tools/pipeline_test/Makefile) and never touches the ROM's O_FILES/
+  # $(ELF)/$(CROSS)-prefixed tools, so it must not require a MIPS toolchain
+  # to be installed just to parse this file. Deliberately an exact-string
+  # match (not $(filter)) so combined invocations like
+  # `make pipeline-test all` still hit the $(error) below instead of
+  # silently building a toolchain-less ROM target.
+  CROSS :=
 else
   $(error Unable to detect a suitable MIPS toolchain installed)
 endif
@@ -404,6 +468,157 @@ else
   CFLAGS += -non_shared -Wab,-r4300_mul -Xcpluscomm -Xfullwarn -signed -32
 endif
 
+# The pipeline's internal C99 ports (SHA-256, secp256k1 Schnorr, qrcodegen)
+# need a C99-capable compiler. port_stub_c99.c stood in for all three in
+# sub-issue #25; qrcodegen.c (sub-issue #27, spec #24) is a byte-mode-only
+# C99 port of Project Nayuki's QR Code generator library, hidden behind
+# qr_adapter.h/.c (see the pure-pipeline-modules comment below). sha256.c
+# (sub-issue #28) is a C99 port of Brad Conte's public-domain SHA-256,
+# hidden behind event_id.h/.c. COMPILER is a whole-build knob with no
+# per-file split, and the default COMPILER=ido cannot compile C99 at all.
+# Rather than force the *entire* ROM build onto gcc just for these few
+# files, carve out just the C99 port objects and always force them through
+# the cross gcc with -std=gnu99, independent of the top-level COMPILER
+# choice -- this mirrors the existing iQue per-object carve-out above
+# (IQUE_RECOMPILED), which overrides CC/CFLAGS for a fixed object list
+# regardless of COMPILER.
+# secp256k1.c (sub-issue #29) is the from-scratch C99 port of the
+# secp256k1 elliptic curve arithmetic (256-bit bignum + Jacobian point ops)
+# needed for BIP-340 Schnorr signing, hidden behind schnorr_adapter.h/.c
+# below. It leans on `unsigned long long` for 32x32->64-bit multiply/carry
+# widening throughout (the same built-in-type justification sha256.h gives
+# for its own bitlen field), so -- like sha256.c/qrcodegen.c -- it goes
+# through this C99 carve-out rather than the whole-build COMPILER knob,
+# regardless of whether IDO could parse its specific syntax.
+PIPELINE_C99_PORT_SRC := $(PIPELINE_SRC_DIR)/port_stub_c99.c $(PIPELINE_SRC_DIR)/qrcodegen.c $(PIPELINE_SRC_DIR)/sha256.c $(PIPELINE_SRC_DIR)/secp256k1.c
+PIPELINE_C99_PORT_O   := $(foreach file,$(PIPELINE_C99_PORT_SRC),$(BUILD_DIR)/$(file:.c=.o))
+PIPELINE_C99_CFLAGS   := -std=gnu99 -G 0 $(OPT_FLAGS) $(TARGET_CFLAGS) $(DEF_INC_CFLAGS) -mno-shared -march=vr4300 -mfix4300 -mabi=32 -mhard-float -mdivide-breaks -fno-stack-protector -fno-common -fno-zero-initialized-in-bss -fno-PIC -mno-abicalls -fno-strict-aliasing -fno-inline-functions -ffreestanding -fwrapv -Wall -Wextra
+$(PIPELINE_C99_PORT_O): CC := $(CROSS)gcc
+$(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
+# The target-specific CC_CHECK_CFLAGS override (append, not replace) lives
+# further down, after CC_CHECK_CFLAGS's own -m32 fixup is finalized: since
+# CC_CHECK_CFLAGS is a simply-expanded (:=) variable, a target-specific
+# "+=" snapshots its value at the point this line is parsed, not at build
+# time -- appending here (before the -m32 fixup below) would silently miss
+# it.
+
+# The pure pipeline modules themselves (build_event.c, pack_adapter.c from
+# spec #24 sub-issue #26, and qr_adapter.c from sub-issue #27) need no C99
+# and no special flags -- they compile under whichever COMPILER is already
+# active, which is the point of being host-and-ROM-compilable. As of
+# sub-issue #31, src/pipeline IS one of SRC_DIRS (see the comment there), so
+# these same object paths are also part of O_FILES/$(ROM)'s real object
+# graph now; PIPELINE_ROM_OBJS/`pipeline-rom-objects` below remain useful as
+# a standalone way to compile (not link) just this list, unchanged since
+# sub-issue #25. pack_adapter.c is here to prove the ROM side
+# of the format-descriptor single-source-of-truth wiring (see
+# PIPELINE_FORMAT_DESCRIPTOR_H below). qr_adapter.c is the pipeline-internal
+# seam in front of the C99 qrcodegen.c port above -- it, not qrcodegen.c
+# directly, is what a future build_event.c would call. event_id.c
+# (sub-issue #28) is the pipeline-internal serialize+id seam in front of the
+# C99 sha256.c port above; it #includes the generated event_profile.h for
+# the baked serialization prefix (pubkey/created_at/kind/tags).
+# schnorr_adapter.c (sub-issue #29) is the pipeline-internal BIP-340
+# signing seam in front of the C99 secp256k1.c port above. Despite
+# #including sha256.h, it only ever calls that header's one-shot
+# pipeline_sha256() wrapper (building its own concatenation buffers via
+# explicit byte copies, never the streaming init/update/final API), so --
+# like event_id.c -- its own code contains no C99-only constructs (no
+# block-scoped for-loop declarations, no _Bool) and it needs no C99,
+# staying in this "pure" list rather than the carve-out.
+#
+# capture.o (sub-issue #31) is the pure capture-glue half: field-extraction
+# + content-nonce hashing (capture.h/.c). It #includes sha256.h directly
+# (the one non-event_id.c caller sha256.h's own header comment anticipates)
+# but, like schnorr_adapter.c, only calls its one-shot pipeline_sha256()
+# wrapper and contains no C99-only constructs, so it stays in this "pure"
+# list too.
+PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o $(PIPELINE_C99_PORT_O)
+
+# pack_adapter.o #includes format_descriptor.h directly; event_id.o
+# genuinely does #include event_profile.h (the baked serialization prefix).
+# build_event.o needs both: event_profile.h transitively (via event_id.h),
+# and format_descriptor.h directly -- build_event.h itself now #includes
+# format_descriptor.h for PIPELINE_FMT_TOTAL_SIZE (sub-issue #30, BuiltEvent's
+# packed_payload size). Because event_id.h/schnorr_adapter.h/qr_adapter.h ALL
+# #include build_event.h -- and so, transitively, do sha256.h and
+# secp256k1.h (both #include "build_event.h" too, for the pipeline_u8/
+# pipeline_u32 typedefs) -- format_descriptor.h is transitively required to
+# compile every one of these six objects, not just the four sub-issue #30
+# actually touched. capture.o (sub-issue #31) is the same story: capture.h
+# #includes build_event.h too. Listed explicitly here (rather than left to
+# transitive #include order happening to already be right) so a
+# clean/parallel build can't compile any of them before the generated
+# header exists. sha256.o/secp256k1.o are built via the C99 carve-out rule
+# below (different CC/CFLAGS override), but a prerequisite is still a
+# prerequisite regardless of which rule ultimately builds the object.
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/sha256.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/secp256k1.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+
+# interaction.o (sub-issue #31) is the first NON-pipeline object to #include
+# a pipeline generated header: it #includes event_profile.h directly (for
+# PIPELINE_EVENT_PRIVKEY_BYTES) and, transitively via pipeline/build_event.h,
+# format_descriptor.h too. Without this prerequisite, a clean/parallel build
+# could compile interaction.o (src/game sorts before src/pipeline in
+# SRC_DIRS, and `all: $(PIPELINE_EVENT_PROFILE_H) ...` is declared after
+# `all: $(ROM)`) before either generated header exists.
+$(BUILD_DIR)/src/game/interaction.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
+
+# qr_render.o/qr_render_n64.o (sub-issue #32, renderer glue) #include
+# qr_render.h -> pipeline/qr_adapter.h -> pipeline/build_event.h ->
+# format_descriptor.h -- the same generated-header hazard interaction.o's
+# own prerequisite line above already documents (src/game sorts before
+# src/pipeline in SRC_DIRS). Unlike interaction.o, neither file touches
+# event_profile.h, so only the format descriptor is needed here.
+$(BUILD_DIR)/src/game/qr_render.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/src/game/qr_render_n64.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+
+# qr_display.o/qr_display_n64.o (sub-issue #33, qr_display state machine)
+# #include qr_display.h -> pipeline/build_event.h -> format_descriptor.h --
+# the same generated-header hazard interaction.o's own prerequisite line
+# above already documents. mario_actions_cutscene.o (sub-issue #33's two
+# save-flow call sites) now #includes qr_display_n64.h AND
+# qr_pending_star_event.h, and game_init.o (sub-issue #33's render-hook call
+# site in display_and_vsync()) now #includes qr_display_n64.h -- all of
+# which reach pipeline/build_event.h the same way, so each needs the same
+# prerequisite -- interaction.h itself was deliberately NOT extended to
+# reach build_event.h (see qr_pending_star_event.h's own header comment)
+# specifically so this prerequisite would stay confined to the objects that
+# actually need it instead of spreading to every other src/game/*.c that
+# #includes interaction.h.
+$(BUILD_DIR)/src/game/qr_display.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/src/game/qr_display_n64.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/src/game/mario_actions_cutscene.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/src/game/game_init.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+
+# Event profile header: derives the x-only pubkey from the per-event secret
+# (PIPELINE_PRIVKEY_FILE, checked for existence above) and bakes it, plus
+# the fixed event shape (kind 8064, the two `t` tags, build-epoch
+# created_at), into a generated header -- following the same *.h.in ->
+# $(BUILD_DIR)/include recipe as text_strings.h/level_headers.h. Also
+# appends a row to the gitignored keys/registry.md.
+$(PIPELINE_EVENT_PROFILE_H): $(PIPELINE_EVENT_PROFILE_H_IN) $(PIPELINE_PRIVKEY_FILE) $(GEN_EVENT_PROFILE_PY) $(TOOLS_DIR)/nostr_secp256k1.py
+	$(call print,Generating event profile:,$<,$@)
+	$(V)$(PYTHON) $(GEN_EVENT_PROFILE_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_EVENT_PROFILE_H_IN) --out $@ --label $(PIPELINE_KEY_LABEL) --registry $(PIPELINE_REGISTRY_FILE)
+
+# Format descriptor header: single source of truth for the packed QR
+# payload's field layout, rendered from src/pipeline/format_descriptor.json.
+# The host test tool renders its own copy from the identical JSON (see
+# tools/pipeline_test/Makefile) so the ROM pack adapter and the host unpack
+# adapter can never disagree on offsets/sizes.
+$(PIPELINE_FORMAT_DESCRIPTOR_H): $(PIPELINE_FORMAT_DESCRIPTOR_JSON) $(GEN_FORMAT_DESCRIPTOR_PY)
+	$(call print,Generating format descriptor:,$<,$@)
+	$(V)$(PYTHON) $(GEN_FORMAT_DESCRIPTOR_PY) --json $(PIPELINE_FORMAT_DESCRIPTOR_JSON) --out $@
+
+.PHONY: pipeline-rom-objects
+pipeline-rom-objects: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H) $(PIPELINE_ROM_OBJS)
+
 ASFLAGS   := -march=vr4300 -mabi=32 $(foreach i,$(INCLUDE_DIRS),-I$(i)) $(foreach d,$(DEFINES),--defsym $(d))
 RSPASMFLAGS := $(foreach d,$(DEFINES),-definelabel $(subst =, ,$(d)))
 
@@ -414,6 +629,12 @@ else
   # Ensure that gcc treats the code as 32-bit
   CC_CHECK_CFLAGS += -m32
 endif
+
+# See the comment by PIPELINE_C99_PORT_O above: this must come after the
+# -m32 fixup just above so the target-specific append picks it up too. The
+# last -std wins on gcc's command line, so this still forces C99 for the
+# syntax-check pass despite appending after the global -std=gnu90.
+$(PIPELINE_C99_PORT_O): CC_CHECK_CFLAGS += -std=gnu99
 
 # Prevent a crash with -sopt
 export LANG := C
@@ -473,6 +694,14 @@ endef
 #==============================================================================#
 
 all: $(ROM)
+# The Nostr pipeline's event profile / format descriptor (spec #24,
+# sub-issue #26) are generated alongside $(ROM). Through sub-issue #30 they
+# were deliverables only (no pipeline object actually needed them at link
+# time); as of sub-issue #31, build_event.o/event_id.o/etc. in O_FILES
+# genuinely #include the generated headers (see the per-object prerequisite
+# rules below), so this line is now belt-and-suspenders alongside those
+# object-level prerequisites, not the only thing ensuring they exist.
+all: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
 ifeq ($(COMPARE),1)
 	@$(PRINT) "$(GREEN)Checking if ROM matches.. $(NO_COL)\n"
 	@$(SHA1SUM) --quiet -c $(TARGET).sha1 && $(PRINT) "$(TARGET): $(GREEN)OK$(NO_COL)\n" || ($(PRINT) "$(YELLOW)Building the ROM file has succeeded, but does not match the original ROM.\nThis is expected, and not an error, if you are making modifications.\nTo silence this message, use 'make COMPARE=0.' $(NO_COL)\n" && false)
@@ -488,6 +717,16 @@ distclean: clean
 
 test: $(ROM)
 	$(EMULATOR) $(EMU_FLAGS) $<
+
+# Host-built pipeline test tool (spec #24, sub-issue #25): builds and runs
+# the pipeline's pure sources a second time on the host, asserting a
+# byte-exact stub result. See tools/pipeline_test/Makefile. For the
+# companion proof that the *ROM's own* toolchain compiles the same sources
+# unmodified (without linking them in yet), see `make pipeline-rom-objects`
+# above.
+.PHONY: pipeline-test
+pipeline-test:
+	$(MAKE) -C $(TOOLS_DIR)/pipeline_test
 
 load: $(ROM)
 	$(LOADER) $(LOADER_FLAGS) $<
@@ -535,7 +774,7 @@ else
 endif
 $(BUILD_DIR)/bin/segment2.o: $(BUILD_DIR)/text/debug_text.raw.inc.c
 
-ALL_DIRS := $(BUILD_DIR) $(addprefix $(BUILD_DIR)/,$(SRC_DIRS) $(GODDARD_SRC_DIRS) $(ULTRA_SRC_DIRS) $(ULTRA_BIN_DIRS) $(LIBGCC_SRC_DIRS) $(BIN_DIRS) $(TEXTURE_DIRS) $(TEXT_DIRS) $(SOUND_SAMPLE_DIRS) $(addprefix levels/,$(LEVEL_DIRS)) rsp include) $(MIO0_DIR) $(addprefix $(MIO0_DIR)/,$(VERSION)) $(SOUND_BIN_DIR) $(SOUND_BIN_DIR)/sequences/$(VERSION)
+ALL_DIRS := $(BUILD_DIR) $(addprefix $(BUILD_DIR)/,$(SRC_DIRS) $(GODDARD_SRC_DIRS) $(ULTRA_SRC_DIRS) $(ULTRA_BIN_DIRS) $(LIBGCC_SRC_DIRS) $(BIN_DIRS) $(TEXTURE_DIRS) $(TEXT_DIRS) $(SOUND_SAMPLE_DIRS) $(addprefix levels/,$(LEVEL_DIRS)) rsp include $(PIPELINE_SRC_DIR)) $(MIO0_DIR) $(addprefix $(MIO0_DIR)/,$(VERSION)) $(SOUND_BIN_DIR) $(SOUND_BIN_DIR)/sequences/$(VERSION)
 
 # Make sure build directory exists before compiling anything
 DUMMY != mkdir -p $(ALL_DIRS)

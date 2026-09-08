@@ -1,0 +1,14 @@
+{
+  "_comment": "Machine-readable format descriptor for the packed QR payload (spec #24, sub-issue #26). Single source of truth: tools/gen_format_descriptor.py renders this into a C header consumed identically by the ROM pack adapter (src/pipeline/pack_adapter.c) and the host unpack adapter (tools/pipeline_test), so the two can never disagree on the wire layout. This 75-byte layout is the final, end-to-end shape used by build_event() (serialize/sign/pack landed in #28/#29/#30): a 1-byte format tag, the StarCapture run fields (course/act/coins/frames/nonce16/key_id), and the 64-byte Schnorr signature over the event id.",
+  "format_tag": 1,
+  "fields": [
+    { "name": "FORMAT_TAG", "size": 1 },
+    { "name": "COURSE",     "size": 1 },
+    { "name": "ACT",        "size": 1 },
+    { "name": "COINS",      "size": 1 },
+    { "name": "FRAMES",     "size": 4 },
+    { "name": "NONCE16",    "size": 2 },
+    { "name": "KEY_ID",     "size": 1 },
+    { "name": "SIG",        "size": 64 }
+  ]
+}

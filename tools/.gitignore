@@ -7,6 +7,13 @@
 /tabledesign
 /textconv
 /vadpcm_enc
+/pipeline_test/pipeline_test
+/pipeline_test/pipeline_test.exe
+# Ad hoc `npm install` target for the one-off independent-oracle scripts
+# (reference_event_id.js, verify_schnorr_reference.js) -- deliberately not
+# committed/vendored, since these are one-off oracle runs, not a build
+# dependency (see either script's own header comment).
+/node_modules/
 !/ido5.3_compiler/lib/*.so
 !/ido5.3_compiler/usr/lib/*.so
 !/ido5.3_compiler/usr/lib/*.so.1

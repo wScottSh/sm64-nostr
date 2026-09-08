@@ -1,0 +1,1101 @@
+/*
+ * Host test tool for the pipeline (spec #24, sub-issues #25, #26, and #27).
+ *
+ * #25: feeds a fixed StarCapture + key into build_event() and asserts the
+ * stub output is byte-exact -- proving the pure pipeline sources compile
+ * and run here identically to how they will in the ROM build.
+ *
+ * #26 adds:
+ *   - a known-answer test for the build-time derived x-only pubkey baked
+ *     into the generated event_profile.h (built here from a fixed BIP-340
+ *     test vector, never the real per-event secret -- see the Makefile);
+ *   - a format-descriptor round-trip/consistency check: pack a StarCapture
+ *     + signature via pipeline_pack(), unpack it back via pipeline_unpack(),
+ *     and assert both the fields and the descriptor's own size accounting
+ *     round-trip exactly -- proving the ROM pack side and this host unpack
+ *     side genuinely agree on the wire layout because both are generated
+ *     from the same format_descriptor.json.
+ *
+ * #27 adds the QR encode/decode round-trip and over-budget-rejection
+ * tests -- see the comment above test_qr_round_trip_representative_sizes().
+ *
+ * #28 adds:
+ *   - known-answer tests for the ported SHA-256 (sha256.h/.c) against
+ *     published FIPS 180-4 / NIST vectors;
+ *   - the id-equals-reference assertion: pipeline_event_compute_id()
+ *     (event_id.h/.c) against ids independently computed by the real
+ *     `nostr-tools` npm package (see tools/reference_event_id.js) for the
+ *     same StarCapture + baked event-profile prefix;
+ *   - an explicit check that the content double-serialization escaping
+ *     (`"` -> `\"`) path is exercised in the serialized byte buffer, not
+ *     just implied by opaque id equality.
+ *
+ * #30 wires the real build_event() (serialize -> id -> sign -> pack -> QR,
+ * see build_event.c) and adds the pipeline's first full-interface,
+ * end-to-end host test: build_event() for a real StarCapture + the BIP-340
+ * KAT privkey, then (a) decode qr_bitmap and assert it equals
+ * packed_payload exactly, (b) unpack packed_payload, recompute the id from
+ * the rebuilt StarCapture, assert that id matches the same nostr-tools
+ * reference id already pinned for vector A in #28, and assert the
+ * signature matches an independently-computed BIP-340 signature
+ * (@noble/curves oracle, see tools/verify_schnorr_reference.js's
+ * conventions) and verifies, and (c) flip one payload content byte and
+ * assert verification against the original signature now fails.
+ *
+ * #31 adds capture.c's tests (src/pipeline/capture.h -- the pure capture-
+ * glue half the ROM's real glue at interact_star_or_key also calls, spec
+ * #24 sub-issue #31):
+ *   - test_capture_build_known_answer(): fixed capture-time inputs (course,
+ *     act, coins, frames, starIndex, osCount, globalTimer, rawStickX/Y,
+ *     buttonMask) through pipeline_capture_build(), asserting every
+ *     StarCapture field lands correctly AND that nonce16 matches a
+ *     known-answer value computed with Python's own hashlib (a genuinely
+ *     independent SHA-256 implementation, not this repo's ported one) over
+ *     the exact same 12-byte big-endian concatenation
+ *     (osCount||globalTimer||rawStickX||rawStickY||buttonMask) capture.h's
+ *     own contract documents;
+ *   - test_capture_matches_host_build_event(): builds a BuiltEvent via
+ *     pipeline_capture_build() + build_event() (the SAME two calls the ROM
+ *     glue makes) and a second BuiltEvent via a StarCapture constructed by
+ *     hand with the identical field values (including that same
+ *     known-answer nonce16) + build_event(), then asserts both
+ *     packed_payload and qr_bitmap are byte-identical -- the sub-issue #31
+ *     acceptance criterion ("the ROM's produced payload for a run is
+ *     byte-identical to the host tool's output for the same
+ *     course/act/coins/frames/nonce") demonstrated by construction: both
+ *     paths call the same pipeline_capture_build()/build_event(), so
+ *     identical inputs structurally cannot diverge.
+ *
+ * #32 adds test_qr_render_blit_round_trips_through_decode() (renderer
+ * glue, src/game/qr_render.h/.c): renders a real build_event() qr_bitmap
+ * into an in-memory plain RGBA16 buffer via the SAME pure
+ * qr_render_blit_rgba16() the ROM build compiles (src/game is compiled a
+ * second time here, unmodified, exactly like src/pipeline already is), then
+ * reconstructs the module grid by sampling the CENTER pixel of every
+ * module's scaled block back out of that buffer (reversing the fixed
+ * integer scale + quiet zone qr_render.h documents), packs the
+ * reconstruction into a qrcodegen-format buffer using the same public
+ * bit-packing layout qrcodegen_getModule()/qr_adapter.h's own accessors
+ * read (byte 0 = grid size, then row-major bits packed LSB-first per byte
+ * starting at byte 1 -- see qrcodegen.c's getModuleBounded()/
+ * setModuleBounded()), and feeds that reconstruction to the existing
+ * qr_host_decode() -- asserting the decoded bytes equal build_event()'s own
+ * packed_payload exactly. Also asserts quiet-zone pixels are exactly
+ * QR_RENDER_WHITE_RGBA16 and that the module block size is exactly
+ * QR_RENDER_MODULE_SCALE_PX pixels (every pixel in a block matches its
+ * module's color, and pixels just outside the block on both axes differ
+ * whenever the neighboring module differs) -- proving the blit is faithful
+ * without an emulator/camera (spec #24 acceptance criterion #16's spirit).
+ *
+ * #33 adds test_qr_display_state_machine() (../../src/game/qr_display.h/.c
+ * -- the shared qr_display state machine's PURE core, compiled a second
+ * time here exactly like qr_render.c already is). Feeds a real
+ * build_event() qr_bitmap through a QrDisplayState on synthetic input
+ * sequences and asserts the four behaviors sub-issue #33's acceptance
+ * criteria hinge on: (a) holding A across present() (the same press that
+ * triggered the star dance) never dismisses; (b) release-then-press held
+ * for QR_DISPLAY_MIN_HOLD_FRAMES consecutive frames does dismiss; (c) the
+ * held bitmap is erased (all-zero) immediately after that dismissal; (d) a
+ * present() attempt on that same, already-dismissed state is rejected (the
+ * never-re-summonable invariant). The N64-specific pump (real controller
+ * input, the real renderer, real time-stop coordination -- qr_display_n64.h/
+ * .c) is deliberately NOT compiled here: it includes <ultra64.h> and is
+ * exercised only on emulator (see this branch's own PR notes for what must
+ * be verified there: both save flows replaced, a debounced A dismiss, and
+ * memory erased).
+ */
+#include <stdio.h>
+#include <string.h>
+
+#include "build_event.h"
+#include "pack_adapter.h"
+#include "event_profile.h"
+#include "qr_adapter.h"
+#include "qr_host_decode.h"
+#include "sha256.h"
+#include "event_id.h"
+#include "schnorr_adapter.h"
+#include "capture.h"
+#include "qr_render.h"
+#include "qr_display.h"
+
+static int g_failures = 0;
+
+static void check(int ok, const char *what)
+{
+    if (ok) {
+        printf("PASS: %s\n", what);
+    } else {
+        printf("FAIL: %s\n", what);
+        g_failures++;
+    }
+}
+
+/*
+ * build_event() end-to-end host test (spec #24, sub-issue #30).
+ *
+ * Uses StarCapture "vector A" -- the exact same values as
+ * test_event_id_matches_reference()/test_content_escaping_path() above
+ * (course=15, act=6, coins=100, frames=0x01020304, nonce16=0xCAFE,
+ * keyId=0) -- signed with the BIP-340 KAT privkey (=3, the same key baked
+ * into this host tool's generated event_profile.h, TEST_PRIVKEY_HEX in the
+ * Makefile), so the expected id (kExpectedIdA there) and pubkey
+ * (kExpectedPubkey in test_pubkey_known_answer) are already independently
+ * pinned oracle values this test can reuse directly.
+ *
+ * kBuildEventExpectedSig is the BIP-340 signature of that exact id
+ * (0x9d8360e4...58a7) under privkey 3 / aux_rand 0, independently computed
+ * via @noble/curves (the same genuinely-separate library
+ * tools/verify_schnorr_reference.js uses) -- NOT re-derived from this
+ * repo's own pipeline_schnorr_sign(). This is the "independent verifier
+ * convention already in the repo" this sub-issue's task calls for, applied
+ * to a dynamic (non-all-zero-message) signature instead of BIP-340's own
+ * canned test vector 0.
+ */
+static const pipeline_u8 kBuildEventPrivkey[PIPELINE_KEY_SIZE] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+};
+static const pipeline_u8 kBuildEventExpectedIdA[PIPELINE_EVENT_ID_SIZE] = {
+    0xba, 0x23, 0x7b, 0x9e, 0x89, 0x1e, 0xde, 0x42, 0x12, 0x57, 0x1d, 0xed, 0x17, 0xbc, 0xe2, 0xa6,
+    0x16, 0x19, 0x1e, 0xc6, 0x7a, 0x76, 0x32, 0xd2, 0x8d, 0xc9, 0xc5, 0x47, 0xd3, 0x54, 0x83, 0xcc,
+};
+static const pipeline_u8 kBuildEventExpectedSig[PIPELINE_SCHNORR_SIG_SIZE] = {
+    0x60, 0x8b, 0x0f, 0xb8, 0x99, 0x4c, 0x16, 0x7a, 0x91, 0xc9, 0x9e, 0x1e, 0xcc, 0x0b, 0xb4, 0x7e,
+    0x3b, 0xa6, 0xb1, 0x0c, 0x30, 0x5d, 0xac, 0x23, 0x5a, 0x06, 0x02, 0xff, 0x2b, 0x64, 0xc1, 0x0f,
+    0xf3, 0xcf, 0x87, 0x98, 0x9d, 0xad, 0xd2, 0xfc, 0xa0, 0xce, 0x67, 0x8d, 0xfa, 0x19, 0xfc, 0xbf,
+    0x35, 0x00, 0x4a, 0x77, 0x93, 0x98, 0xbc, 0x5b, 0x16, 0xea, 0xb7, 0x5c, 0x15, 0x02, 0x06, 0x7e,
+};
+
+static void test_build_event_end_to_end(void)
+{
+    StarCapture capture;
+    BuiltEvent event;
+    int buildOk;
+    unsigned char decoded[PIPELINE_BUILT_PAYLOAD_SIZE];
+    int decodedLen = -1;
+    int decodeOk;
+    StarCapture rebuilt;
+    pipeline_u8 sigOut[PIPELINE_FMT_SIZE_SIG];
+    int unpackRc;
+    pipeline_u8 recomputedId[PIPELINE_EVENT_ID_SIZE];
+    static const pipeline_u8 pubkey[32] = PIPELINE_EVENT_PUBKEY_BYTES;
+    int verifyOk;
+
+    capture.course  = 15;
+    capture.act     = 6;
+    capture.coins   = 100;
+    capture.frames  = 0x01020304u;
+    capture.nonce16 = 0xCAFE;
+    capture.keyId   = 0;
+
+    buildOk = build_event(&capture, kBuildEventPrivkey, &event);
+    check(buildOk != 0, "build_event succeeds end-to-end for a real StarCapture + key");
+    if (!buildOk) {
+        return;
+    }
+
+    /* Report the actual packed payload size against the ~88 B spine (spec
+     * #24): the literal 75 pins the current format_descriptor.json shape,
+     * the same value test_format_descriptor_round_trip() already pins. */
+    check(PIPELINE_BUILT_PAYLOAD_SIZE == 75u,
+          "build_event's packed_payload size is 75 B, within the ~88 B spine budget");
+
+    /* (a) the host decodes qr_bitmap back to the exact packed_payload. */
+    decodeOk = qr_host_decode(event.qr_bitmap, decoded, (int)sizeof(decoded), &decodedLen);
+    check(decodeOk != 0 && decodedLen == (int)PIPELINE_BUILT_PAYLOAD_SIZE &&
+          memcmp(decoded, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
+          "qr_bitmap decodes back to the exact packed_payload byte-for-byte");
+
+    /* (b) the host unpack+verify adapter (format-descriptor-derived)
+     * rebuilds the event, recomputes the id, and verifies the signature. */
+    unpackRc = pipeline_unpack(event.packed_payload, &rebuilt, sigOut);
+    check(unpackRc == 0, "host pipeline_unpack accepts build_event's packed_payload");
+    check(rebuilt.course == capture.course && rebuilt.act == capture.act &&
+          rebuilt.coins == capture.coins && rebuilt.frames == capture.frames &&
+          rebuilt.nonce16 == capture.nonce16 && rebuilt.keyId == capture.keyId,
+          "unpacked StarCapture fields match the original capture exactly");
+
+    pipeline_event_compute_id(&rebuilt, recomputedId);
+    check(memcmp(recomputedId, kBuildEventExpectedIdA, PIPELINE_EVENT_ID_SIZE) == 0,
+          "recomputed id from the rebuilt event matches the nostr-tools reference id (vector A)");
+
+    check(memcmp(sigOut, kBuildEventExpectedSig, PIPELINE_SCHNORR_SIG_SIZE) == 0,
+          "build_event's signature matches the independently-computed BIP-340 signature (@noble/curves oracle)");
+
+    verifyOk = pipeline_schnorr_verify(recomputedId, pubkey, sigOut);
+    check(verifyOk != 0,
+          "signature verifies against the recomputed id and the build's pubkey (rebuild-id+verify-accept)");
+
+    /* (c) a single flipped payload byte fails verification. Flip a content
+     * byte (COURSE), not the signature itself: pipeline_unpack still
+     * accepts the structurally well-formed payload and returns the
+     * ORIGINAL (untouched) signature, but the rebuilt StarCapture's id no
+     * longer matches what that signature actually signs, so verification
+     * against it must fail -- proving the signature is tamper-evident over
+     * the packed content, not just structurally checked.
+     *
+     * Scope note: this holds for COURSE/ACT/COINS/FRAMES/NONCE16/KEY_ID --
+     * the exact fields event_id.c's pipeline_event_build_content() serializes
+     * into the signed content (event_id.h's own documented content shape) --
+     * and for the SIG bytes themselves (any change there is, trivially, a
+     * different signature). KEY_ID (the star index) is signed content: a
+     * flipped KEY_ID byte changes the recomputed id, so the signature check
+     * fails, closing the earlier tamper hole for stars where `act` alone
+     * doesn't identify which star was grabbed. It does NOT hold for
+     * FORMAT_TAG, which pipeline_unpack() checks structurally (see the second
+     * check below), not cryptographically. */
+    {
+        pipeline_u8 corrupted[PIPELINE_BUILT_PAYLOAD_SIZE];
+        StarCapture corruptCapture;
+        pipeline_u8 corruptSig[PIPELINE_FMT_SIZE_SIG];
+        pipeline_u8 corruptId[PIPELINE_EVENT_ID_SIZE];
+        int corruptVerify;
+        int corruptUnpackRc;
+
+        memcpy(corrupted, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE);
+        corrupted[PIPELINE_FMT_OFF_COURSE] ^= 0x01;
+
+        pipeline_unpack(corrupted, &corruptCapture, corruptSig);
+        pipeline_event_compute_id(&corruptCapture, corruptId);
+        corruptVerify = pipeline_schnorr_verify(corruptId, pubkey, corruptSig);
+        check(corruptVerify == 0,
+              "flipping one packed_payload byte (a signed content field) makes signature verification fail");
+
+        /* A flipped FORMAT_TAG byte is rejected structurally, before
+         * verification is even attempted -- a different, but equally
+         * real, tamper-evidence path. */
+        memcpy(corrupted, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE);
+        corrupted[PIPELINE_FMT_OFF_FORMAT_TAG] ^= 0x01;
+        corruptUnpackRc = pipeline_unpack(corrupted, &corruptCapture, corruptSig);
+        check(corruptUnpackRc != 0,
+              "flipping the FORMAT_TAG byte is rejected structurally by pipeline_unpack");
+
+        /* A flipped KEY_ID byte (the star index) must also fail verification:
+         * keyId is signed content, so tampering with which star was grabbed
+         * breaks the signature -- the regression guard for the tamper hole
+         * closed by adding keyId to pipeline_event_build_content(). */
+        memcpy(corrupted, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE);
+        corrupted[PIPELINE_FMT_OFF_KEY_ID] ^= 0x01;
+        pipeline_unpack(corrupted, &corruptCapture, corruptSig);
+        pipeline_event_compute_id(&corruptCapture, corruptId);
+        corruptVerify = pipeline_schnorr_verify(corruptId, pubkey, corruptSig);
+        check(corruptVerify == 0,
+              "flipping the KEY_ID byte (signed star index) makes signature verification fail");
+    }
+}
+
+#define QR_RENDER_TEST_FB_WIDTH  320
+#define QR_RENDER_TEST_FB_HEIGHT 240
+
+/*
+ * qr_render_blit_rgba16() round-trip test (spec #24, sub-issue #32). See
+ * the file header comment above for the full render->reconstruct->decode
+ * shape. Uses a StarCapture distinct from vector A above just to exercise
+ * a different payload, signed with the same BIP-340 KAT privkey.
+ */
+static void test_qr_render_blit_round_trips_through_decode(void)
+{
+    StarCapture capture;
+    BuiltEvent event;
+    int buildOk;
+    static unsigned short fb[QR_RENDER_TEST_FB_WIDTH * QR_RENDER_TEST_FB_HEIGHT];
+    int gridSize;
+    int imageSize;
+    int originX, originY;
+    int row, col;
+    int allQuietZoneWhite = 1;
+    int allBlocksExact = 1;
+    pipeline_u8 reconstructed[PIPELINE_QR_BUFFER_LEN];
+    unsigned char decoded[PIPELINE_BUILT_PAYLOAD_SIZE];
+    int decodedLen = -1;
+    int decodeOk;
+    int px, py;
+    int i;
+
+    capture.course  = 3;
+    capture.act     = 1;
+    capture.coins   = 42;
+    capture.frames  = 0x0A0B0C0Du;
+    capture.nonce16 = 0xBEEF;
+    capture.keyId   = 0;
+
+    buildOk = build_event(&capture, kBuildEventPrivkey, &event);
+    check(buildOk != 0, "qr_render: build_event succeeds for the render test's StarCapture");
+    if (!buildOk) {
+        return;
+    }
+
+    /* Sentinel-fill the whole framebuffer with a color qr_render never
+     * writes (neither QR_RENDER_WHITE_RGBA16 nor QR_RENDER_BLACK_RGBA16),
+     * so the geometry assertions below can't accidentally pass against
+     * leftover zero-initialized memory. */
+    for (i = 0; i < QR_RENDER_TEST_FB_WIDTH * QR_RENDER_TEST_FB_HEIGHT; i++) {
+        fb[i] = 0x1234;
+    }
+
+    /* Compute expected geometry and assert the image fits BEFORE calling
+     * the blit -- qr_render_blit_rgba16() itself now refuses to write
+     * anything if this doesn't hold (see qr_render.c's own defensive
+     * bound), but this test's own geometry assertions must not run after
+     * a call that could, in principle, already have misbehaved. */
+    gridSize  = pipeline_qr_get_size(event.qr_bitmap);
+    imageSize = (gridSize + 2 * QR_RENDER_QUIET_ZONE_MODULES) * QR_RENDER_MODULE_SCALE_PX;
+    originX = (QR_RENDER_TEST_FB_WIDTH  - imageSize) / 2;
+    originY = (QR_RENDER_TEST_FB_HEIGHT - imageSize) / 2;
+
+    check(imageSize == QR_RENDER_IMAGE_SIZE_PX,
+          "qr_render: computed image size matches QR_RENDER_IMAGE_SIZE_PX (196x196 for v6/scale4/quiet4)");
+    check(imageSize <= QR_RENDER_TEST_FB_WIDTH && imageSize <= QR_RENDER_TEST_FB_HEIGHT,
+          "qr_render: image fits within the 320x240 N64 framebuffer");
+    if (imageSize > QR_RENDER_TEST_FB_WIDTH || imageSize > QR_RENDER_TEST_FB_HEIGHT) {
+        return;
+    }
+
+    qr_render_blit_rgba16(event.qr_bitmap, fb, QR_RENDER_TEST_FB_WIDTH, QR_RENDER_TEST_FB_HEIGHT);
+
+    /* Quiet-zone assertion: every pixel in the fixed-width quiet-zone ring
+     * is exactly QR_RENDER_WHITE_RGBA16 -- never the pre-blit sentinel and
+     * never black. */
+    for (py = 0; py < imageSize && allQuietZoneWhite; py++) {
+        for (px = 0; px < imageSize; px++) {
+            int moduleCol = px / QR_RENDER_MODULE_SCALE_PX - QR_RENDER_QUIET_ZONE_MODULES;
+            int moduleRow = py / QR_RENDER_MODULE_SCALE_PX - QR_RENDER_QUIET_ZONE_MODULES;
+            int inQuietZone = moduleCol < 0 || moduleCol >= gridSize || moduleRow < 0 || moduleRow >= gridSize;
+            if (inQuietZone) {
+                unsigned short pixel = fb[(originY + py) * QR_RENDER_TEST_FB_WIDTH + (originX + px)];
+                if (pixel != QR_RENDER_WHITE_RGBA16) {
+                    allQuietZoneWhite = 0;
+                    break;
+                }
+            }
+        }
+    }
+    check(allQuietZoneWhite, "qr_render: every quiet-zone pixel is exactly QR_RENDER_WHITE_RGBA16");
+
+    /* Module-scale exactness: every pixel within a module's scaled block
+     * matches that module's own color -- the scale is exact, not
+     * approximate or off-by-one. */
+    for (row = 0; row < gridSize && allBlocksExact; row++) {
+        for (col = 0; col < gridSize && allBlocksExact; col++) {
+            int isDark = pipeline_qr_get_module(event.qr_bitmap, col, row);
+            unsigned short expected = isDark ? QR_RENDER_BLACK_RGBA16 : QR_RENDER_WHITE_RGBA16;
+            int blockX = originX + (QR_RENDER_QUIET_ZONE_MODULES + col) * QR_RENDER_MODULE_SCALE_PX;
+            int blockY = originY + (QR_RENDER_QUIET_ZONE_MODULES + row) * QR_RENDER_MODULE_SCALE_PX;
+            int dy, dx;
+            for (dy = 0; dy < QR_RENDER_MODULE_SCALE_PX && allBlocksExact; dy++) {
+                for (dx = 0; dx < QR_RENDER_MODULE_SCALE_PX; dx++) {
+                    unsigned short pixel = fb[(blockY + dy) * QR_RENDER_TEST_FB_WIDTH + (blockX + dx)];
+                    if (pixel != expected) {
+                        allBlocksExact = 0;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    check(allBlocksExact, "qr_render: every module's scaled block is an exact, uniform "
+                           "QR_RENDER_MODULE_SCALE_PX-square color match");
+
+    /* Reconstruct the module grid by sampling each module's CENTER pixel
+     * back out of the RGBA16 buffer, and pack it into a qrcodegen-format
+     * buffer (byte 0 = grid size; row-major bits, LSB-first per byte,
+     * starting at byte 1 -- qrcodegen.c's own getModuleBounded()/
+     * setModuleBounded() layout, the same format pipeline_qr_get_module()
+     * reads), then feed it to the existing host QR decoder -- proving the
+     * blit is faithful without a camera or emulator. */
+    memset(reconstructed, 0, sizeof(reconstructed));
+    reconstructed[0] = (pipeline_u8) gridSize;
+    for (row = 0; row < gridSize; row++) {
+        int blockY = originY + (QR_RENDER_QUIET_ZONE_MODULES + row) * QR_RENDER_MODULE_SCALE_PX;
+        int sampleY = blockY + QR_RENDER_MODULE_SCALE_PX / 2;
+        for (col = 0; col < gridSize; col++) {
+            int blockX = originX + (QR_RENDER_QUIET_ZONE_MODULES + col) * QR_RENDER_MODULE_SCALE_PX;
+            int sampleX = blockX + QR_RENDER_MODULE_SCALE_PX / 2;
+            unsigned short pixel = fb[sampleY * QR_RENDER_TEST_FB_WIDTH + sampleX];
+            int isDark = (pixel == QR_RENDER_BLACK_RGBA16);
+            int index = row * gridSize + col;
+            int bitIndex = index & 7;
+            int byteIndex = (index >> 3) + 1;
+            if (isDark) {
+                reconstructed[byteIndex] |= (pipeline_u8) (1 << bitIndex);
+            }
+        }
+    }
+
+    decodeOk = qr_host_decode(reconstructed, decoded, (int) sizeof(decoded), &decodedLen);
+    check(decodeOk != 0 && decodedLen == (int) PIPELINE_BUILT_PAYLOAD_SIZE &&
+          memcmp(decoded, event.packed_payload, (size_t) PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
+          "qr_render: render->reconstruct->decode == build_event's exact packed_payload");
+}
+
+/*
+ * BIP-340 test vector 0: secret key 3, x-only pubkey
+ * F9308A019258C31049344F85F89D5229B531C845836F99B08601F113BCE036F9.
+ * The Makefile generates event_profile.h from this exact private key (see
+ * TEST_PRIVKEY_HEX), so PIPELINE_EVENT_PUBKEY_HEX/_BYTES here must match.
+ */
+static const pipeline_u8 kExpectedPubkey[32] = {
+    0xf9, 0x30, 0x8a, 0x01, 0x92, 0x58, 0xc3, 0x10,
+    0x49, 0x34, 0x4f, 0x85, 0xf8, 0x9d, 0x52, 0x29,
+    0xb5, 0x31, 0xc8, 0x45, 0x83, 0x6f, 0x99, 0xb0,
+    0x86, 0x01, 0xf1, 0x13, 0xbc, 0xe0, 0x36, 0xf9,
+};
+static const char kExpectedPubkeyHex[] =
+    "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9";
+
+static void test_pubkey_known_answer(void)
+{
+    static const pipeline_u8 pubkeyBytes[32] = PIPELINE_EVENT_PUBKEY_BYTES;
+
+    check(memcmp(pubkeyBytes, kExpectedPubkey, 32) == 0,
+          "derived x-only pubkey matches BIP-340 KAT (privkey=3) [byte array]");
+    check(strcmp(PIPELINE_EVENT_PUBKEY_HEX, kExpectedPubkeyHex) == 0,
+          "derived x-only pubkey matches BIP-340 KAT (privkey=3) [hex string]");
+    check(PIPELINE_EVENT_KIND == 8064, "event profile kind is 8064");
+}
+
+static void test_format_descriptor_round_trip(void)
+{
+    StarCapture capture;
+    StarCapture roundTripped;
+    pipeline_u8 sig[PIPELINE_FMT_SIZE_SIG];
+    pipeline_u8 sigRoundTripped[PIPELINE_FMT_SIZE_SIG];
+    pipeline_u8 packed[PIPELINE_PACKED_SIZE];
+    int i;
+    int rc;
+
+    capture.course  = 15;
+    capture.act     = 6;
+    capture.coins   = 100;
+    capture.frames  = 0x01020304u;
+    capture.nonce16 = 0xCAFE;
+    capture.keyId   = 7;
+
+    for (i = 0; i < (int)PIPELINE_FMT_SIZE_SIG; i++) {
+        sig[i] = (pipeline_u8)(i * 3 + 1);
+    }
+
+    memset(packed, 0xFF, sizeof(packed));
+    pipeline_pack(&capture, sig, packed);
+
+    check(packed[0] == PIPELINE_FMT_TAG_VALUE, "packed payload leads with the format tag");
+    /* Literal 75, not PIPELINE_FMT_TOTAL_SIZE: this pins the descriptor's
+     * own size accounting to an independently-computed value (1 + 1 + 1 +
+     * 1 + 4 + 2 + 1 + 64), rather than comparing the macro to itself. */
+    check(PIPELINE_FMT_TOTAL_SIZE == 75u,
+          "format descriptor's total size matches the expected field layout");
+
+    rc = pipeline_unpack(packed, &roundTripped, sigRoundTripped);
+    check(rc == 0, "unpack accepts a correctly-tagged payload");
+    check(roundTripped.course == capture.course &&
+          roundTripped.act == capture.act &&
+          roundTripped.coins == capture.coins &&
+          roundTripped.frames == capture.frames &&
+          roundTripped.nonce16 == capture.nonce16 &&
+          roundTripped.keyId == capture.keyId,
+          "unpack round-trips all StarCapture fields exactly");
+    check(memcmp(sig, sigRoundTripped, PIPELINE_FMT_SIZE_SIG) == 0,
+          "unpack round-trips the signature bytes exactly");
+
+    /* Corrupt the format tag and confirm unpack rejects it. */
+    packed[0] = (pipeline_u8)(PIPELINE_FMT_TAG_VALUE + 1);
+    rc = pipeline_unpack(packed, &roundTripped, sigRoundTripped);
+    check(rc != 0, "unpack rejects a payload with the wrong format tag");
+}
+
+/*
+ * QR round-trip tests (spec #24, sub-issue #27). Exercises the internal
+ * seam directly: pipeline_qr_encode() (qr_adapter.h, which hides the
+ * ported qrcodegen.c behind it) followed by qr_host_decode() (host-only,
+ * tools/pipeline_test/qr_host_decode.c -- never linked into the ROM). See
+ * qr_adapter.h for the version 6 / ECC MEDIUM / 106-byte-usable-payload
+ * (108 total data codewords, minus the mode+count header) choice.
+ */
+static void fill_pattern(pipeline_u8 *buf, int len, pipeline_u8 seed)
+{
+    int i;
+    for (i = 0; i < len; i++) {
+        buf[i] = (pipeline_u8)(seed + i * 7 + (i * i) % 251);
+    }
+}
+
+static void check_round_trip(int len, const char *label)
+{
+    pipeline_u8 payload[PIPELINE_QR_MAX_PAYLOAD_BYTES];
+    pipeline_u8 qrcode[PIPELINE_QR_BUFFER_LEN];
+    unsigned char decoded[PIPELINE_QR_MAX_PAYLOAD_BYTES];
+    int decodedLen = -1;
+    int encodeOk, decodeOk;
+    char what[128];
+
+    fill_pattern(payload, len, (pipeline_u8)(len * 3 + 1));
+
+    encodeOk = pipeline_qr_encode(payload, (pipeline_u32)len, qrcode);
+    snprintf(what, sizeof(what), "QR encode succeeds for %s (%d bytes, within budget)", label, len);
+    check(encodeOk != 0, what);
+    if (!encodeOk) {
+        return;
+    }
+
+    decodeOk = qr_host_decode(qrcode, decoded, (int)sizeof(decoded), &decodedLen);
+    snprintf(what, sizeof(what), "QR decode succeeds for %s (%d bytes)", label, len);
+    check(decodeOk != 0, what);
+
+    snprintf(what, sizeof(what), "QR round-trip is byte-exact for %s (%d bytes)", label, len);
+    check(decodeOk && decodedLen == len && memcmp(decoded, payload, (size_t)len) == 0, what);
+}
+
+static void test_qr_round_trip_representative_sizes(void)
+{
+    check_round_trip(1, "minimal payload");
+    check_round_trip(4, "sub-issue #25 stub payload size");
+    check_round_trip(24, "spec #24's ~24 B variable content estimate");
+    check_round_trip(75, "current format_descriptor.json total size");
+    check_round_trip(88, "spec #24's ~88 B payload budget");
+    check_round_trip(PIPELINE_QR_MAX_PAYLOAD_BYTES, "exact version 6 / ECC MEDIUM usable payload capacity (106 B)");
+}
+
+static void test_qr_rejects_over_budget_cleanly(void)
+{
+    pipeline_u8 payload[PIPELINE_QR_MAX_PAYLOAD_BYTES + 1];
+    pipeline_u8 qrcode[PIPELINE_QR_BUFFER_LEN];
+    int encodeOk;
+
+    fill_pattern(payload, (int)sizeof(payload), 0x5A);
+
+    /* One byte over the real version 6 / ECC MEDIUM capacity: must be
+     * rejected cleanly (nonzero return, no truncated/partial QR Code
+     * written -- qrcode[0] is left at the documented invalid-size
+     * sentinel of 0), never silently truncated to fit. */
+    memset(qrcode, 0xFF, sizeof(qrcode));
+    encodeOk = pipeline_qr_encode(payload, (pipeline_u32)sizeof(payload), qrcode);
+    check(encodeOk == 0, "QR encode rejects a payload one byte over the 106 B usable payload capacity");
+    check(qrcode[0] == 0, "rejected QR encode leaves the invalid-size sentinel, not a truncated code");
+
+    /* Far over budget too (well past even the raw bitmap buffer size) --
+     * must still be a clean rejection, not a buffer overrun. */
+    {
+        pipeline_u8 hugePayload[PIPELINE_QR_BUFFER_LEN * 4];
+        memset(hugePayload, 0x42, sizeof(hugePayload));
+        memset(qrcode, 0xFF, sizeof(qrcode));
+        encodeOk = pipeline_qr_encode(hugePayload, (pipeline_u32)sizeof(hugePayload), qrcode);
+        check(encodeOk == 0, "QR encode rejects a grossly over-budget payload cleanly");
+        check(qrcode[0] == 0, "grossly-over-budget rejection also leaves the invalid-size sentinel");
+    }
+}
+
+/*
+ * SHA-256 known-answer tests (spec #24, sub-issue #28). Vectors are the
+ * standard published ones: FIPS 180-4's own examples (the empty string,
+ * "abc", and the 56-byte two-block message), plus a 55/56-byte pair that
+ * independently pins the single-vs-two-block padding branch in
+ * sha256.c's pipeline_sha256_final() (55 bytes leaves room for the 0x80 +
+ * length in the current block; 56 does not and must transform an extra
+ * padding block first). All five double-checked against Node's own
+ * crypto.createHash('sha256') as an independent oracle, not just quoted
+ * from memory.
+ */
+static void check_sha256(const char *msg, int msgLen, const pipeline_u8 expected[PIPELINE_SHA256_DIGEST_SIZE], const char *what)
+{
+    pipeline_u8 hash[PIPELINE_SHA256_DIGEST_SIZE];
+
+    pipeline_sha256((const pipeline_u8 *)msg, (pipeline_u32)msgLen, hash);
+    check(memcmp(hash, expected, PIPELINE_SHA256_DIGEST_SIZE) == 0, what);
+}
+
+static void test_sha256_known_answer_vectors(void)
+{
+    static const pipeline_u8 kEmpty[32] = {
+        0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+        0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
+    };
+    static const pipeline_u8 kAbc[32] = {
+        0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+        0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
+    };
+    static const pipeline_u8 kTwoBlock[32] = {
+        0x24, 0x8d, 0x6a, 0x61, 0xd2, 0x06, 0x38, 0xb8, 0xe5, 0xc0, 0x26, 0x93, 0x0c, 0x3e, 0x60, 0x39,
+        0xa3, 0x3c, 0xe4, 0x59, 0x64, 0xff, 0x21, 0x67, 0xf6, 0xec, 0xed, 0xd4, 0x19, 0xdb, 0x06, 0xc1,
+    };
+    static const pipeline_u8 k55a[32] = {
+        0x9f, 0x43, 0x90, 0xf8, 0xd3, 0x0c, 0x2d, 0xd9, 0x2e, 0xc9, 0xf0, 0x95, 0xb6, 0x5e, 0x2b, 0x9a,
+        0xe9, 0xb0, 0xa9, 0x25, 0xa5, 0x25, 0x8e, 0x24, 0x1c, 0x9f, 0x1e, 0x91, 0x0f, 0x73, 0x43, 0x18,
+    };
+    static const pipeline_u8 k56a[32] = {
+        0xb3, 0x54, 0x39, 0xa4, 0xac, 0x6f, 0x09, 0x48, 0xb6, 0xd6, 0xf9, 0xe3, 0xc6, 0xaf, 0x0f, 0x5f,
+        0x59, 0x0c, 0xe2, 0x0f, 0x1b, 0xde, 0x70, 0x90, 0xef, 0x79, 0x70, 0x68, 0x6e, 0xc6, 0x73, 0x8a,
+    };
+    char a55[55];
+    char a56[56];
+    pipeline_sha256_ctx ctx;
+    pipeline_u8 streamed[PIPELINE_SHA256_DIGEST_SIZE];
+
+    memset(a55, 'a', sizeof(a55));
+    memset(a56, 'a', sizeof(a56));
+
+    check_sha256("", 0, kEmpty, "SHA-256 KAT: empty string");
+    check_sha256("abc", 3, kAbc, "SHA-256 KAT: \"abc\"");
+    check_sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", 56, kTwoBlock,
+                 "SHA-256 KAT: FIPS 180-4 two-block message");
+    check_sha256(a55, (int)sizeof(a55), k55a, "SHA-256 KAT: 55 x 'a' (single-block padding branch)");
+    check_sha256(a56, (int)sizeof(a56), k56a, "SHA-256 KAT: 56 x 'a' (two-block padding branch)");
+
+    /* Same "abc" vector via the streaming init/update/final API, split
+     * across multiple update() calls, to prove the incremental path (not
+     * just the one-shot convenience wrapper) is also correct. */
+    pipeline_sha256_init(&ctx);
+    pipeline_sha256_update(&ctx, (const pipeline_u8 *)"a", 1);
+    pipeline_sha256_update(&ctx, (const pipeline_u8 *)"b", 1);
+    pipeline_sha256_update(&ctx, (const pipeline_u8 *)"c", 1);
+    pipeline_sha256_final(&ctx, streamed);
+    check(memcmp(streamed, kAbc, PIPELINE_SHA256_DIGEST_SIZE) == 0,
+          "SHA-256 KAT: \"abc\" via streaming init/update/final API");
+}
+
+/*
+ * Event id-equals-reference tests (spec #24, sub-issue #28).
+ *
+ * Reference oracle: the real `nostr-tools` npm package's getEventHash(),
+ * run via tools/reference_event_id.js against the exact same
+ * pubkey/created_at/kind/tags baked into this host tool's generated
+ * event_profile.h (TEST_PRIVKEY_HEX = BIP-340 KAT privkey 3,
+ * TEST_CREATED_AT = 1700000000 -- see the Makefile and
+ * test_pubkey_known_answer() above) and the exact same StarCapture values
+ * as below. nostr-tools is an independent oracle -- a real, separately
+ * maintained upstream JS library used by real Nostr clients/relays, not a
+ * second implementation of this same algorithm written for this test --
+ * so this checks the pipeline's own serialize+SHA-256 id computation
+ * (event_id.c) against ground truth, not against itself.
+ */
+static void check_event_id(const StarCapture *capture, const pipeline_u8 expectedId[PIPELINE_EVENT_ID_SIZE], const char *what)
+{
+    pipeline_u8 id[PIPELINE_EVENT_ID_SIZE];
+
+    pipeline_event_compute_id(capture, id);
+    check(memcmp(id, expectedId, PIPELINE_EVENT_ID_SIZE) == 0, what);
+}
+
+static void test_event_id_matches_reference(void)
+{
+    StarCapture captureA;
+    StarCapture captureB;
+    StarCapture captureC;
+
+    /* Reference ids computed by tools/reference_event_id.js's "vector A/B/C"
+     * against the real nostr-tools package -- see that script for the
+     * exact command/output and the header comment above for why it's a
+     * faithful independent oracle. */
+    static const pipeline_u8 kExpectedIdA[32] = {
+        0xba, 0x23, 0x7b, 0x9e, 0x89, 0x1e, 0xde, 0x42, 0x12, 0x57, 0x1d, 0xed, 0x17, 0xbc, 0xe2, 0xa6,
+        0x16, 0x19, 0x1e, 0xc6, 0x7a, 0x76, 0x32, 0xd2, 0x8d, 0xc9, 0xc5, 0x47, 0xd3, 0x54, 0x83, 0xcc,
+    };
+    static const pipeline_u8 kExpectedIdB[32] = {
+        0x00, 0x92, 0xdc, 0x5f, 0xe5, 0xb5, 0x4a, 0x5e, 0x2c, 0x09, 0x66, 0x67, 0x27, 0xe8, 0xa3, 0xcf,
+        0xce, 0x46, 0x42, 0x42, 0x99, 0x1b, 0xea, 0x6b, 0x1d, 0x71, 0xfd, 0x89, 0x75, 0x1d, 0x0e, 0x24,
+    };
+    static const pipeline_u8 kExpectedIdC[32] = {
+        0xe9, 0xe1, 0x29, 0x92, 0x09, 0xba, 0x35, 0xde, 0xb9, 0x79, 0x1a, 0xad, 0xb3, 0x4c, 0x4d, 0x87,
+        0xb7, 0x35, 0xa4, 0xe1, 0x77, 0x6f, 0x51, 0x61, 0x05, 0x41, 0xd6, 0x14, 0x34, 0xee, 0x18, 0xeb,
+    };
+
+    captureA.course = 15; captureA.act = 6; captureA.coins = 100; captureA.frames = 0x01020304u; captureA.nonce16 = 0xCAFE; captureA.keyId = 0;
+    captureB.course = 9;  captureB.act = 1; captureB.coins = 42;  captureB.frames = 1234u;        captureB.nonce16 = 0xBEEF; captureB.keyId = 0;
+    captureC.course = 0;  captureC.act = 0; captureC.coins = 0;   captureC.frames = 0u;            captureC.nonce16 = 0;      captureC.keyId = 0;
+
+    check_event_id(&captureA, kExpectedIdA, "event id matches nostr-tools reference (vector A)");
+    check_event_id(&captureB, kExpectedIdB, "event id matches nostr-tools reference (vector B)");
+    check_event_id(&captureC, kExpectedIdC, "event id matches nostr-tools reference (all-zero vector C)");
+}
+
+/*
+ * Content double-serialization escaping test (spec #24, sub-issue #28).
+ *
+ * content is itself a JSON object serialized to a string
+ * (pipeline_event_build_content), and that string is then embedded as a
+ * *string element* of the outer event array (pipeline_event_serialize) --
+ * so its `"` characters must come out as the two-byte escape `\"` in the
+ * final serialized bytes. This asserts that directly against the raw
+ * serialized buffer (not just indirectly via id equality above), so a
+ * serializer bug that happened to cancel out in the hash could never hide
+ * here.
+ */
+static void test_content_escaping_path(void)
+{
+    StarCapture capture;
+    char content[PIPELINE_EVENT_CONTENT_MAX];
+    pipeline_u8 serialized[PIPELINE_EVENT_SERIALIZED_MAX];
+    pipeline_u32 contentLen;
+    pipeline_u32 serializedLen;
+    const char *expectedContent = "{\"course\":15,\"act\":6,\"coins\":100,\"frames\":16909060,\"nonce\":51966,\"keyId\":0}";
+    /* The FULL expected canonical serialization for this exact StarCapture
+     * (vector A, same as test_event_id_matches_reference()'s captureA) and
+     * the baked event profile (pubkey f9308a.../created_at 1700000000/kind
+     * 8064/the two t tags) -- cross-checked byte-for-byte against
+     * JSON.stringify([0,pubkey,created_at,kind,tags,content]) via Node, the
+     * same expression nostr-tools' getEventHash() evaluates (see
+     * tools/reference_event_id.js). Pinning the whole 219-byte buffer, not
+     * just a substring, proves the prefix/field ordering/escaping directly
+     * rather than only through the opaque id in the test above. */
+    const char *expectedSerialized =
+        "[0,\"f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9\","
+        "1700000000,8064,[[\"t\",\"cabinet-leaderboard\"],[\"t\",\"sm64\"]],"
+        "\"{\\\"course\\\":15,\\\"act\\\":6,\\\"coins\\\":100,\\\"frames\\\":16909060,\\\"nonce\\\":51966,\\\"keyId\\\":0}\"]";
+
+    capture.course = 15; capture.act = 6; capture.coins = 100; capture.frames = 0x01020304u; capture.nonce16 = 0xCAFE; capture.keyId = 0;
+
+    contentLen = pipeline_event_build_content(&capture, content);
+    check(contentLen == (pipeline_u32)strlen(expectedContent) && strcmp(content, expectedContent) == 0,
+          "content JSON (unescaped, standalone) matches expected shape/values");
+
+    serializedLen = pipeline_event_serialize(&capture, serialized);
+    check(serializedLen < PIPELINE_EVENT_SERIALIZED_MAX, "serialized event fits within the fixed buffer bound");
+
+    /* strcmp/strstr require NUL-terminated strings; serialized isn't
+     * NUL-terminated by contract, so copy it into a NUL-terminated buffer
+     * first (bounded by the same fixed max, plus one byte for the NUL). */
+    {
+        char serializedStr[PIPELINE_EVENT_SERIALIZED_MAX + 1];
+        memcpy(serializedStr, serialized, serializedLen);
+        serializedStr[serializedLen] = '\0';
+
+        check(serializedLen == (pipeline_u32)strlen(expectedSerialized) &&
+              strcmp(serializedStr, expectedSerialized) == 0,
+              "serialized event matches the full expected canonical byte sequence, escaping included");
+        check(strstr(serializedStr, "\"course\":") == NULL,
+              "serialized event does NOT contain the unescaped raw content JSON verbatim");
+    }
+}
+
+/*
+ * BIP-340 Schnorr signing tests (spec #24, sub-issue #29).
+ *
+ * The KAT below is the published BIP-340 test vector 0
+ * (bitcoin/bips/bip-0340/test-vectors.csv, row 0): secret key 3, aux_rand
+ * all-zero, message all-zero, expected signature as given. secret key 3 is
+ * the SAME BIP-340 KAT key already used for test_pubkey_known_answer()
+ * above and baked into this host tool's generated event_profile.h
+ * (TEST_PRIVKEY_HEX, see the Makefile) -- so kExpectedPubkeyHex there and
+ * kPubkey here must (and do) agree.
+ *
+ * Independent verification: this signature was independently checked
+ * against @noble/curves (a real, separately-maintained secp256k1/Schnorr
+ * JS library -- see tools/verify_schnorr_reference.js for the accept/
+ * tampered-reject run and why it's a genuine independent oracle, not a
+ * second implementation of this same code). test_schnorr_verify_* below
+ * uses this file's OWN pipeline_schnorr_verify() -- an internal
+ * self-consistency check only, explicitly NOT that independent oracle
+ * (see schnorr_adapter.h's own header comment on the distinction).
+ */
+static const pipeline_u8 kSchnorrPrivkey[PIPELINE_SCHNORR_PRIVKEY_SIZE] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+};
+static const pipeline_u8 kSchnorrMessageZero[PIPELINE_SCHNORR_MSG_SIZE] = {0};
+static const pipeline_u8 kSchnorrExpectedSig[PIPELINE_SCHNORR_SIG_SIZE] = {
+    0xe9, 0x07, 0x83, 0x1f, 0x80, 0x84, 0x8d, 0x10, 0x69, 0xa5, 0x37, 0x1b, 0x40, 0x24, 0x10, 0x36,
+    0x4b, 0xdf, 0x1c, 0x5f, 0x83, 0x07, 0xb0, 0x08, 0x4c, 0x55, 0xf1, 0xce, 0x2d, 0xca, 0x82, 0x15,
+    0x25, 0xf6, 0x6a, 0x4a, 0x85, 0xea, 0x8b, 0x71, 0xe4, 0x82, 0xa7, 0x4f, 0x38, 0x2d, 0x2c, 0xe5,
+    0xeb, 0xee, 0xe8, 0xfd, 0xb2, 0x17, 0x2f, 0x47, 0x7d, 0xf4, 0x90, 0x0d, 0x31, 0x05, 0x36, 0xc0,
+};
+
+static void test_schnorr_signing_known_answer(void)
+{
+    pipeline_u8 sig[PIPELINE_SCHNORR_SIG_SIZE];
+    int ok = pipeline_schnorr_sign(kSchnorrMessageZero, kSchnorrPrivkey, sig);
+
+    check(ok != 0, "pipeline_schnorr_sign succeeds for the BIP-340 KAT (privkey=3, aux_rand=0, msg=0)");
+    check(ok && memcmp(sig, kSchnorrExpectedSig, PIPELINE_SCHNORR_SIG_SIZE) == 0,
+          "pipeline_schnorr_sign matches the published BIP-340 test vector 0 signature exactly");
+}
+
+static void test_schnorr_verify_internal_self_consistency(void)
+{
+    /* PIPELINE_EVENT_PUBKEY_BYTES is generated from TEST_PRIVKEY_HEX
+     * (privkey 3, same as kSchnorrPrivkey above) -- see the Makefile and
+     * test_pubkey_known_answer(). */
+    static const pipeline_u8 pubkey[32] = PIPELINE_EVENT_PUBKEY_BYTES;
+    int verifyOk = pipeline_schnorr_verify(kSchnorrMessageZero, pubkey, kSchnorrExpectedSig);
+    pipeline_u8 tamperedMsg[PIPELINE_SCHNORR_MSG_SIZE];
+    int tamperedOk;
+
+    check(verifyOk != 0, "pipeline_schnorr_verify (internal) accepts the real KAT signature against the build's pubkey");
+
+    memcpy(tamperedMsg, kSchnorrMessageZero, PIPELINE_SCHNORR_MSG_SIZE);
+    tamperedMsg[0] ^= 1;
+    tamperedOk = pipeline_schnorr_verify(tamperedMsg, pubkey, kSchnorrExpectedSig);
+    check(tamperedOk == 0, "pipeline_schnorr_verify (internal) rejects the same signature against a tampered id");
+}
+
+static void test_schnorr_sign_is_deterministic(void)
+{
+    /* Full-pipeline determinism (spec #24's signing decision): signing the
+     * same (privkey, message) twice must yield byte-identical output --
+     * aux_rand is always the fixed all-zero value, never sourced from
+     * anything nondeterministic. */
+    pipeline_u8 sigA[PIPELINE_SCHNORR_SIG_SIZE];
+    pipeline_u8 sigB[PIPELINE_SCHNORR_SIG_SIZE];
+    int okA = pipeline_schnorr_sign(kSchnorrMessageZero, kSchnorrPrivkey, sigA);
+    int okB = pipeline_schnorr_sign(kSchnorrMessageZero, kSchnorrPrivkey, sigB);
+
+    check(okA && okB && memcmp(sigA, sigB, PIPELINE_SCHNORR_SIG_SIZE) == 0,
+          "pipeline_schnorr_sign is deterministic across repeated calls with the same inputs");
+}
+
+/*
+ * Fixed capture-time input vector shared by both capture tests below.
+ * nonce16's expected value (0xDB3B) was computed independently with
+ * Python's hashlib over the exact 12-byte big-endian concatenation
+ * capture.h documents (osCount||globalTimer||rawStickX||rawStickY||
+ * buttonMask = 11 22 33 44 55 66 77 88 0a f6 80 01), taking the first two
+ * SHA-256 digest bytes -- NOT re-derived from this repo's own ported
+ * sha256.c, so it genuinely pins pipeline_capture_build()'s nonce-hashing
+ * contract rather than merely reflecting whatever the port happens to
+ * compute.
+ */
+#define PIPELINE_TEST_CAPTURE_COURSE      4u
+#define PIPELINE_TEST_CAPTURE_ACT         2u
+#define PIPELINE_TEST_CAPTURE_COINS       50u
+#define PIPELINE_TEST_CAPTURE_STAR_INDEX  12u
+#define PIPELINE_TEST_CAPTURE_OS_COUNT    0x11223344u
+#define PIPELINE_TEST_CAPTURE_GLOBAL_TIMER 0x55667788u
+/* Mirrors the ROM glue's actual call shape at interact_star_or_key, which
+ * passes gGlobalTimer for BOTH the `frames` argument and one of the nonce
+ * hash inputs (see interaction.c's own comment on that reuse) -- this test
+ * vector does the same rather than using two different values, so it
+ * exercises the real call shape, not a hypothetical one. */
+#define PIPELINE_TEST_CAPTURE_FRAMES      PIPELINE_TEST_CAPTURE_GLOBAL_TIMER
+#define PIPELINE_TEST_CAPTURE_RAW_STICK_X 10u
+#define PIPELINE_TEST_CAPTURE_RAW_STICK_Y 246u
+#define PIPELINE_TEST_CAPTURE_BUTTONS     0x8001u
+#define PIPELINE_TEST_CAPTURE_EXPECTED_NONCE16 0xDB3Bu
+
+static void test_capture_build_known_answer(void)
+{
+    StarCapture capture;
+
+    pipeline_capture_build((pipeline_u8) PIPELINE_TEST_CAPTURE_COURSE,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_ACT,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_COINS,
+                            (pipeline_u32) PIPELINE_TEST_CAPTURE_FRAMES,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_STAR_INDEX,
+                            (pipeline_u32) PIPELINE_TEST_CAPTURE_OS_COUNT,
+                            (pipeline_u32) PIPELINE_TEST_CAPTURE_GLOBAL_TIMER,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_RAW_STICK_X,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_RAW_STICK_Y,
+                            (pipeline_u16) PIPELINE_TEST_CAPTURE_BUTTONS,
+                            &capture);
+
+    check(capture.course == PIPELINE_TEST_CAPTURE_COURSE
+              && capture.act == PIPELINE_TEST_CAPTURE_ACT
+              && capture.coins == PIPELINE_TEST_CAPTURE_COINS
+              && capture.frames == PIPELINE_TEST_CAPTURE_FRAMES
+              && capture.keyId == PIPELINE_TEST_CAPTURE_STAR_INDEX,
+          "pipeline_capture_build carries course/act/coins/frames/starIndex(keyId) through exactly");
+
+    check(capture.nonce16 == PIPELINE_TEST_CAPTURE_EXPECTED_NONCE16,
+          "pipeline_capture_build's nonce16 matches the independent Python-hashlib known-answer vector (0xDB3B)");
+}
+
+static void test_capture_matches_host_build_event(void)
+{
+    /* Path A: the SAME two calls the ROM's real capture glue at
+     * interact_star_or_key makes -- pipeline_capture_build() then
+     * build_event() -- using this test's fixed input vector in place of
+     * live N64 values. */
+    StarCapture capturedViaGlue;
+    BuiltEvent eventFromGlue;
+    int buildOkA;
+
+    /* Path B: a StarCapture assembled by hand for the "same run" (same
+     * course/act/coins/frames, and the SAME known-answer nonce16 --
+     * standing in for "the host tool's output for the same
+     * course/act/coins/frames/nonce", per sub-issue #31's acceptance
+     * criteria), then build_event() again. */
+    StarCapture capturedByHand;
+    BuiltEvent eventFromHand;
+    int buildOkB;
+
+    pipeline_capture_build((pipeline_u8) PIPELINE_TEST_CAPTURE_COURSE,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_ACT,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_COINS,
+                            (pipeline_u32) PIPELINE_TEST_CAPTURE_FRAMES,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_STAR_INDEX,
+                            (pipeline_u32) PIPELINE_TEST_CAPTURE_OS_COUNT,
+                            (pipeline_u32) PIPELINE_TEST_CAPTURE_GLOBAL_TIMER,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_RAW_STICK_X,
+                            (pipeline_u8) PIPELINE_TEST_CAPTURE_RAW_STICK_Y,
+                            (pipeline_u16) PIPELINE_TEST_CAPTURE_BUTTONS,
+                            &capturedViaGlue);
+    buildOkA = build_event(&capturedViaGlue, kBuildEventPrivkey, &eventFromGlue);
+
+    capturedByHand.course  = (pipeline_u8) PIPELINE_TEST_CAPTURE_COURSE;
+    capturedByHand.act     = (pipeline_u8) PIPELINE_TEST_CAPTURE_ACT;
+    capturedByHand.coins   = (pipeline_u8) PIPELINE_TEST_CAPTURE_COINS;
+    capturedByHand.frames  = (pipeline_u32) PIPELINE_TEST_CAPTURE_FRAMES;
+    capturedByHand.keyId   = (pipeline_u8) PIPELINE_TEST_CAPTURE_STAR_INDEX;
+    capturedByHand.nonce16 = (pipeline_u16) PIPELINE_TEST_CAPTURE_EXPECTED_NONCE16;
+    buildOkB = build_event(&capturedByHand, kBuildEventPrivkey, &eventFromHand);
+
+    check(buildOkA != 0 && buildOkB != 0,
+          "build_event succeeds for both the capture-glue path and the hand-built StarCapture path");
+
+    /* The memcmp-based checks below only prove build_event is a (deterministic)
+     * function of its StarCapture argument -- they can't fail by construction
+     * when both paths are handed field-identical StarCaptures. To actually pin
+     * down what "byte-identical to the host tool's output for the same
+     * course/act/coins/frames/nonce" (sub-issue #31's acceptance criteria)
+     * means at the wire level, check eventFromGlue.packed_payload's bytes
+     * directly against this vector's literal expected values, at the offsets
+     * format_descriptor.h independently generates from
+     * src/pipeline/format_descriptor.json (not from pipeline_pack.c itself). */
+    if (buildOkA) {
+        int fieldsOk =
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_FORMAT_TAG] == 1 &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_COURSE] == PIPELINE_TEST_CAPTURE_COURSE &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_ACT] == PIPELINE_TEST_CAPTURE_ACT &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_COINS] == PIPELINE_TEST_CAPTURE_COINS &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_FRAMES + 0] == 0x55 &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_FRAMES + 1] == 0x66 &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_FRAMES + 2] == 0x77 &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_FRAMES + 3] == 0x88 &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_NONCE16 + 0] == 0xDB &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_NONCE16 + 1] == 0x3B &&
+            eventFromGlue.packed_payload[PIPELINE_FMT_OFF_KEY_ID] == PIPELINE_TEST_CAPTURE_STAR_INDEX;
+
+        check(fieldsOk,
+              "capture-glue path's packed_payload bytes match this vector's literal expected values "
+              "at format_descriptor.h's independently-generated field offsets");
+    }
+
+    check(buildOkA && buildOkB
+              && memcmp(eventFromGlue.packed_payload, eventFromHand.packed_payload,
+                         PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
+          "byte-identity: capture-glue path's packed_payload == hand-built-StarCapture path's packed_payload "
+          "for the same course/act/coins/frames/nonce");
+
+    check(buildOkA && buildOkB
+              && memcmp(eventFromGlue.qr_bitmap, eventFromHand.qr_bitmap,
+                         PIPELINE_BUILT_QR_BITMAP_SIZE) == 0,
+          "byte-identity: capture-glue path's qr_bitmap == hand-built-StarCapture path's qr_bitmap "
+          "for the same course/act/coins/frames/nonce");
+}
+
+/*
+ * test_qr_display_state_machine: the shared qr_display state machine's PURE
+ * core (spec #24, sub-issue #33) -- see this file's header comment. Drives
+ * ONE QrDisplayState through a synthetic input sequence and asserts all
+ * four acceptance-critical behaviors.
+ */
+static void test_qr_display_state_machine(void)
+{
+    StarCapture capture;
+    BuiltEvent event;
+    int buildOk;
+    QrDisplayState state;
+    int i;
+    int dismissed;
+    int anyNonZero;
+    int allZero;
+
+    capture.course  = 1;
+    capture.act     = 1;
+    capture.coins   = 8;
+    capture.frames  = 0x11223344u;
+    capture.nonce16 = 0x1234;
+    capture.keyId   = 0;
+
+    buildOk = build_event(&capture, kBuildEventPrivkey, &event);
+    check(buildOk != 0, "qr_display: build_event succeeds for the display test's StarCapture");
+    if (!buildOk) {
+        return;
+    }
+
+    /* Sanity: the bitmap under test is not already all-zero, so the erase
+     * assertion below (c) is actually meaningful. */
+    anyNonZero = 0;
+    for (i = 0; i < PIPELINE_BUILT_QR_BITMAP_SIZE; i++) {
+        if (event.qr_bitmap[i] != 0) {
+            anyNonZero = 1;
+            break;
+        }
+    }
+    check(anyNonZero, "qr_display: the built qr_bitmap under test is not already all-zero");
+
+    qr_display_init(&state);
+    check(!qr_display_is_active(&state), "qr_display: freshly-initialized state is not active");
+
+    check(qr_display_present(&state, event.qr_bitmap) != 0,
+          "qr_display: present() succeeds on a fresh state");
+    check(qr_display_is_active(&state), "qr_display: state is active immediately after present()");
+    check(memcmp(state.bitmap, event.qr_bitmap, PIPELINE_BUILT_QR_BITMAP_SIZE) == 0,
+          "qr_display: presented state holds a copy of the bitmap");
+
+    /* (a) holding A from the dance (the same press that triggered it,
+     * never yet released) does NOT dismiss, no matter how long it's held. */
+    for (i = 0; i < 10; i++) {
+        check(qr_display_update(&state, 1) == 0,
+              "qr_display: holding A with no prior release never dismisses");
+    }
+    check(qr_display_is_active(&state), "qr_display: still active after holding A with no release");
+
+    /* (b) release-then-press held for QR_DISPLAY_MIN_HOLD_FRAMES
+     * consecutive frames DOES dismiss -- not a single frame sooner. */
+    check(qr_display_update(&state, 0) == 0, "qr_display: a release frame itself never dismisses");
+    for (i = 1; i < QR_DISPLAY_MIN_HOLD_FRAMES; i++) {
+        check(qr_display_update(&state, 1) == 0,
+              "qr_display: a fresh press held under the minimum frame count doesn't dismiss yet");
+    }
+    dismissed = qr_display_update(&state, 1);
+    check(dismissed != 0,
+          "qr_display: release-then-press held for QR_DISPLAY_MIN_HOLD_FRAMES dismisses");
+    check(!qr_display_is_active(&state), "qr_display: state is no longer active after dismissal");
+
+    /* (c) after dismiss, the held bitmap buffer is erased (all-zero). */
+    allZero = 1;
+    for (i = 0; i < PIPELINE_BUILT_QR_BITMAP_SIZE; i++) {
+        if (state.bitmap[i] != 0) {
+            allZero = 0;
+            break;
+        }
+    }
+    check(allZero, "qr_display: bitmap is memset-erased (all-zero) after dismissal");
+
+    /* (d) a re-summon attempt (present() again on the SAME, already-
+     * dismissed state) is rejected -- the never-re-summonable invariant. */
+    check(qr_display_present(&state, event.qr_bitmap) == 0,
+          "qr_display: present() after a dismissal on the same state is rejected "
+          "(never re-summonable)");
+    check(!qr_display_is_active(&state), "qr_display: a rejected present() leaves the state inactive");
+}
+
+int main(void)
+{
+    test_format_descriptor_round_trip();
+    test_pubkey_known_answer();
+    test_qr_round_trip_representative_sizes();
+    test_qr_rejects_over_budget_cleanly();
+    test_sha256_known_answer_vectors();
+    test_event_id_matches_reference();
+    test_content_escaping_path();
+    test_schnorr_signing_known_answer();
+    test_schnorr_verify_internal_self_consistency();
+    test_schnorr_sign_is_deterministic();
+    test_build_event_end_to_end();
+    test_capture_build_known_answer();
+    test_capture_matches_host_build_event();
+    test_qr_render_blit_round_trips_through_decode();
+    test_qr_display_state_machine();
+
+    if (g_failures != 0) {
+        printf("%d check(s) FAILED\n", g_failures);
+        return 1;
+    }
+
+    printf("All pipeline host tests PASSED\n");
+    return 0;
+}

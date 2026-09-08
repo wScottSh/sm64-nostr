@@ -1,0 +1,41 @@
+#ifndef QR_PENDING_STAR_EVENT_H
+#define QR_PENDING_STAR_EVENT_H
+
+#include "pipeline/build_event.h"
+
+/*
+ * The capture@grab -> display@park bridge (spec #24, sub-issue #33).
+ * interact_star_or_key (interaction.c, sub-issue #31) builds a BuiltEvent
+ * synchronously at grab and holds it in a file-static global there; display
+ * happens several frames LATER, at park time, from the two save-flow sites
+ * qr_display glue replaces (mario_actions_cutscene.c's
+ * act_exit_land_save_dialog() and general_star_dance_handler()), once the
+ * star dance/exit animation finishes parking Mario.
+ *
+ * Deliberately its OWN tiny header, not folded into interaction.h:
+ * interaction.h is included by ~20 other src/game/*.c translation units
+ * that have nothing to do with the pipeline, and pulling in
+ * pipeline/build_event.h (which in turn pulls in the BUILD-GENERATED
+ * format_descriptor.h) from there would make every one of those objects
+ * depend on that generated header too -- the exact hazard the root
+ * Makefile's per-object PIPELINE_FORMAT_DESCRIPTOR_H prerequisite comments
+ * (interaction.o, qr_render.o, qr_render_n64.o) already call out explicitly.
+ * Keeping this bridge in its own header confines that dependency to just
+ * the objects that actually need it -- interaction.o (defines it),
+ * mario_actions_cutscene.o (consumes it) -- which the Makefile lists
+ * prerequisites for accordingly.
+ */
+
+/*
+ * pipeline_take_pending_star_event: returns nonzero and copies the held
+ * event into *out if a real star grab (never a Bowser key -- keys never
+ * reach the build_event() call at all, see interact_star_or_key) built one
+ * since the last call. Returns 0, leaving *out untouched, otherwise --
+ * including for every key grab, and for a second call before the next star
+ * grab (this is a one-shot take, not a peek: the pending flag is cleared
+ * either way, so a stale event from an earlier grab can never be read
+ * twice).
+ */
+int pipeline_take_pending_star_event(BuiltEvent *out);
+
+#endif /* QR_PENDING_STAR_EVENT_H */

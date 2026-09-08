@@ -147,6 +147,48 @@ SECTIONS
 #endif
         BUILD_DIR/src/game/level_update.o(.text);
         BUILD_DIR/src/game/interaction.o(.text);
+        /* The Nostr pipeline (spec #24, sub-issue #31): capture glue at
+         * interact_star_or_key now calls build_event(), so these pure/C99
+         * pipeline objects (previously compiled-but-unlinked via the
+         * `pipeline-rom-objects` Makefile target -- see its own comment)
+         * must actually link into the ROM for the first time. Placed right
+         * after interaction.o, the one object that calls into them. Order
+         * here has no behavioral meaning (unlike historically for a
+         * byte-matching build): this fork's ROM bytes already diverge from
+         * vanilla the moment a star grab calls new code, so COMPARE=1's
+         * sha1 check is expected to (and, per its own printed message,
+         * harmlessly) fail from here on.
+         *
+         * This list is hand-maintained and must be kept in sync with
+         * src/pipeline/*.c (which the root Makefile's SRC_DIRS picks up by
+         * wildcard): adding a new src/pipeline/*.c file without adding a
+         * matching entry here (in all four of this section's
+         * .text/.data*/.rodata*/.bss* blocks) makes it a linker orphan --
+         * ld places unmatched input sections somewhere in the output
+         * without failing the link, so a missing entry is a silent
+         * placement surprise, not a build error. As of sub-issue #31 there
+         * are exactly 10 src/pipeline/*.c files and 10 entries below (one
+         * per file) in each of the four blocks. */
+        BUILD_DIR/src/pipeline/build_event.o(.text);
+        BUILD_DIR/src/pipeline/capture.o(.text);
+        BUILD_DIR/src/pipeline/event_id.o(.text);
+        BUILD_DIR/src/pipeline/schnorr_adapter.o(.text);
+        BUILD_DIR/src/pipeline/pack_adapter.o(.text);
+        BUILD_DIR/src/pipeline/qr_adapter.o(.text);
+        BUILD_DIR/src/pipeline/sha256.o(.text);
+        BUILD_DIR/src/pipeline/secp256k1.o(.text);
+        BUILD_DIR/src/pipeline/qrcodegen.o(.text);
+        BUILD_DIR/src/pipeline/port_stub_c99.o(.text);
+        /* Renderer glue (spec #24, sub-issue #32): qr_render.o is the pure
+         * pixel-placement core (src/game/qr_render.c), qr_render_n64.o is
+         * its thin N64-only shell (src/game/qr_render_n64.c) -- both are
+         * src/game/*.c files, so, like interaction.o's own pipeline
+         * entries above, they need explicit placement here or become
+         * linker orphans (see the sub-issue #31 comment above for why).
+         * Placed right after the pipeline objects since qr_render.o itself
+         * depends on qr_adapter.h. */
+        BUILD_DIR/src/game/qr_render.o(.text);
+        BUILD_DIR/src/game/qr_render_n64.o(.text);
         BUILD_DIR/src/game/mario.o(.text);
         BUILD_DIR/src/game/mario_step.o(.text);
         BUILD_DIR/src/game/mario_actions_cutscene.o(.text);
@@ -634,6 +676,18 @@ SECTIONS
 #endif
         BUILD_DIR/src/game/level_update.o(.data*);
         BUILD_DIR/src/game/interaction.o(.data*);
+        BUILD_DIR/src/pipeline/build_event.o(.data*);
+        BUILD_DIR/src/pipeline/capture.o(.data*);
+        BUILD_DIR/src/pipeline/event_id.o(.data*);
+        BUILD_DIR/src/pipeline/schnorr_adapter.o(.data*);
+        BUILD_DIR/src/pipeline/pack_adapter.o(.data*);
+        BUILD_DIR/src/pipeline/qr_adapter.o(.data*);
+        BUILD_DIR/src/pipeline/sha256.o(.data*);
+        BUILD_DIR/src/pipeline/secp256k1.o(.data*);
+        BUILD_DIR/src/pipeline/qrcodegen.o(.data*);
+        BUILD_DIR/src/pipeline/port_stub_c99.o(.data*);
+        BUILD_DIR/src/game/qr_render.o(.data*);
+        BUILD_DIR/src/game/qr_render_n64.o(.data*);
         BUILD_DIR/src/game/mario.o(.data*);
         BUILD_DIR/src/game/mario_step.o(.data*);
         BUILD_DIR/src/game/mario_actions_cutscene.o(.data*);
@@ -769,6 +823,18 @@ SECTIONS
         BUILD_DIR/src/game/rumble_init.o(.rodata*);
         BUILD_DIR/src/game/level_update.o(.rodata*);
         BUILD_DIR/src/game/interaction.o(.rodata*);
+        BUILD_DIR/src/pipeline/build_event.o(.rodata*);
+        BUILD_DIR/src/pipeline/capture.o(.rodata*);
+        BUILD_DIR/src/pipeline/event_id.o(.rodata*);
+        BUILD_DIR/src/pipeline/schnorr_adapter.o(.rodata*);
+        BUILD_DIR/src/pipeline/pack_adapter.o(.rodata*);
+        BUILD_DIR/src/pipeline/qr_adapter.o(.rodata*);
+        BUILD_DIR/src/pipeline/sha256.o(.rodata*);
+        BUILD_DIR/src/pipeline/secp256k1.o(.rodata*);
+        BUILD_DIR/src/pipeline/qrcodegen.o(.rodata*);
+        BUILD_DIR/src/pipeline/port_stub_c99.o(.rodata*);
+        BUILD_DIR/src/game/qr_render.o(.rodata*);
+        BUILD_DIR/src/game/qr_render_n64.o(.rodata*);
         BUILD_DIR/src/game/mario.o(.rodata*);
         BUILD_DIR/src/game/mario_step.o(.rodata*);
         BUILD_DIR/src/game/mario_actions_cutscene.o(.rodata*);
@@ -902,6 +968,18 @@ SECTIONS
 #endif
         BUILD_DIR/src/game/level_update.o(.bss*);
         BUILD_DIR/src/game/interaction.o(.bss*);
+        BUILD_DIR/src/pipeline/build_event.o(.bss*);
+        BUILD_DIR/src/pipeline/capture.o(.bss*);
+        BUILD_DIR/src/pipeline/event_id.o(.bss*);
+        BUILD_DIR/src/pipeline/schnorr_adapter.o(.bss*);
+        BUILD_DIR/src/pipeline/pack_adapter.o(.bss*);
+        BUILD_DIR/src/pipeline/qr_adapter.o(.bss*);
+        BUILD_DIR/src/pipeline/sha256.o(.bss*);
+        BUILD_DIR/src/pipeline/secp256k1.o(.bss*);
+        BUILD_DIR/src/pipeline/qrcodegen.o(.bss*);
+        BUILD_DIR/src/pipeline/port_stub_c99.o(.bss*);
+        BUILD_DIR/src/game/qr_render.o(.bss*);
+        BUILD_DIR/src/game/qr_render_n64.o(.bss*);
         BUILD_DIR/src/game/mario.o(.bss*);
         BUILD_DIR/src/game/mario_actions_cutscene.o(.bss*);
         BUILD_DIR/src/game/mario_actions_moving.o(.bss*);
