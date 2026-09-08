@@ -514,14 +514,29 @@ $(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
 # staying in this "pure" list rather than the carve-out.
 PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o $(PIPELINE_C99_PORT_O)
 
-# pack_adapter.o #includes format_descriptor.h; make sure it's generated
-# first. build_event.o doesn't currently use event_profile.h, but the
-# dependency is harmless and keeps the ROM side honest as it grows.
-# event_id.o genuinely does #include event_profile.h (the baked
-# serialization prefix).
+# pack_adapter.o #includes format_descriptor.h directly; event_id.o
+# genuinely does #include event_profile.h (the baked serialization prefix).
+# build_event.o needs both: event_profile.h transitively (via event_id.h),
+# and format_descriptor.h directly -- build_event.h itself now #includes
+# format_descriptor.h for PIPELINE_FMT_TOTAL_SIZE (sub-issue #30, BuiltEvent's
+# packed_payload size). Because event_id.h/schnorr_adapter.h/qr_adapter.h ALL
+# #include build_event.h -- and so, transitively, do sha256.h and
+# secp256k1.h (both #include "build_event.h" too, for the pipeline_u8/
+# pipeline_u32 typedefs) -- format_descriptor.h is transitively required to
+# compile every one of these six objects, not just the four sub-issue #30
+# actually touched. Listed explicitly here (rather than left to transitive
+# #include order happening to already be right) so a clean/parallel build
+# can't compile any of them before the generated header exists. sha256.o/
+# secp256k1.o are built via the C99 carve-out rule below (different CC/
+# CFLAGS override), but a prerequisite is still a prerequisite regardless
+# of which rule ultimately builds the object.
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o: $(PIPELINE_EVENT_PROFILE_H)
-$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o: $(PIPELINE_EVENT_PROFILE_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/sha256.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/secp256k1.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 
 # Event profile header: derives the x-only pubkey from the per-event secret
 # (PIPELINE_PRIVKEY_FILE, checked for existence above) and bakes it, plus

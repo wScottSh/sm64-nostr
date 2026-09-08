@@ -29,6 +29,18 @@
  *   - an explicit check that the content double-serialization escaping
  *     (`"` -> `\"`) path is exercised in the serialized byte buffer, not
  *     just implied by opaque id equality.
+ *
+ * #30 wires the real build_event() (serialize -> id -> sign -> pack -> QR,
+ * see build_event.c) and adds the pipeline's first full-interface,
+ * end-to-end host test: build_event() for a real StarCapture + the BIP-340
+ * KAT privkey, then (a) decode qr_bitmap and assert it equals
+ * packed_payload exactly, (b) unpack packed_payload, recompute the id from
+ * the rebuilt StarCapture, assert that id matches the same nostr-tools
+ * reference id already pinned for vector A in #28, and assert the
+ * signature matches an independently-computed BIP-340 signature
+ * (@noble/curves oracle, see tools/verify_schnorr_reference.js's
+ * conventions) and verifies, and (c) flip one payload content byte and
+ * assert verification against the original signature now fails.
  */
 #include <stdio.h>
 #include <string.h>
@@ -54,34 +66,152 @@ static void check(int ok, const char *what)
     }
 }
 
-static void test_build_event_stub(void)
+/*
+ * build_event() end-to-end host test (spec #24, sub-issue #30).
+ *
+ * Uses StarCapture "vector A" -- the exact same values as
+ * test_event_id_matches_reference()/test_content_escaping_path() above
+ * (course=15, act=6, coins=100, frames=0x01020304, nonce16=0xCAFE,
+ * keyId=0) -- signed with the BIP-340 KAT privkey (=3, the same key baked
+ * into this host tool's generated event_profile.h, TEST_PRIVKEY_HEX in the
+ * Makefile), so the expected id (kExpectedIdA there) and pubkey
+ * (kExpectedPubkey in test_pubkey_known_answer) are already independently
+ * pinned oracle values this test can reuse directly.
+ *
+ * kBuildEventExpectedSig is the BIP-340 signature of that exact id
+ * (0x9d8360e4...58a7) under privkey 3 / aux_rand 0, independently computed
+ * via @noble/curves (the same genuinely-separate library
+ * tools/verify_schnorr_reference.js uses) -- NOT re-derived from this
+ * repo's own pipeline_schnorr_sign(). This is the "independent verifier
+ * convention already in the repo" this sub-issue's task calls for, applied
+ * to a dynamic (non-all-zero-message) signature instead of BIP-340's own
+ * canned test vector 0.
+ */
+static const pipeline_u8 kBuildEventPrivkey[PIPELINE_KEY_SIZE] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+};
+static const pipeline_u8 kBuildEventExpectedIdA[PIPELINE_EVENT_ID_SIZE] = {
+    0x9d, 0x83, 0x60, 0xe4, 0x0c, 0x2c, 0xbf, 0x09, 0xbb, 0xe5, 0x88, 0x73, 0x5c, 0xc7, 0xc4, 0xf7,
+    0xe6, 0x11, 0x26, 0x01, 0x2c, 0x7a, 0x5d, 0x1a, 0x8e, 0xdc, 0x6f, 0xb5, 0x37, 0x07, 0x58, 0xa7,
+};
+static const pipeline_u8 kBuildEventExpectedSig[PIPELINE_SCHNORR_SIG_SIZE] = {
+    0x47, 0xce, 0x83, 0xa9, 0xa6, 0x5e, 0xd6, 0x20, 0xbd, 0x7a, 0x7f, 0xf2, 0x2a, 0x08, 0x77, 0xc0,
+    0x71, 0x82, 0x7d, 0xb2, 0x8d, 0x86, 0x6c, 0x94, 0xcb, 0xad, 0xeb, 0x76, 0xdd, 0x4c, 0xe6, 0x7d,
+    0x65, 0x87, 0x98, 0x0d, 0x39, 0xf7, 0x63, 0x87, 0xff, 0xc3, 0x9f, 0xc4, 0xf1, 0xfe, 0x06, 0x3b,
+    0x7f, 0xd8, 0x15, 0xb2, 0x00, 0x83, 0x3a, 0x51, 0xc9, 0x49, 0xc8, 0x7d, 0xba, 0x6a, 0x66, 0xa9,
+};
+
+static void test_build_event_end_to_end(void)
 {
     StarCapture capture;
-    pipeline_u8 key[PIPELINE_KEY_SIZE];
     BuiltEvent event;
-    pipeline_u8 expected[PIPELINE_STUB_PAYLOAD_SIZE];
-    int i;
+    int buildOk;
+    unsigned char decoded[PIPELINE_BUILT_PAYLOAD_SIZE];
+    int decodedLen = -1;
+    int decodeOk;
+    StarCapture rebuilt;
+    pipeline_u8 sigOut[PIPELINE_FMT_SIZE_SIG];
+    int unpackRc;
+    pipeline_u8 recomputedId[PIPELINE_EVENT_ID_SIZE];
+    static const pipeline_u8 pubkey[32] = PIPELINE_EVENT_PUBKEY_BYTES;
+    int verifyOk;
 
-    capture.course  = 9;
-    capture.act     = 1;
-    capture.coins   = 42;
-    capture.frames  = 1234;
-    capture.nonce16 = 0xBEEF;
+    capture.course  = 15;
+    capture.act     = 6;
+    capture.coins   = 100;
+    capture.frames  = 0x01020304u;
+    capture.nonce16 = 0xCAFE;
     capture.keyId   = 0;
 
-    for (i = 0; i < PIPELINE_KEY_SIZE; i++) {
-        key[i] = (pipeline_u8)i;
+    buildOk = build_event(&capture, kBuildEventPrivkey, &event);
+    check(buildOk != 0, "build_event succeeds end-to-end for a real StarCapture + key");
+    if (!buildOk) {
+        return;
     }
 
-    build_event(&capture, key, &event);
+    /* Report the actual packed payload size against the ~88 B spine (spec
+     * #24): the literal 75 pins the current format_descriptor.json shape,
+     * the same value test_format_descriptor_round_trip() already pins. */
+    check(PIPELINE_BUILT_PAYLOAD_SIZE == 75u,
+          "build_event's packed_payload size is 75 B, within the ~88 B spine budget");
 
-    expected[0] = capture.course;
-    expected[1] = capture.act;
-    expected[2] = capture.coins;
-    expected[3] = (pipeline_u8)(0xA5 ^ key[0]); /* port_stub_marker() ^ key[0] */
+    /* (a) the host decodes qr_bitmap back to the exact packed_payload. */
+    decodeOk = qr_host_decode(event.qr_bitmap, decoded, (int)sizeof(decoded), &decodedLen);
+    check(decodeOk != 0 && decodedLen == (int)PIPELINE_BUILT_PAYLOAD_SIZE &&
+          memcmp(decoded, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
+          "qr_bitmap decodes back to the exact packed_payload byte-for-byte");
 
-    check(memcmp(event.payload, expected, PIPELINE_STUB_PAYLOAD_SIZE) == 0,
-          "pipeline stub build_event byte-exact");
+    /* (b) the host unpack+verify adapter (format-descriptor-derived)
+     * rebuilds the event, recomputes the id, and verifies the signature. */
+    unpackRc = pipeline_unpack(event.packed_payload, &rebuilt, sigOut);
+    check(unpackRc == 0, "host pipeline_unpack accepts build_event's packed_payload");
+    check(rebuilt.course == capture.course && rebuilt.act == capture.act &&
+          rebuilt.coins == capture.coins && rebuilt.frames == capture.frames &&
+          rebuilt.nonce16 == capture.nonce16 && rebuilt.keyId == capture.keyId,
+          "unpacked StarCapture fields match the original capture exactly");
+
+    pipeline_event_compute_id(&rebuilt, recomputedId);
+    check(memcmp(recomputedId, kBuildEventExpectedIdA, PIPELINE_EVENT_ID_SIZE) == 0,
+          "recomputed id from the rebuilt event matches the nostr-tools reference id (vector A)");
+
+    check(memcmp(sigOut, kBuildEventExpectedSig, PIPELINE_SCHNORR_SIG_SIZE) == 0,
+          "build_event's signature matches the independently-computed BIP-340 signature (@noble/curves oracle)");
+
+    verifyOk = pipeline_schnorr_verify(recomputedId, pubkey, sigOut);
+    check(verifyOk != 0,
+          "signature verifies against the recomputed id and the build's pubkey (rebuild-id+verify-accept)");
+
+    /* (c) a single flipped payload byte fails verification. Flip a content
+     * byte (COURSE), not the signature itself: pipeline_unpack still
+     * accepts the structurally well-formed payload and returns the
+     * ORIGINAL (untouched) signature, but the rebuilt StarCapture's id no
+     * longer matches what that signature actually signs, so verification
+     * against it must fail -- proving the signature is tamper-evident over
+     * the packed content, not just structurally checked.
+     *
+     * Scope note: this holds for COURSE/ACT/COINS/FRAMES/NONCE16 -- the
+     * exact fields event_id.c's pipeline_event_build_content() serializes
+     * into the signed content (event_id.h's own documented content shape,
+     * fixed by spec #24/sub-issue #28) -- and for the SIG bytes themselves
+     * (any change there is, trivially, a different signature). It does NOT
+     * hold for every one of the 75 packed bytes: FORMAT_TAG is checked
+     * structurally by pipeline_unpack() (see the second check below, not
+     * cryptographically), and KEY_ID is packed metadata that #28's content
+     * shape never serializes, so a flipped KEY_ID byte alone
+     * changes neither the recomputed id nor the signature check -- it is
+     * *not* covered by this event's signature. That is an inherited
+     * property of the content shape #28 already fixed and reference-id-
+     * pinned against nostr-tools (out of scope to change here); it is
+     * flagged rather than silently assumed away. */
+    {
+        pipeline_u8 corrupted[PIPELINE_BUILT_PAYLOAD_SIZE];
+        StarCapture corruptCapture;
+        pipeline_u8 corruptSig[PIPELINE_FMT_SIZE_SIG];
+        pipeline_u8 corruptId[PIPELINE_EVENT_ID_SIZE];
+        int corruptVerify;
+        int corruptUnpackRc;
+
+        memcpy(corrupted, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE);
+        corrupted[PIPELINE_FMT_OFF_COURSE] ^= 0x01;
+
+        pipeline_unpack(corrupted, &corruptCapture, corruptSig);
+        pipeline_event_compute_id(&corruptCapture, corruptId);
+        corruptVerify = pipeline_schnorr_verify(corruptId, pubkey, corruptSig);
+        check(corruptVerify == 0,
+              "flipping one packed_payload byte (a signed content field) makes signature verification fail");
+
+        /* A flipped FORMAT_TAG byte is rejected structurally, before
+         * verification is even attempted -- a different, but equally
+         * real, tamper-evidence path. */
+        memcpy(corrupted, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE);
+        corrupted[PIPELINE_FMT_OFF_FORMAT_TAG] ^= 0x01;
+        corruptUnpackRc = pipeline_unpack(corrupted, &corruptCapture, corruptSig);
+        check(corruptUnpackRc != 0,
+              "flipping the FORMAT_TAG byte is rejected structurally by pipeline_unpack");
+    }
 }
 
 /*
@@ -503,7 +633,6 @@ int main(void)
 {
     test_format_descriptor_round_trip();
     test_pubkey_known_answer();
-    test_build_event_stub();
     test_qr_round_trip_representative_sizes();
     test_qr_rejects_over_budget_cleanly();
     test_sha256_known_answer_vectors();
@@ -512,6 +641,7 @@ int main(void)
     test_schnorr_signing_known_answer();
     test_schnorr_verify_internal_self_consistency();
     test_schnorr_sign_is_deterministic();
+    test_build_event_end_to_end();
 
     if (g_failures != 0) {
         printf("%d check(s) FAILED\n", g_failures);
