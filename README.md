@@ -162,7 +162,7 @@ gmake VERSION=us COMPARE=0 -j4
 	├── data: behavior scripts, misc. data
 	├── doxygen: documentation infrastructure
 	├── enhancements: example source modifications
-	├── include: header files (incl. event_profile.h.in, the baked event shape, and secp256k1_baked.h.in, the baked signing public point)
+	├── include: header files (incl. event_profile.h.in, the baked event shape, and secp256k1_baked.h.in, the baked signing public point and fixed-base comb table for k*G)
 	├── keys: gitignored per-event signing key + registry (see keys/README.md)
 	├── levels: level scripts, geo layout, and display lists
 	├── lib: SDK library code
