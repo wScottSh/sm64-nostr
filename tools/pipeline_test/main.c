@@ -65,6 +65,27 @@
  *     course/act/coins/frames/nonce") demonstrated by construction: both
  *     paths call the same pipeline_capture_build()/build_event(), so
  *     identical inputs structurally cannot diverge.
+ *
+ * #32 adds test_qr_render_blit_round_trips_through_decode() (renderer
+ * glue, src/game/qr_render.h/.c): renders a real build_event() qr_bitmap
+ * into an in-memory plain RGBA16 buffer via the SAME pure
+ * qr_render_blit_rgba16() the ROM build compiles (src/game is compiled a
+ * second time here, unmodified, exactly like src/pipeline already is), then
+ * reconstructs the module grid by sampling the CENTER pixel of every
+ * module's scaled block back out of that buffer (reversing the fixed
+ * integer scale + quiet zone qr_render.h documents), packs the
+ * reconstruction into a qrcodegen-format buffer using the same public
+ * bit-packing layout qrcodegen_getModule()/qr_adapter.h's own accessors
+ * read (byte 0 = grid size, then row-major bits packed LSB-first per byte
+ * starting at byte 1 -- see qrcodegen.c's getModuleBounded()/
+ * setModuleBounded()), and feeds that reconstruction to the existing
+ * qr_host_decode() -- asserting the decoded bytes equal build_event()'s own
+ * packed_payload exactly. Also asserts quiet-zone pixels are exactly
+ * QR_RENDER_WHITE_RGBA16 and that the module block size is exactly
+ * QR_RENDER_MODULE_SCALE_PX pixels (every pixel in a block matches its
+ * module's color, and pixels just outside the block on both axes differ
+ * whenever the neighboring module differs) -- proving the blit is faithful
+ * without an emulator/camera (spec #24 acceptance criterion #16's spirit).
  */
 #include <stdio.h>
 #include <string.h>
@@ -78,6 +99,7 @@
 #include "event_id.h"
 #include "schnorr_adapter.h"
 #include "capture.h"
+#include "qr_render.h"
 
 static int g_failures = 0;
 
@@ -237,6 +259,150 @@ static void test_build_event_end_to_end(void)
         check(corruptUnpackRc != 0,
               "flipping the FORMAT_TAG byte is rejected structurally by pipeline_unpack");
     }
+}
+
+#define QR_RENDER_TEST_FB_WIDTH  320
+#define QR_RENDER_TEST_FB_HEIGHT 240
+
+/*
+ * qr_render_blit_rgba16() round-trip test (spec #24, sub-issue #32). See
+ * the file header comment above for the full render->reconstruct->decode
+ * shape. Uses a StarCapture distinct from vector A above just to exercise
+ * a different payload, signed with the same BIP-340 KAT privkey.
+ */
+static void test_qr_render_blit_round_trips_through_decode(void)
+{
+    StarCapture capture;
+    BuiltEvent event;
+    int buildOk;
+    static unsigned short fb[QR_RENDER_TEST_FB_WIDTH * QR_RENDER_TEST_FB_HEIGHT];
+    int gridSize;
+    int imageSize;
+    int originX, originY;
+    int row, col;
+    int allQuietZoneWhite = 1;
+    int allBlocksExact = 1;
+    pipeline_u8 reconstructed[PIPELINE_QR_BUFFER_LEN];
+    unsigned char decoded[PIPELINE_BUILT_PAYLOAD_SIZE];
+    int decodedLen = -1;
+    int decodeOk;
+    int px, py;
+    int i;
+
+    capture.course  = 3;
+    capture.act     = 1;
+    capture.coins   = 42;
+    capture.frames  = 0x0A0B0C0Du;
+    capture.nonce16 = 0xBEEF;
+    capture.keyId   = 0;
+
+    buildOk = build_event(&capture, kBuildEventPrivkey, &event);
+    check(buildOk != 0, "qr_render: build_event succeeds for the render test's StarCapture");
+    if (!buildOk) {
+        return;
+    }
+
+    /* Sentinel-fill the whole framebuffer with a color qr_render never
+     * writes (neither QR_RENDER_WHITE_RGBA16 nor QR_RENDER_BLACK_RGBA16),
+     * so the geometry assertions below can't accidentally pass against
+     * leftover zero-initialized memory. */
+    for (i = 0; i < QR_RENDER_TEST_FB_WIDTH * QR_RENDER_TEST_FB_HEIGHT; i++) {
+        fb[i] = 0x1234;
+    }
+
+    /* Compute expected geometry and assert the image fits BEFORE calling
+     * the blit -- qr_render_blit_rgba16() itself now refuses to write
+     * anything if this doesn't hold (see qr_render.c's own defensive
+     * bound), but this test's own geometry assertions must not run after
+     * a call that could, in principle, already have misbehaved. */
+    gridSize  = pipeline_qr_get_size(event.qr_bitmap);
+    imageSize = (gridSize + 2 * QR_RENDER_QUIET_ZONE_MODULES) * QR_RENDER_MODULE_SCALE_PX;
+    originX = (QR_RENDER_TEST_FB_WIDTH  - imageSize) / 2;
+    originY = (QR_RENDER_TEST_FB_HEIGHT - imageSize) / 2;
+
+    check(imageSize == QR_RENDER_IMAGE_SIZE_PX,
+          "qr_render: computed image size matches QR_RENDER_IMAGE_SIZE_PX (196x196 for v6/scale4/quiet4)");
+    check(imageSize <= QR_RENDER_TEST_FB_WIDTH && imageSize <= QR_RENDER_TEST_FB_HEIGHT,
+          "qr_render: image fits within the 320x240 N64 framebuffer");
+    if (imageSize > QR_RENDER_TEST_FB_WIDTH || imageSize > QR_RENDER_TEST_FB_HEIGHT) {
+        return;
+    }
+
+    qr_render_blit_rgba16(event.qr_bitmap, fb, QR_RENDER_TEST_FB_WIDTH, QR_RENDER_TEST_FB_HEIGHT);
+
+    /* Quiet-zone assertion: every pixel in the fixed-width quiet-zone ring
+     * is exactly QR_RENDER_WHITE_RGBA16 -- never the pre-blit sentinel and
+     * never black. */
+    for (py = 0; py < imageSize && allQuietZoneWhite; py++) {
+        for (px = 0; px < imageSize; px++) {
+            int moduleCol = px / QR_RENDER_MODULE_SCALE_PX - QR_RENDER_QUIET_ZONE_MODULES;
+            int moduleRow = py / QR_RENDER_MODULE_SCALE_PX - QR_RENDER_QUIET_ZONE_MODULES;
+            int inQuietZone = moduleCol < 0 || moduleCol >= gridSize || moduleRow < 0 || moduleRow >= gridSize;
+            if (inQuietZone) {
+                unsigned short pixel = fb[(originY + py) * QR_RENDER_TEST_FB_WIDTH + (originX + px)];
+                if (pixel != QR_RENDER_WHITE_RGBA16) {
+                    allQuietZoneWhite = 0;
+                    break;
+                }
+            }
+        }
+    }
+    check(allQuietZoneWhite, "qr_render: every quiet-zone pixel is exactly QR_RENDER_WHITE_RGBA16");
+
+    /* Module-scale exactness: every pixel within a module's scaled block
+     * matches that module's own color -- the scale is exact, not
+     * approximate or off-by-one. */
+    for (row = 0; row < gridSize && allBlocksExact; row++) {
+        for (col = 0; col < gridSize && allBlocksExact; col++) {
+            int isDark = pipeline_qr_get_module(event.qr_bitmap, col, row);
+            unsigned short expected = isDark ? QR_RENDER_BLACK_RGBA16 : QR_RENDER_WHITE_RGBA16;
+            int blockX = originX + (QR_RENDER_QUIET_ZONE_MODULES + col) * QR_RENDER_MODULE_SCALE_PX;
+            int blockY = originY + (QR_RENDER_QUIET_ZONE_MODULES + row) * QR_RENDER_MODULE_SCALE_PX;
+            int dy, dx;
+            for (dy = 0; dy < QR_RENDER_MODULE_SCALE_PX && allBlocksExact; dy++) {
+                for (dx = 0; dx < QR_RENDER_MODULE_SCALE_PX; dx++) {
+                    unsigned short pixel = fb[(blockY + dy) * QR_RENDER_TEST_FB_WIDTH + (blockX + dx)];
+                    if (pixel != expected) {
+                        allBlocksExact = 0;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    check(allBlocksExact, "qr_render: every module's scaled block is an exact, uniform "
+                           "QR_RENDER_MODULE_SCALE_PX-square color match");
+
+    /* Reconstruct the module grid by sampling each module's CENTER pixel
+     * back out of the RGBA16 buffer, and pack it into a qrcodegen-format
+     * buffer (byte 0 = grid size; row-major bits, LSB-first per byte,
+     * starting at byte 1 -- qrcodegen.c's own getModuleBounded()/
+     * setModuleBounded() layout, the same format pipeline_qr_get_module()
+     * reads), then feed it to the existing host QR decoder -- proving the
+     * blit is faithful without a camera or emulator. */
+    memset(reconstructed, 0, sizeof(reconstructed));
+    reconstructed[0] = (pipeline_u8) gridSize;
+    for (row = 0; row < gridSize; row++) {
+        int blockY = originY + (QR_RENDER_QUIET_ZONE_MODULES + row) * QR_RENDER_MODULE_SCALE_PX;
+        int sampleY = blockY + QR_RENDER_MODULE_SCALE_PX / 2;
+        for (col = 0; col < gridSize; col++) {
+            int blockX = originX + (QR_RENDER_QUIET_ZONE_MODULES + col) * QR_RENDER_MODULE_SCALE_PX;
+            int sampleX = blockX + QR_RENDER_MODULE_SCALE_PX / 2;
+            unsigned short pixel = fb[sampleY * QR_RENDER_TEST_FB_WIDTH + sampleX];
+            int isDark = (pixel == QR_RENDER_BLACK_RGBA16);
+            int index = row * gridSize + col;
+            int bitIndex = index & 7;
+            int byteIndex = (index >> 3) + 1;
+            if (isDark) {
+                reconstructed[byteIndex] |= (pipeline_u8) (1 << bitIndex);
+            }
+        }
+    }
+
+    decodeOk = qr_host_decode(reconstructed, decoded, (int) sizeof(decoded), &decodedLen);
+    check(decodeOk != 0 && decodedLen == (int) PIPELINE_BUILT_PAYLOAD_SIZE &&
+          memcmp(decoded, event.packed_payload, (size_t) PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
+          "qr_render: render->reconstruct->decode == build_event's exact packed_payload");
 }
 
 /*
@@ -808,6 +974,7 @@ int main(void)
     test_build_event_end_to_end();
     test_capture_build_known_answer();
     test_capture_matches_host_build_event();
+    test_qr_render_blit_round_trips_through_decode();
 
     if (g_failures != 0) {
         printf("%d check(s) FAILED\n", g_failures);

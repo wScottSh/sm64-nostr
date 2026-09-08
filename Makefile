@@ -570,6 +570,15 @@ $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/secp256k1.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 # `all: $(ROM)`) before either generated header exists.
 $(BUILD_DIR)/src/game/interaction.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
 
+# qr_render.o/qr_render_n64.o (sub-issue #32, renderer glue) #include
+# qr_render.h -> pipeline/qr_adapter.h -> pipeline/build_event.h ->
+# format_descriptor.h -- the same generated-header hazard interaction.o's
+# own prerequisite line above already documents (src/game sorts before
+# src/pipeline in SRC_DIRS). Unlike interaction.o, neither file touches
+# event_profile.h, so only the format descriptor is needed here.
+$(BUILD_DIR)/src/game/qr_render.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/src/game/qr_render_n64.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+
 # Event profile header: derives the x-only pubkey from the per-event secret
 # (PIPELINE_PRIVKEY_FILE, checked for existence above) and bakes it, plus
 # the fixed event shape (kind 8064, the two `t` tags, build-epoch

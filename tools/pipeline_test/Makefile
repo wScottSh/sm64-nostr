@@ -63,21 +63,44 @@
 # bytes are byte-identical to a StarCapture built directly. Since both
 # paths call the SAME pipeline_capture_build() and the SAME build_event(),
 # byte-identity holds by construction rather than by executing the ROM.
+#
+# Sub-issue #32 adds ../../src/game/qr_render.c -- the renderer glue's PURE
+# pixel-placement core (see src/game/qr_render.h). This is the SAME source
+# the ROM build compiles from src/game (one of the Makefile's own SRC_DIRS),
+# unmodified, mirroring how src/pipeline/*.c is already compiled twice.
+# main.c's test_qr_render_blit_round_trips_through_decode() renders a real
+# build_event() qr_bitmap into an in-memory RGBA16 buffer via
+# qr_render_blit_rgba16(), reconstructs the module grid by reading pixels
+# back out of that buffer (reversing the fixed scale + quiet zone), packs
+# that reconstructed grid into a qrcodegen-format buffer, and feeds it to
+# the existing qr_host_decode() -- asserting the decoded bytes equal
+# build_event()'s own packed_payload exactly. This proves the blit is
+# faithful without an emulator/camera. GAME_DIR/-I below only ever reaches
+# qr_render.c/.h -- never qr_render_n64.c/.h, which include <ultra64.h> and
+# so are deliberately excluded from this host build (see qr_render_n64.h's
+# header comment).
 
 CC           := gcc
 PYTHON       := python3
+SRC_DIR      := ../../src
 PIPELINE_DIR := ../../src/pipeline
+GAME_DIR     := ../../src/game
 TOOLS_DIR    := ..
 BUILD_DIR    := build
 INC_DIR      := $(BUILD_DIR)/include
 
-CFLAGS := -std=gnu99 -Wall -Wextra -I $(PIPELINE_DIR) -I $(INC_DIR)
+# -I $(SRC_DIR) mirrors the ROM build's own INCLUDE_DIRS (which includes
+# plain "src"): qr_render.h's #include "pipeline/qr_adapter.h" is written
+# relative to src/, exactly like src/game/interaction.c's own
+# #include "pipeline/build_event.h" (spec #24, sub-issue #31) -- so it must
+# resolve identically here.
+CFLAGS := -std=gnu99 -Wall -Wextra -I $(SRC_DIR) -I $(PIPELINE_DIR) -I $(GAME_DIR) -I $(INC_DIR)
 
 SRCS := main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c $(PIPELINE_DIR)/pack_adapter.c \
         $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c qr_host_decode.c \
         $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c \
         $(PIPELINE_DIR)/secp256k1.c $(PIPELINE_DIR)/schnorr_adapter.c \
-        $(PIPELINE_DIR)/capture.c
+        $(PIPELINE_DIR)/capture.c $(GAME_DIR)/qr_render.c
 BIN  := pipeline_test
 
 # BIP-340 test vector 0 (privkey=3): a fixed, published known-answer key,

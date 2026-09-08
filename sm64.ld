@@ -179,6 +179,16 @@ SECTIONS
         BUILD_DIR/src/pipeline/secp256k1.o(.text);
         BUILD_DIR/src/pipeline/qrcodegen.o(.text);
         BUILD_DIR/src/pipeline/port_stub_c99.o(.text);
+        /* Renderer glue (spec #24, sub-issue #32): qr_render.o is the pure
+         * pixel-placement core (src/game/qr_render.c), qr_render_n64.o is
+         * its thin N64-only shell (src/game/qr_render_n64.c) -- both are
+         * src/game/*.c files, so, like interaction.o's own pipeline
+         * entries above, they need explicit placement here or become
+         * linker orphans (see the sub-issue #31 comment above for why).
+         * Placed right after the pipeline objects since qr_render.o itself
+         * depends on qr_adapter.h. */
+        BUILD_DIR/src/game/qr_render.o(.text);
+        BUILD_DIR/src/game/qr_render_n64.o(.text);
         BUILD_DIR/src/game/mario.o(.text);
         BUILD_DIR/src/game/mario_step.o(.text);
         BUILD_DIR/src/game/mario_actions_cutscene.o(.text);
@@ -676,6 +686,8 @@ SECTIONS
         BUILD_DIR/src/pipeline/secp256k1.o(.data*);
         BUILD_DIR/src/pipeline/qrcodegen.o(.data*);
         BUILD_DIR/src/pipeline/port_stub_c99.o(.data*);
+        BUILD_DIR/src/game/qr_render.o(.data*);
+        BUILD_DIR/src/game/qr_render_n64.o(.data*);
         BUILD_DIR/src/game/mario.o(.data*);
         BUILD_DIR/src/game/mario_step.o(.data*);
         BUILD_DIR/src/game/mario_actions_cutscene.o(.data*);
@@ -821,6 +833,8 @@ SECTIONS
         BUILD_DIR/src/pipeline/secp256k1.o(.rodata*);
         BUILD_DIR/src/pipeline/qrcodegen.o(.rodata*);
         BUILD_DIR/src/pipeline/port_stub_c99.o(.rodata*);
+        BUILD_DIR/src/game/qr_render.o(.rodata*);
+        BUILD_DIR/src/game/qr_render_n64.o(.rodata*);
         BUILD_DIR/src/game/mario.o(.rodata*);
         BUILD_DIR/src/game/mario_step.o(.rodata*);
         BUILD_DIR/src/game/mario_actions_cutscene.o(.rodata*);
@@ -964,6 +978,8 @@ SECTIONS
         BUILD_DIR/src/pipeline/secp256k1.o(.bss*);
         BUILD_DIR/src/pipeline/qrcodegen.o(.bss*);
         BUILD_DIR/src/pipeline/port_stub_c99.o(.bss*);
+        BUILD_DIR/src/game/qr_render.o(.bss*);
+        BUILD_DIR/src/game/qr_render_n64.o(.bss*);
         BUILD_DIR/src/game/mario.o(.bss*);
         BUILD_DIR/src/game/mario_actions_cutscene.o(.bss*);
         BUILD_DIR/src/game/mario_actions_moving.o(.bss*);
