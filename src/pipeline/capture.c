@@ -2,13 +2,36 @@
  * See capture.h. The 12-byte nonce-input buffer is built one explicit byte
  * at a time (never memcpy/struct-layout), the same discipline
  * pack_adapter.c/event_id.c document for their own serialization.
+ *
+ * write_u16_be/write_u32_be below are intentionally kept as local file-static
+ * copies of pack_adapter.c's identically-shaped helpers rather than shared
+ * from a common header: this translation unit compiles under the whole-build
+ * COMPILER (COMPILER=ido by default -- a C89 compiler), so a shared header
+ * could not use `static inline` (C99) and a plain `static` helper header
+ * would emit unused-function warnings in whichever TU didn't call all of
+ * them. The pipeline's pure objects are deliberately C89/IDO-clean (see the
+ * root Makefile's PIPELINE_ROM_OBJS comment); a five-line duplicated writer
+ * is the smaller cost.
  */
 
 #include "capture.h"
-#include "byteorder.h"
 #include "sha256.h"
 
 #define PIPELINE_CAPTURE_NONCE_INPUT_SIZE 12
+
+static void write_u32_be(pipeline_u8 *out, pipeline_u32 offset, pipeline_u32 value)
+{
+    out[offset]     = (pipeline_u8)((value >> 24) & 0xFF);
+    out[offset + 1] = (pipeline_u8)((value >> 16) & 0xFF);
+    out[offset + 2] = (pipeline_u8)((value >> 8) & 0xFF);
+    out[offset + 3] = (pipeline_u8)(value & 0xFF);
+}
+
+static void write_u16_be(pipeline_u8 *out, pipeline_u32 offset, pipeline_u16 value)
+{
+    out[offset]     = (pipeline_u8)((value >> 8) & 0xFF);
+    out[offset + 1] = (pipeline_u8)(value & 0xFF);
+}
 
 static pipeline_u16 pipeline_capture_hash_nonce(pipeline_u32 osCount,
                                                  pipeline_u32 globalTimer,
@@ -19,11 +42,11 @@ static pipeline_u16 pipeline_capture_hash_nonce(pipeline_u32 osCount,
     pipeline_u8 input[PIPELINE_CAPTURE_NONCE_INPUT_SIZE];
     pipeline_u8 digest[PIPELINE_SHA256_DIGEST_SIZE];
 
-    pipeline_write_u32_be(input, 0, osCount);
-    pipeline_write_u32_be(input, 4, globalTimer);
+    write_u32_be(input, 0, osCount);
+    write_u32_be(input, 4, globalTimer);
     input[8] = rawStickX;
     input[9] = rawStickY;
-    pipeline_write_u16_be(input, 10, buttonMask);
+    write_u16_be(input, 10, buttonMask);
 
     pipeline_sha256(input, PIPELINE_CAPTURE_NONCE_INPUT_SIZE, digest);
 

@@ -5,10 +5,9 @@
  * add/sub/multiply loops below (ascending index = ascending significance).
  * This is the OPPOSITE of the big-endian byte order BIP-340 encodes values
  * in; pipeline_secp256k1_num_from_bytes/_to_bytes are the only two places
- * that ever reverse between the two, exactly like byteorder.h's
- * pipeline_write_u32_be/pipeline_read_u32_be are the shared big-endian
- * (de)serializers for the pipeline's wire/nonce byte buffers. No other
- * function in this file, nor any caller, may assume a
+ * that ever reverse between the two, exactly like pack_adapter.c's
+ * write_u32_be/read_u32_be are the only byte-order-aware functions in this
+ * codebase. No other function in this file, nor any caller, may assume a
  * particular word order -- construct/read every pipeline_secp256k1_num via
  * those two functions or the arithmetic functions in secp256k1.h.
  *
