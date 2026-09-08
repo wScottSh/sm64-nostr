@@ -28,7 +28,12 @@
  * per StarCapture.
  *
  * Content shape (fixed key order, matching #28's acceptance criteria):
- *   {"course":<u8>,"act":<u8>,"coins":<u8>,"frames":<u32>,"nonce":<u16>}
+ *   {"course":<u8>,"act":<u8>,"coins":<u8>,"frames":<u32>,"nonce":<u16>,"keyId":<u8>}
+ * keyId (the star index) is part of the SIGNED content, not just the packed
+ * wire payload: for stars where `act` alone doesn't identify which star was
+ * grabbed (100-coin/secret-course stars) it is load-bearing leaderboard
+ * identity, so it must be tamper-evident under the event signature like every
+ * other run value (spec #24 user story 1, "no chance to tamper").
  */
 
 #include "build_event.h"
@@ -37,11 +42,11 @@
 
 /* Generous fixed upper bound on the content JSON's length (unescaped):
  * literal/key overhead (`{"course":`=10, `,"act":`=7, `,"coins":`=9,
- * `,"frames":`=10, `,"nonce":`=9, `}`=1) is 46 bytes, plus up to
- * 3+3+3+10+5 = 24 decimal digits for course/act/coins (u8, max 3 digits
- * each), frames (u32, max 10 digits), and nonce (u16, max 5 digits) = 70
- * bytes total, plus 1 for the NUL terminator pipeline_event_build_content()
- * writes. Rounded up with margin. */
+ * `,"frames":`=10, `,"nonce":`=9, `,"keyId":`=9, `}`=1) is 55 bytes, plus up
+ * to 3+3+3+10+5+3 = 27 decimal digits for course/act/coins (u8, max 3 digits
+ * each), frames (u32, max 10 digits), nonce (u16, max 5 digits), and keyId
+ * (u8, max 3 digits) = 82 bytes total, plus 1 for the NUL terminator
+ * pipeline_event_build_content() writes. Rounded up with margin. */
 #define PIPELINE_EVENT_CONTENT_MAX 128
 
 /* Generous fixed upper bound on the full canonical serialization's length:

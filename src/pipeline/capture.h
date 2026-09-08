@@ -42,18 +42,15 @@
  * the call site (interact_star_or_key), before this function is ever
  * reached, not inside it: keyId's job here is only star-index carriage.
  *
- * KNOWN GAP (spec #24, flagged at sub-issue #31, owned by #28's content
- * shape): keyId travels in the packed wire payload (pack_adapter.c's
- * KEY_ID field) but is NOT part of the signed content
- * (event_id.c's pipeline_event_build_content() serializes only
- * {course, act, coins, frames, nonce}) -- so a tampered keyId still
- * verifies against the original Schnorr signature. For stars where `act`
- * alone doesn't identify which star was grabbed (100-coin/secret-course
- * stars), keyId is load-bearing, so this is a real tamper-evidence hole
- * against #24's "no chance to tamper" problem statement, not a cosmetic
- * one. Out of #31's scope (event_id.c's content shape is #28's, already
- * landed and pinned against independent id/signature oracles) -- tracked
- * as a follow-up against #28/#24, not fixed here.
+ * keyId is BOTH packed into the wire payload (pack_adapter.c's KEY_ID field)
+ * AND serialized into the signed content (event_id.c's
+ * pipeline_event_build_content(), key order
+ * {course, act, coins, frames, nonce, keyId}) -- so a tampered keyId no
+ * longer verifies against the original Schnorr signature. This closes the
+ * tamper-evidence hole for stars where `act` alone doesn't identify which
+ * star was grabbed (100-coin/secret-course stars), where keyId is
+ * load-bearing star identity, honoring #24's "no chance to tamper" problem
+ * statement (user story 1).
  */
 void pipeline_capture_build(pipeline_u8 course,
                              pipeline_u8 act,

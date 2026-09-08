@@ -48,8 +48,8 @@ const CREATED_AT = 1700000000;
 const KIND = 8064;
 const TAGS = [['t', 'cabinet-leaderboard'], ['t', 'sm64']];
 
-function makeEvent(course, act, coins, frames, nonce) {
-  const content = JSON.stringify({ course, act, coins, frames, nonce });
+function makeEvent(course, act, coins, frames, nonce, keyId) {
+  const content = JSON.stringify({ course, act, coins, frames, nonce, keyId });
   return { pubkey: PUBKEY_HEX, created_at: CREATED_AT, kind: KIND, tags: TAGS, content };
 }
 
@@ -58,13 +58,13 @@ function makeEvent(course, act, coins, frames, nonce) {
 // exercises the `"` -> `\"` content-escaping path (JSON keys are always
 // quoted), which is why no separate non-escaping vector exists here.
 const vectors = [
-  { label: 'vector A (spec #24 format_descriptor test capture)', course: 15, act: 6, coins: 100, frames: 0x01020304, nonce: 0xcafe },
-  { label: 'vector B (sub-issue #25 stub capture)', course: 9, act: 1, coins: 42, frames: 1234, nonce: 0xbeef },
-  { label: 'vector C (all-zero edge case)', course: 0, act: 0, coins: 0, frames: 0, nonce: 0 },
+  { label: 'vector A (spec #24 format_descriptor test capture)', course: 15, act: 6, coins: 100, frames: 0x01020304, nonce: 0xcafe, keyId: 0 },
+  { label: 'vector B (sub-issue #25 stub capture)', course: 9, act: 1, coins: 42, frames: 1234, nonce: 0xbeef, keyId: 0 },
+  { label: 'vector C (all-zero edge case)', course: 0, act: 0, coins: 0, frames: 0, nonce: 0, keyId: 0 },
 ];
 
 for (const v of vectors) {
-  const event = makeEvent(v.course, v.act, v.coins, v.frames, v.nonce);
+  const event = makeEvent(v.course, v.act, v.coins, v.frames, v.nonce, v.keyId);
   console.log(v.label);
   console.log('  content:', event.content);
   console.log('  id:     ', getEventHash(event));

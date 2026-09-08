@@ -109,6 +109,8 @@ pipeline_u32 pipeline_event_build_content(const StarCapture *capture, char out[P
     offset = append_udec(o, offset, cap, capture->frames);
     offset = append_str(o, offset, cap, ",\"nonce\":");
     offset = append_udec(o, offset, cap, capture->nonce16);
+    offset = append_str(o, offset, cap, ",\"keyId\":");
+    offset = append_udec(o, offset, cap, capture->keyId);
     offset = append_str(o, offset, cap, "}");
     out[offset] = '\0';
 

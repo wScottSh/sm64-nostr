@@ -159,14 +159,14 @@ static const pipeline_u8 kBuildEventPrivkey[PIPELINE_KEY_SIZE] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
 };
 static const pipeline_u8 kBuildEventExpectedIdA[PIPELINE_EVENT_ID_SIZE] = {
-    0x9d, 0x83, 0x60, 0xe4, 0x0c, 0x2c, 0xbf, 0x09, 0xbb, 0xe5, 0x88, 0x73, 0x5c, 0xc7, 0xc4, 0xf7,
-    0xe6, 0x11, 0x26, 0x01, 0x2c, 0x7a, 0x5d, 0x1a, 0x8e, 0xdc, 0x6f, 0xb5, 0x37, 0x07, 0x58, 0xa7,
+    0xba, 0x23, 0x7b, 0x9e, 0x89, 0x1e, 0xde, 0x42, 0x12, 0x57, 0x1d, 0xed, 0x17, 0xbc, 0xe2, 0xa6,
+    0x16, 0x19, 0x1e, 0xc6, 0x7a, 0x76, 0x32, 0xd2, 0x8d, 0xc9, 0xc5, 0x47, 0xd3, 0x54, 0x83, 0xcc,
 };
 static const pipeline_u8 kBuildEventExpectedSig[PIPELINE_SCHNORR_SIG_SIZE] = {
-    0x47, 0xce, 0x83, 0xa9, 0xa6, 0x5e, 0xd6, 0x20, 0xbd, 0x7a, 0x7f, 0xf2, 0x2a, 0x08, 0x77, 0xc0,
-    0x71, 0x82, 0x7d, 0xb2, 0x8d, 0x86, 0x6c, 0x94, 0xcb, 0xad, 0xeb, 0x76, 0xdd, 0x4c, 0xe6, 0x7d,
-    0x65, 0x87, 0x98, 0x0d, 0x39, 0xf7, 0x63, 0x87, 0xff, 0xc3, 0x9f, 0xc4, 0xf1, 0xfe, 0x06, 0x3b,
-    0x7f, 0xd8, 0x15, 0xb2, 0x00, 0x83, 0x3a, 0x51, 0xc9, 0x49, 0xc8, 0x7d, 0xba, 0x6a, 0x66, 0xa9,
+    0x60, 0x8b, 0x0f, 0xb8, 0x99, 0x4c, 0x16, 0x7a, 0x91, 0xc9, 0x9e, 0x1e, 0xcc, 0x0b, 0xb4, 0x7e,
+    0x3b, 0xa6, 0xb1, 0x0c, 0x30, 0x5d, 0xac, 0x23, 0x5a, 0x06, 0x02, 0xff, 0x2b, 0x64, 0xc1, 0x0f,
+    0xf3, 0xcf, 0x87, 0x98, 0x9d, 0xad, 0xd2, 0xfc, 0xa0, 0xce, 0x67, 0x8d, 0xfa, 0x19, 0xfc, 0xbf,
+    0x35, 0x00, 0x4a, 0x77, 0x93, 0x98, 0xbc, 0x5b, 0x16, 0xea, 0xb7, 0x5c, 0x15, 0x02, 0x06, 0x7e,
 };
 
 static void test_build_event_end_to_end(void)
@@ -237,20 +237,16 @@ static void test_build_event_end_to_end(void)
      * against it must fail -- proving the signature is tamper-evident over
      * the packed content, not just structurally checked.
      *
-     * Scope note: this holds for COURSE/ACT/COINS/FRAMES/NONCE16 -- the
-     * exact fields event_id.c's pipeline_event_build_content() serializes
-     * into the signed content (event_id.h's own documented content shape,
-     * fixed by spec #24/sub-issue #28) -- and for the SIG bytes themselves
-     * (any change there is, trivially, a different signature). It does NOT
-     * hold for every one of the 75 packed bytes: FORMAT_TAG is checked
-     * structurally by pipeline_unpack() (see the second check below, not
-     * cryptographically), and KEY_ID is packed metadata that #28's content
-     * shape never serializes, so a flipped KEY_ID byte alone
-     * changes neither the recomputed id nor the signature check -- it is
-     * *not* covered by this event's signature. That is an inherited
-     * property of the content shape #28 already fixed and reference-id-
-     * pinned against nostr-tools (out of scope to change here); it is
-     * flagged rather than silently assumed away. */
+     * Scope note: this holds for COURSE/ACT/COINS/FRAMES/NONCE16/KEY_ID --
+     * the exact fields event_id.c's pipeline_event_build_content() serializes
+     * into the signed content (event_id.h's own documented content shape) --
+     * and for the SIG bytes themselves (any change there is, trivially, a
+     * different signature). KEY_ID (the star index) is signed content: a
+     * flipped KEY_ID byte changes the recomputed id, so the signature check
+     * fails, closing the earlier tamper hole for stars where `act` alone
+     * doesn't identify which star was grabbed. It does NOT hold for
+     * FORMAT_TAG, which pipeline_unpack() checks structurally (see the second
+     * check below), not cryptographically. */
     {
         pipeline_u8 corrupted[PIPELINE_BUILT_PAYLOAD_SIZE];
         StarCapture corruptCapture;
@@ -276,6 +272,18 @@ static void test_build_event_end_to_end(void)
         corruptUnpackRc = pipeline_unpack(corrupted, &corruptCapture, corruptSig);
         check(corruptUnpackRc != 0,
               "flipping the FORMAT_TAG byte is rejected structurally by pipeline_unpack");
+
+        /* A flipped KEY_ID byte (the star index) must also fail verification:
+         * keyId is signed content, so tampering with which star was grabbed
+         * breaks the signature -- the regression guard for the tamper hole
+         * closed by adding keyId to pipeline_event_build_content(). */
+        memcpy(corrupted, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE);
+        corrupted[PIPELINE_FMT_OFF_KEY_ID] ^= 0x01;
+        pipeline_unpack(corrupted, &corruptCapture, corruptSig);
+        pipeline_event_compute_id(&corruptCapture, corruptId);
+        corruptVerify = pipeline_schnorr_verify(corruptId, pubkey, corruptSig);
+        check(corruptVerify == 0,
+              "flipping the KEY_ID byte (signed star index) makes signature verification fail");
     }
 }
 
@@ -681,16 +689,16 @@ static void test_event_id_matches_reference(void)
      * exact command/output and the header comment above for why it's a
      * faithful independent oracle. */
     static const pipeline_u8 kExpectedIdA[32] = {
-        0x9d, 0x83, 0x60, 0xe4, 0x0c, 0x2c, 0xbf, 0x09, 0xbb, 0xe5, 0x88, 0x73, 0x5c, 0xc7, 0xc4, 0xf7,
-        0xe6, 0x11, 0x26, 0x01, 0x2c, 0x7a, 0x5d, 0x1a, 0x8e, 0xdc, 0x6f, 0xb5, 0x37, 0x07, 0x58, 0xa7,
+        0xba, 0x23, 0x7b, 0x9e, 0x89, 0x1e, 0xde, 0x42, 0x12, 0x57, 0x1d, 0xed, 0x17, 0xbc, 0xe2, 0xa6,
+        0x16, 0x19, 0x1e, 0xc6, 0x7a, 0x76, 0x32, 0xd2, 0x8d, 0xc9, 0xc5, 0x47, 0xd3, 0x54, 0x83, 0xcc,
     };
     static const pipeline_u8 kExpectedIdB[32] = {
-        0xe5, 0xf9, 0xfb, 0x87, 0x1c, 0xfd, 0xa9, 0xb4, 0x6c, 0x76, 0x0c, 0x64, 0xd2, 0x17, 0x55, 0x07,
-        0xe4, 0x99, 0xef, 0xa3, 0x4f, 0xed, 0xaa, 0x61, 0x2e, 0xc9, 0x54, 0x84, 0xc5, 0x7b, 0x96, 0x49,
+        0x00, 0x92, 0xdc, 0x5f, 0xe5, 0xb5, 0x4a, 0x5e, 0x2c, 0x09, 0x66, 0x67, 0x27, 0xe8, 0xa3, 0xcf,
+        0xce, 0x46, 0x42, 0x42, 0x99, 0x1b, 0xea, 0x6b, 0x1d, 0x71, 0xfd, 0x89, 0x75, 0x1d, 0x0e, 0x24,
     };
     static const pipeline_u8 kExpectedIdC[32] = {
-        0xbe, 0x7d, 0xb6, 0x93, 0xf0, 0x2f, 0x58, 0xff, 0xbd, 0xa2, 0xfd, 0xc6, 0xec, 0x7c, 0xf8, 0x09,
-        0xb5, 0x98, 0xd1, 0x1e, 0x91, 0x94, 0xbe, 0x15, 0xa9, 0xc6, 0x81, 0x12, 0xea, 0xcf, 0x98, 0x03,
+        0xe9, 0xe1, 0x29, 0x92, 0x09, 0xba, 0x35, 0xde, 0xb9, 0x79, 0x1a, 0xad, 0xb3, 0x4c, 0x4d, 0x87,
+        0xb7, 0x35, 0xa4, 0xe1, 0x77, 0x6f, 0x51, 0x61, 0x05, 0x41, 0xd6, 0x14, 0x34, 0xee, 0x18, 0xeb,
     };
 
     captureA.course = 15; captureA.act = 6; captureA.coins = 100; captureA.frames = 0x01020304u; captureA.nonce16 = 0xCAFE; captureA.keyId = 0;
@@ -721,20 +729,20 @@ static void test_content_escaping_path(void)
     pipeline_u8 serialized[PIPELINE_EVENT_SERIALIZED_MAX];
     pipeline_u32 contentLen;
     pipeline_u32 serializedLen;
-    const char *expectedContent = "{\"course\":15,\"act\":6,\"coins\":100,\"frames\":16909060,\"nonce\":51966}";
+    const char *expectedContent = "{\"course\":15,\"act\":6,\"coins\":100,\"frames\":16909060,\"nonce\":51966,\"keyId\":0}";
     /* The FULL expected canonical serialization for this exact StarCapture
      * (vector A, same as test_event_id_matches_reference()'s captureA) and
      * the baked event profile (pubkey f9308a.../created_at 1700000000/kind
      * 8064/the two t tags) -- cross-checked byte-for-byte against
      * JSON.stringify([0,pubkey,created_at,kind,tags,content]) via Node, the
      * same expression nostr-tools' getEventHash() evaluates (see
-     * tools/reference_event_id.js). Pinning the whole 207-byte buffer, not
+     * tools/reference_event_id.js). Pinning the whole 219-byte buffer, not
      * just a substring, proves the prefix/field ordering/escaping directly
      * rather than only through the opaque id in the test above. */
     const char *expectedSerialized =
         "[0,\"f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9\","
         "1700000000,8064,[[\"t\",\"cabinet-leaderboard\"],[\"t\",\"sm64\"]],"
-        "\"{\\\"course\\\":15,\\\"act\\\":6,\\\"coins\\\":100,\\\"frames\\\":16909060,\\\"nonce\\\":51966}\"]";
+        "\"{\\\"course\\\":15,\\\"act\\\":6,\\\"coins\\\":100,\\\"frames\\\":16909060,\\\"nonce\\\":51966,\\\"keyId\\\":0}\"]";
 
     capture.course = 15; capture.act = 6; capture.coins = 100; capture.frames = 0x01020304u; capture.nonce16 = 0xCAFE; capture.keyId = 0;
 

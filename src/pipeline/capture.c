@@ -5,23 +5,10 @@
  */
 
 #include "capture.h"
+#include "byteorder.h"
 #include "sha256.h"
 
 #define PIPELINE_CAPTURE_NONCE_INPUT_SIZE 12
-
-static void write_u32_be(pipeline_u8 *out, pipeline_u32 offset, pipeline_u32 value)
-{
-    out[offset]     = (pipeline_u8)((value >> 24) & 0xFF);
-    out[offset + 1] = (pipeline_u8)((value >> 16) & 0xFF);
-    out[offset + 2] = (pipeline_u8)((value >> 8) & 0xFF);
-    out[offset + 3] = (pipeline_u8)(value & 0xFF);
-}
-
-static void write_u16_be(pipeline_u8 *out, pipeline_u32 offset, pipeline_u16 value)
-{
-    out[offset]     = (pipeline_u8)((value >> 8) & 0xFF);
-    out[offset + 1] = (pipeline_u8)(value & 0xFF);
-}
 
 static pipeline_u16 pipeline_capture_hash_nonce(pipeline_u32 osCount,
                                                  pipeline_u32 globalTimer,
@@ -32,11 +19,11 @@ static pipeline_u16 pipeline_capture_hash_nonce(pipeline_u32 osCount,
     pipeline_u8 input[PIPELINE_CAPTURE_NONCE_INPUT_SIZE];
     pipeline_u8 digest[PIPELINE_SHA256_DIGEST_SIZE];
 
-    write_u32_be(input, 0, osCount);
-    write_u32_be(input, 4, globalTimer);
+    pipeline_write_u32_be(input, 0, osCount);
+    pipeline_write_u32_be(input, 4, globalTimer);
     input[8] = rawStickX;
     input[9] = rawStickY;
-    write_u16_be(input, 10, buttonMask);
+    pipeline_write_u16_be(input, 10, buttonMask);
 
     pipeline_sha256(input, PIPELINE_CAPTURE_NONCE_INPUT_SIZE, digest);
 
