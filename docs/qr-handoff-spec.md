@@ -193,6 +193,31 @@ the KAT privkey/aux_rand). On a machine without a local C toolchain, run that
 last step inside the repo's build image instead (see `README.md`'s
 `docker build`/`docker run` invocations for building and mounting it).
 
+### 7.2 Live on-device capture vectors
+
+The vector above is synthetic (KAT privkey `3`, fixed `created_at`). For a
+second, independent check against **real hardware output**, the repo also
+freezes actual format-v2 QR payloads photographed off a running device:
+
+- `tools/pipeline_test/fixtures/qr_v2_live_captures.json` — each real wire
+  payload (`wire_hex`) paired with the exact broadcast-ready event it decodes
+  to. This is the ground-truth shape of decoded data; build a companion
+  decoder against it, don't infer.
+- `tools/pipeline_test/fixtures/gen_live_vectors.mjs` — regenerator. Takes only
+  the wire bytes, decodes, and **refuses to write any vector whose sig doesn't
+  verify** (`node tools/pipeline_test/fixtures/gen_live_vectors.mjs`). It also
+  emits `live_vectors.h`, which `test_live_wire_vectors_round_trip()` in
+  `main.c` asserts against: unpack the on-device bytes, recompute the `id` from
+  only those fields, and verify the wire sig — pinning the ROM encoder to real
+  device output.
+
+Current live vectors (both `t` tag `sm64`, kind `8064`):
+
+| Vector | id |
+|---|---|
+| `capture_1` | `29ae1dd77d3baa3e72ab608e554af44e9d241e7c1f07bb48aa50c1660fc64f87` |
+| `capture_2` | `0eda86203f3868a271af8756ca282aa825a33bcd49728d31700d5b94f06fbd41` |
+
 ## 8. References
 
 - `docs/adr/0001` — read-only companion / self-contained QR.

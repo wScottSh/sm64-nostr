@@ -148,6 +148,7 @@
 #include "capture.h"
 #include "qr_render.h"
 #include "qr_display.h"
+#include "fixtures/live_vectors.h"
 
 static int g_failures = 0;
 
@@ -2301,6 +2302,51 @@ static void test_field_op_count_proxy(void)
     }
 }
 
+/*
+ * Live wire-vector regression (spec #52 / PR #56). The vectors in
+ * fixtures/live_vectors.h are REAL format-v2 QR payloads captured off a
+ * device screen (generated, sig-verified, and frozen by
+ * fixtures/gen_live_vectors.mjs) -- not synthesized in this tool. This pins
+ * the ROM encoder AND the wire-only reconstruction seam against actual
+ * on-device output, closing the "we only inferred what the decoded data
+ * looks like" gap. For each vector: unpack the wire bytes exactly as the
+ * read-only companion would, recompute the id from ONLY those fields, assert
+ * it equals the captured event's id, and assert the wire signature verifies
+ * against that recomputed id + the wire pubkey -- the whole decode-and-
+ * broadcast story, proven from the QR bytes alone.
+ */
+static void test_live_wire_vectors_round_trip(void)
+{
+    unsigned int v;
+    for (v = 0; v < PIPELINE_LIVE_VECTOR_COUNT; v++) {
+        const PipelineLiveVector *vec = &k_pipeline_live_vectors[v];
+        StarCapture capture;
+        pipeline_u32 createdAt;
+        pipeline_u8 pubkey[PIPELINE_FMT_SIZE_PUBKEY];
+        pipeline_u8 tag[PIPELINE_PACK_MAX_TAG_LEN];
+        pipeline_u8 tagLen;
+        pipeline_u8 sig[PIPELINE_FMT_SIZE_SIG];
+        pipeline_u8 id[PIPELINE_EVENT_ID_SIZE];
+        int rc, verifyOk;
+
+        rc = pipeline_unpack(vec->wire, vec->wire_len, &capture, &createdAt,
+                             pubkey, tag, &tagLen, sig);
+        check(rc == PIPELINE_UNPACK_OK,
+              "live vector: pipeline_unpack accepts the on-device wire bytes");
+
+        pipeline_event_compute_id_from_fields(pubkey, createdAt, (const char *)tag, tagLen,
+                                              &capture, id);
+        check(memcmp(id, vec->expected_id, PIPELINE_EVENT_ID_SIZE) == 0,
+              "live vector: id recomputed from ONLY the unpacked wire fields matches the "
+              "captured event's id (ROM encoder pinned to real device output)");
+
+        verifyOk = pipeline_schnorr_verify(id, pubkey, sig);
+        check(verifyOk != 0,
+              "live vector: the wire signature verifies against the wire-recomputed id and "
+              "wire pubkey (decode-and-broadcast, proven from the QR alone)");
+    }
+}
+
 int main(void)
 {
     test_format_descriptor_round_trip();
@@ -2317,6 +2363,7 @@ int main(void)
     test_odd_y_parity_negation_branch();
     test_build_event_end_to_end();
     test_pipeline_unpack_boundary_and_rejections();
+    test_live_wire_vectors_round_trip();
     test_capture_build_known_answer();
     test_capture_matches_host_build_event();
     test_qr_render_blit_round_trips_through_decode();

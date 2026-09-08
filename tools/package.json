@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@noble/curves": "^2.4.0",
+    "nostr-tools": "^2.25.2"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "_comment": "Golden test vectors: real format-v2 QR wire bytes captured from an on-device build, each paired with the exact broadcast-ready Nostr event it decodes to. Build architecture and companion decoders against THIS, not inferred data. Regenerate: node tools/pipeline_test/fixtures/gen_live_vectors.mjs. Each event's sig is verified (sig_ok) at generation time; generation aborts if any sig fails.",
+  "format": "v2",
+  "source": "on-device capture, spec #52 / PR #56",
+  "vectors": [
+    {
+      "name": "capture_1",
+      "wire_hex": "0213001a000010104c98016aa07818cced8051ec3487aa359db9ddac08068961ecdc57dab545bd80cc0f8385a789bf04736d3634be212fed088be4db4d4d2a8a328ec11429fc69f4254f1588926868fa712f86ccafed52646e28dcbb6a3a7957afaa22e77ad8db2ce4399f6ec359410b1602102e",
+      "wire_len_bytes": 116,
+      "sig_ok": true,
+      "event": {
+        "id": "29ae1dd77d3baa3e72ab608e554af44e9d241e7c1f07bb48aa50c1660fc64f87",
+        "pubkey": "cced8051ec3487aa359db9ddac08068961ecdc57dab545bd80cc0f8385a789bf",
+        "created_at": 1788901400,
+        "kind": 8064,
+        "tags": [
+          [
+            "t",
+            "ag-lb"
+          ],
+          [
+            "t",
+            "sm64"
+          ]
+        ],
+        "content": "{\"course\":19,\"act\":0,\"coins\":26,\"frames\":4112,\"nonce\":19608,\"keyId\":1}",
+        "sig": "be212fed088be4db4d4d2a8a328ec11429fc69f4254f1588926868fa712f86ccafed52646e28dcbb6a3a7957afaa22e77ad8db2ce4399f6ec359410b1602102e"
+      }
+    },
+    {
+      "name": "capture_2",
+      "wire_hex": "02010100000031d8900c006aa07818cced8051ec3487aa359db9ddac08068961ecdc57dab545bd80cc0f8385a789bf04736d3634200defae9217ace0dce7a640e7bd295b68225991ac096716f102bb07817066d1cc4d9a8e8bcde3f77942a3ec3c31f04b1e9e2015d21ee21c5bbe3be8fb2d0266",
+      "wire_len_bytes": 116,
+      "sig_ok": true,
+      "event": {
+        "id": "0eda86203f3868a271af8756ca282aa825a33bcd49728d31700d5b94f06fbd41",
+        "pubkey": "cced8051ec3487aa359db9ddac08068961ecdc57dab545bd80cc0f8385a789bf",
+        "created_at": 1788901400,
+        "kind": 8064,
+        "tags": [
+          [
+            "t",
+            "ag-lb"
+          ],
+          [
+            "t",
+            "sm64"
+          ]
+        ],
+        "content": "{\"course\":1,\"act\":1,\"coins\":0,\"frames\":12760,\"nonce\":36876,\"keyId\":0}",
+        "sig": "200defae9217ace0dce7a640e7bd295b68225991ac096716f102bb07817066d1cc4d9a8e8bcde3f77942a3ec3c31f04b1e9e2015d21ee21c5bbe3be8fb2d0266"
+      }
+    }
+  ]
+}
