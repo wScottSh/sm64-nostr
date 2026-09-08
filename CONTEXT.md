@@ -12,7 +12,11 @@ Ubiquitous language for the **airgapped Nostr QR leaderboard** work (ticket [#4]
 
 - **Event profile** — the build-time constants that pin a build to one signing identity + event shape: baked serialization prefix (#13), kind `8064`, `t` tags, `created_at` (#12), pubkey. Emitted as generated `event_profile.h` (recipe mirrors `text_strings.h.in` → `$(BUILD_DIR)/include`).
 
-- **Format descriptor** — the single machine-readable source of truth for the **packed payload** (~88 B, #14), emitted by the same generator as the event profile. The ROM **pack adapter** and the host **unpack+verify adapter** both derive from it, so the two sides can't drift. The packed payload is the system's narrowest, most permanent interface — the only artifact crossing ROM → companion → leaderboard.
+- **Format descriptor** — the single machine-readable source of truth for the **packed payload** (~112–122 B in **format v2**; was 75 B in v1, #14), emitted by the same generator as the event profile. The ROM **pack adapter** and the host **unpack adapter** both derive from it, so the two sides can't drift. The packed payload is the system's narrowest, most permanent interface — the only artifact crossing ROM → companion → leaderboard.
+
+- **Self-contained event** — the invariant that the QR carries a *complete, already-signed, broadcast-ready* Nostr event: every value in the signed serialization (`pubkey`, `created_at`, `kind`, `tags`, `content`) is fixed on-cartridge before the QR is drawn and is recoverable from the QR alone. No game↔companion out-of-band coordination exists. In **format v2** this forced `pubkey` + `created_at` + the per-game `t` tag onto the wire (v1 wrongly baked them out-of-band). See ADR-0001/0002.
+
+- **Companion app** — the strictly **read-only airgap jumper**: it decodes the QR into the signed event and broadcasts it to a relay, injecting no value and performing no verification. Verification (if any) is the relay's / leaderboard's job.
 
 - **Internal ports** — sha256 (#6), secp256k1 (#5/#23), qrcodegen (#15). They sit *behind* the pipeline interface as **internal seams** (swappable, each with its own known-answer test), never called by glue. Their C99 requirement stays contained here.
 
