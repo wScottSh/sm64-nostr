@@ -31,6 +31,16 @@
 # src/pipeline/, so it can never be pulled into the ROM's object graph --
 # the ROM never needs to decode a QR Code, only render one (#32, out of
 # scope here).
+#
+# Sub-issue #28 adds sha256.c and event_id.c -- again the SAME pure pipeline
+# sources as the ROM side (PIPELINE_C99_PORT_SRC/PIPELINE_ROM_OBJS) -- plus
+# SHA-256 KATs, the canonical-serialization id-equals-reference assertion,
+# and the content-escaping-path assertion in main.c. These reuse the SAME
+# generated event_profile.h (TEST_PRIVKEY_HEX/TEST_CREATED_AT above) already
+# built for test_pubkey_known_answer, so the baked serialization prefix used
+# by the reference oracle (tools/reference_event_id.js, host/test-only,
+# never a ROM path) and by the pipeline's own id computation are guaranteed
+# to agree.
 
 CC           := gcc
 PYTHON       := python3
@@ -42,7 +52,8 @@ INC_DIR      := $(BUILD_DIR)/include
 CFLAGS := -std=gnu99 -Wall -Wextra -I $(PIPELINE_DIR) -I $(INC_DIR)
 
 SRCS := main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c $(PIPELINE_DIR)/pack_adapter.c \
-        $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c qr_host_decode.c
+        $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c qr_host_decode.c \
+        $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c
 BIN  := pipeline_test
 
 # BIP-340 test vector 0 (privkey=3): a fixed, published known-answer key,

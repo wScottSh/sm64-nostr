@@ -458,17 +458,19 @@ endif
 
 # The pipeline's internal C99 ports (SHA-256, secp256k1 Schnorr, qrcodegen)
 # need a C99-capable compiler. port_stub_c99.c stood in for all three in
-# sub-issue #25; qrcodegen.c (sub-issue #27, spec #24) is the first real one
-# to land -- a byte-mode-only C99 port of Project Nayuki's QR Code generator
-# library, hidden behind qr_adapter.h/.c (see the pure-pipeline-modules
-# comment below). COMPILER is a whole-build knob with no per-file split, and
-# the default COMPILER=ido cannot compile C99 at all. Rather than force the
-# *entire* ROM build onto gcc just for these few files, carve out just the
-# C99 port objects and always force them through the cross gcc with
-# -std=gnu99, independent of the top-level COMPILER choice -- this mirrors
-# the existing iQue per-object carve-out above (IQUE_RECOMPILED), which
-# overrides CC/CFLAGS for a fixed object list regardless of COMPILER.
-PIPELINE_C99_PORT_SRC := $(PIPELINE_SRC_DIR)/port_stub_c99.c $(PIPELINE_SRC_DIR)/qrcodegen.c
+# sub-issue #25; qrcodegen.c (sub-issue #27, spec #24) is a byte-mode-only
+# C99 port of Project Nayuki's QR Code generator library, hidden behind
+# qr_adapter.h/.c (see the pure-pipeline-modules comment below). sha256.c
+# (sub-issue #28) is a C99 port of Brad Conte's public-domain SHA-256,
+# hidden behind event_id.h/.c. COMPILER is a whole-build knob with no
+# per-file split, and the default COMPILER=ido cannot compile C99 at all.
+# Rather than force the *entire* ROM build onto gcc just for these few
+# files, carve out just the C99 port objects and always force them through
+# the cross gcc with -std=gnu99, independent of the top-level COMPILER
+# choice -- this mirrors the existing iQue per-object carve-out above
+# (IQUE_RECOMPILED), which overrides CC/CFLAGS for a fixed object list
+# regardless of COMPILER.
+PIPELINE_C99_PORT_SRC := $(PIPELINE_SRC_DIR)/port_stub_c99.c $(PIPELINE_SRC_DIR)/qrcodegen.c $(PIPELINE_SRC_DIR)/sha256.c
 PIPELINE_C99_PORT_O   := $(foreach file,$(PIPELINE_C99_PORT_SRC),$(BUILD_DIR)/$(file:.c=.o))
 PIPELINE_C99_CFLAGS   := -std=gnu99 -G 0 $(OPT_FLAGS) $(TARGET_CFLAGS) $(DEF_INC_CFLAGS) -mno-shared -march=vr4300 -mfix4300 -mabi=32 -mhard-float -mdivide-breaks -fno-stack-protector -fno-common -fno-zero-initialized-in-bss -fno-PIC -mno-abicalls -fno-strict-aliasing -fno-inline-functions -ffreestanding -fwrapv -Wall -Wextra
 $(PIPELINE_C99_PORT_O): CC := $(CROSS)gcc
@@ -490,14 +492,20 @@ $(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
 # of the format-descriptor single-source-of-truth wiring (see
 # PIPELINE_FORMAT_DESCRIPTOR_H below). qr_adapter.c is the pipeline-internal
 # seam in front of the C99 qrcodegen.c port above -- it, not qrcodegen.c
-# directly, is what a future build_event.c would call.
-PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(PIPELINE_C99_PORT_O)
+# directly, is what a future build_event.c would call. event_id.c
+# (sub-issue #28) is the pipeline-internal serialize+id seam in front of the
+# C99 sha256.c port above; it #includes the generated event_profile.h for
+# the baked serialization prefix (pubkey/created_at/kind/tags).
+PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(PIPELINE_C99_PORT_O)
 
 # pack_adapter.o #includes format_descriptor.h; make sure it's generated
 # first. build_event.o doesn't currently use event_profile.h, but the
 # dependency is harmless and keeps the ROM side honest as it grows.
+# event_id.o genuinely does #include event_profile.h (the baked
+# serialization prefix).
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o: $(PIPELINE_EVENT_PROFILE_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o: $(PIPELINE_EVENT_PROFILE_H)
 
 # Event profile header: derives the x-only pubkey from the per-event secret
 # (PIPELINE_PRIVKEY_FILE, checked for existence above) and bakes it, plus
