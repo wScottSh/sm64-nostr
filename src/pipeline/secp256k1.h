@@ -263,9 +263,10 @@ void pipeline_secp256k1_fe_inv_fast(const pipeline_secp256k1_num *a, pipeline_se
 void pipeline_secp256k1_fe_inv_reference(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out);
 
 /*
- * Host-side field-multiply / operation-count proxy (spec #43 sub-issue
+ * Host-side primitive-operation-count proxy (spec #43 sub-issue
  * #44, reused by later sub-issues in this spec's staged landing --
- * including sub-issue #45's scalar-path fast reduction). Counts primitive
+ * including sub-issue #45's scalar-path fast reduction, which is why the
+ * backing counter is g_prim_op_count, not field-scoped). Counts primitive
  * 32-bit-limb operations performed by the width-parameterized
  * compare/add/subtract/multiply-by-scalar/multiply-by-array array
  * primitives (arr_cmp/arr_sub/arr_add/arr_mul_small/arr_mul_wide) and by

@@ -1240,20 +1240,20 @@ static void test_qr_display_state_machine(void)
  * reproduces exactly by re-running with that same literal seed -- no
  * dependency on system time/entropy.
  */
-static pipeline_u32 g_field_test_rng_state;
+static pipeline_u32 g_sweep_rng_state;
 
-static void field_test_rng_seed(pipeline_u32 seed)
+static void sweep_rng_seed(pipeline_u32 seed)
 {
-    g_field_test_rng_state = seed ? seed : 1u; /* xorshift32 must never start at 0 */
+    g_sweep_rng_state = seed ? seed : 1u; /* xorshift32 must never start at 0 */
 }
 
-static pipeline_u32 field_test_rng_next(void)
+static pipeline_u32 sweep_rng_next(void)
 {
-    pipeline_u32 x = g_field_test_rng_state;
+    pipeline_u32 x = g_sweep_rng_state;
     x ^= (pipeline_u32)(x << 13);
     x ^= (x >> 17);
     x ^= (pipeline_u32)(x << 5);
-    g_field_test_rng_state = x;
+    g_sweep_rng_state = x;
     return x;
 }
 
@@ -1265,12 +1265,12 @@ static pipeline_u32 field_test_rng_next(void)
  * for any two arbitrary 256-bit values, not just already-canonical field
  * elements, so leaving the full [0, 2^256) range in play is a strictly
  * stronger sweep. */
-static void field_test_random_num(pipeline_secp256k1_num *out)
+static void sweep_random_num(pipeline_secp256k1_num *out)
 {
     pipeline_u8 bytes[PIPELINE_SECP256K1_BYTES];
     int i;
     for (i = 0; i < PIPELINE_SECP256K1_BYTES; i += 4) {
-        pipeline_u32 word = field_test_rng_next();
+        pipeline_u32 word = sweep_rng_next();
         bytes[i + 0] = (pipeline_u8)((word >> 24) & 0xFFu);
         bytes[i + 1] = (pipeline_u8)((word >> 16) & 0xFFu);
         bytes[i + 2] = (pipeline_u8)((word >> 8) & 0xFFu);
@@ -1280,12 +1280,12 @@ static void field_test_random_num(pipeline_secp256k1_num *out)
 }
 
 /*
- * Twin of field_test_random_num above, biased toward the top of the
+ * Twin of sweep_random_num above, biased toward the top of the
  * [0, 2^256) range (spec #43 sub-issue #45). A uniformly random 256-bit
  * value is virtually always < the curve order n (n = 2^256 - c, c < 2^129,
  * so P(uniform random >= n) ~ 2^-127) -- meaning test_scalar_differential_
  * sweep()'s scalar_reduce coverage, if it only drew from
- * field_test_random_num(), would almost never actually exercise
+ * sweep_random_num(), would almost never actually exercise
  * scalar_reduce_wide's fold-and-subtract path (every reduction would take
  * the "already < n, nothing to fold away" shortcut), proving little beyond
  * "reducing an already-reduced value is a no-op on both paths". Forcing
@@ -1296,12 +1296,12 @@ static void field_test_random_num(pipeline_secp256k1_num *out)
  * both this and the plain uniform generator so the sweep covers both the
  * "no reduction needed" and "reduction needed" shapes.
  */
-static void field_test_random_num_biased_high(pipeline_secp256k1_num *out)
+static void sweep_random_num_biased_high(pipeline_secp256k1_num *out)
 {
     pipeline_u8 bytes[PIPELINE_SECP256K1_BYTES];
     int i;
     for (i = 0; i < PIPELINE_SECP256K1_BYTES; i += 4) {
-        pipeline_u32 word = field_test_rng_next();
+        pipeline_u32 word = sweep_rng_next();
         bytes[i + 0] = (pipeline_u8)((word >> 24) & 0xFFu);
         bytes[i + 1] = (pipeline_u8)((word >> 16) & 0xFFu);
         bytes[i + 2] = (pipeline_u8)((word >> 8) & 0xFFu);
@@ -1397,12 +1397,12 @@ static void test_field_mul_differential_sweep(void)
 
     allMatch = 1;
     firstMismatch = -1;
-    field_test_rng_seed(FIELD_MUL_SWEEP_SEED);
+    sweep_rng_seed(FIELD_MUL_SWEEP_SEED);
     for (i = 0; i < FIELD_MUL_SWEEP_ITERATIONS; i++) {
         pipeline_secp256k1_num a, b;
 
-        field_test_random_num(&a);
-        field_test_random_num(&b);
+        sweep_random_num(&a);
+        sweep_random_num(&b);
         field_mul_differential_check_one(&a, &b, i, &allMatch, &firstMismatch);
     }
 
@@ -1417,15 +1417,15 @@ static void test_field_mul_differential_sweep(void)
 }
 
 /* Draws a canonical nonzero field element (0 < a < p) via rejection
- * sampling on field_test_random_num() above -- fe_inv requires a nonzero
- * field element, unlike field_test_random_num()'s own arbitrary-256-bit-
+ * sampling on sweep_random_num() above -- fe_inv requires a nonzero
+ * field element, unlike sweep_random_num()'s own arbitrary-256-bit-
  * value contract (see that function's header comment). p is within 2^32+977
  * of 2^256, so the reject rate is astronomically small; this loop is a
  * correctness safeguard, not a practical perf concern. */
 static void field_test_random_nonzero_field_element(pipeline_secp256k1_num *out)
 {
     for (;;) {
-        field_test_random_num(out);
+        sweep_random_num(out);
         if (!pipeline_secp256k1_num_is_zero(out) && pipeline_secp256k1_num_is_valid_field_element(out)) {
             return;
         }
@@ -1518,7 +1518,7 @@ static void test_field_inv_differential_sweep(void)
     firstMismatch = -1;
     allTrueInverse = 1;
     firstNonInverse = -1;
-    field_test_rng_seed(FIELD_INV_SWEEP_SEED);
+    sweep_rng_seed(FIELD_INV_SWEEP_SEED);
     for (i = 0; i < FIELD_INV_SWEEP_ITERATIONS; i++) {
         pipeline_secp256k1_num a, fast, reference, product;
 
@@ -1564,7 +1564,7 @@ static void test_field_inv_differential_sweep(void)
 
 /*
  * Scalar (mod n) differential sweep (spec #43 sub-issue #45). Reuses the
- * same seeded-xorshift32-PRNG/field_test_random_num()/differential-check
+ * same seeded-xorshift32-PRNG/sweep_random_num()/differential-check
  * shape test_field_mul_differential_sweep() above established for #44 --
  * see that function's header comment for the rationale (arbitrary 256-bit
  * values, not pre-reduced ones, since the fast/reference reductions must
@@ -1676,20 +1676,20 @@ static void test_scalar_differential_sweep(void)
 
     allMatch = 1;
     firstMismatch = -1;
-    field_test_rng_seed(SCALAR_SWEEP_SEED);
+    sweep_rng_seed(SCALAR_SWEEP_SEED);
     for (i = 0; i < SCALAR_SWEEP_ITERATIONS; i++) {
         pipeline_secp256k1_num a;
 
         /* Alternate plain-uniform and biased-high draws (see
-         * field_test_random_num_biased_high's header comment): uniform
+         * sweep_random_num_biased_high's header comment): uniform
          * alone would almost never land >= n, so half the iterations bias
          * toward the top of [0, 2^256) to actually exercise
          * scalar_reduce_wide's fold-and-subtract path, not just its
          * "already reduced" shortcut. */
         if (i & 1) {
-            field_test_random_num_biased_high(&a);
+            sweep_random_num_biased_high(&a);
         } else {
-            field_test_random_num(&a);
+            sweep_random_num(&a);
         }
         scalar_reduce_differential_check_one(&a, i, &allMatch, &firstMismatch);
     }
@@ -1705,12 +1705,12 @@ static void test_scalar_differential_sweep(void)
 
     allMatch = 1;
     firstMismatch = -1;
-    field_test_rng_seed(SCALAR_SWEEP_SEED ^ 0xA5A5A5A5u);
+    sweep_rng_seed(SCALAR_SWEEP_SEED ^ 0xA5A5A5A5u);
     for (i = 0; i < SCALAR_SWEEP_ITERATIONS; i++) {
         pipeline_secp256k1_num a, b;
 
-        field_test_random_num(&a);
-        field_test_random_num(&b);
+        sweep_random_num(&a);
+        sweep_random_num(&b);
         scalar_mul_differential_check_one(&a, &b, i, &allMatch, &firstMismatch);
     }
     if (!allMatch) {
@@ -1738,7 +1738,7 @@ static void test_scalar_differential_sweep(void)
  * derive_and_validate()'s own point-vs-just-x distinction in
  * gen_secp256k1_baked.py.
  *
- * k here is drawn from field_test_random_num() (the plain uniform [0,
+ * k here is drawn from sweep_random_num() (the plain uniform [0,
  * 2^256) generator #44 established), NOT reduced mod n first: both
  * point_mul_base and point_mul_base_reference are well-defined for ANY
  * 256-bit k (a plain double-and-add / comb evaluation of the integer k*G,
@@ -1863,11 +1863,11 @@ static void test_point_mul_base_comb_differential_sweep(void)
 
     allMatch = 1;
     firstMismatch = -1;
-    field_test_rng_seed(POINT_MUL_BASE_SWEEP_SEED);
+    sweep_rng_seed(POINT_MUL_BASE_SWEEP_SEED);
     for (i = 0; i < POINT_MUL_BASE_SWEEP_ITERATIONS; i++) {
         pipeline_secp256k1_num k;
 
-        field_test_random_num(&k);
+        sweep_random_num(&k);
         point_mul_base_differential_check_one(&k, i, &allMatch, &firstMismatch);
     }
     if (!allMatch) {
@@ -1961,9 +1961,9 @@ static void test_field_op_count_proxy(void)
     unsigned long long signOps;
     int signOk;
 
-    field_test_rng_seed(0xA5A5A5A5u);
-    field_test_random_num(&a);
-    field_test_random_num(&b);
+    sweep_rng_seed(0xA5A5A5A5u);
+    sweep_random_num(&a);
+    sweep_random_num(&b);
 
     pipeline_secp256k1_reset_op_count();
     pipeline_secp256k1_fe_mul_fast(&a, &b, &out);
@@ -1987,8 +1987,8 @@ static void test_field_op_count_proxy(void)
         pipeline_secp256k1_num scalarA, scalarFast, scalarRef;
         unsigned long long scalarFastOps, scalarRefOps;
 
-        field_test_rng_seed(SCALAR_SWEEP_SEED);
-        field_test_random_num(&scalarA);
+        sweep_rng_seed(SCALAR_SWEEP_SEED);
+        sweep_random_num(&scalarA);
 
         pipeline_secp256k1_reset_op_count();
         pipeline_secp256k1_scalar_reduce_fast(&scalarA, &scalarFast);
@@ -2059,8 +2059,8 @@ static void test_field_op_count_proxy(void)
         pipeline_secp256k1_point fastPoint, referencePoint;
         unsigned long long pointFastOps, pointRefOps;
 
-        field_test_rng_seed(POINT_MUL_BASE_SWEEP_SEED ^ 0x5AFEu);
-        field_test_random_num(&k);
+        sweep_rng_seed(POINT_MUL_BASE_SWEEP_SEED ^ 0x5AFEu);
+        sweep_random_num(&k);
 
         pipeline_secp256k1_reset_op_count();
         pipeline_secp256k1_point_mul_base(&k, &fastPoint);
@@ -2108,7 +2108,7 @@ static void test_field_op_count_proxy(void)
         pipeline_secp256k1_num invA, invFast, invRef;
         unsigned long long invFastOps, invRefOps;
 
-        field_test_rng_seed(FIELD_INV_SWEEP_SEED ^ 0xABCD1234u);
+        sweep_rng_seed(FIELD_INV_SWEEP_SEED ^ 0xABCD1234u);
         field_test_random_nonzero_field_element(&invA);
 
         pipeline_secp256k1_reset_op_count();
