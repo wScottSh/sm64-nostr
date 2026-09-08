@@ -103,6 +103,24 @@
  * exercised only on emulator (see this branch's own PR notes for what must
  * be verified there: both save flows replaced, a debounced A dismiss, and
  * memory erased).
+ *
+ * Spec #43 sub-issue #44 (fast field mod-p reduction, the first slice of
+ * spec #43's pure performance rewrite of this pipeline's secp256k1
+ * internals -- see that spec's own issue text for the full staged plan)
+ * adds test_field_mul_differential_sweep() and test_field_op_count_proxy()
+ * (secp256k1.h/.c, near the bottom of this file). All tests above this
+ * point are the pre-existing regression net #44's acceptance criteria
+ * require to stay green, byte-for-byte, through the rewrite -- none of
+ * their expected-byte literals changed. The two new tests are this
+ * sub-issue's own proof mechanisms: a seeded differential sweep of the new
+ * fast field multiply (pipeline_secp256k1_fe_mul_fast) against the
+ * retained naive-reduction reference (pipeline_secp256k1_fe_mul_reference)
+ * over random 256-bit operand pairs plus a handful of pinned edge vectors,
+ * and a host-side field-multiply/operation-count proxy
+ * (pipeline_secp256k1_reset_op_count/_get_op_count) showing the fast path
+ * does dramatically less primitive word-level work than the naive one --
+ * NOT a wall-clock timing comparison, which wouldn't represent the target
+ * VR4300.
  */
 #include <stdio.h>
 #include <string.h>
@@ -115,6 +133,7 @@
 #include "sha256.h"
 #include "event_id.h"
 #include "schnorr_adapter.h"
+#include "secp256k1.h"
 #include "capture.h"
 #include "qr_render.h"
 #include "qr_display.h"
@@ -1073,6 +1092,220 @@ static void test_qr_display_state_machine(void)
     check(!qr_display_is_active(&state), "qr_display: a rejected present() leaves the state inactive");
 }
 
+/*
+ * Field-reduction differential sweep + operation-count proxy (spec #43
+ * sub-issue #44). Establishes the two proof mechanisms this spec's later
+ * sub-issues reuse -- see secp256k1.h's header comment on
+ * pipeline_secp256k1_fe_mul_fast/_reference/_reset_op_count/_get_op_count.
+ *
+ * Deterministic PRNG (xorshift32), seeded by a fixed literal: a failure
+ * reproduces exactly by re-running with that same literal seed -- no
+ * dependency on system time/entropy.
+ */
+static pipeline_u32 g_field_test_rng_state;
+
+static void field_test_rng_seed(pipeline_u32 seed)
+{
+    g_field_test_rng_state = seed ? seed : 1u; /* xorshift32 must never start at 0 */
+}
+
+static pipeline_u32 field_test_rng_next(void)
+{
+    pipeline_u32 x = g_field_test_rng_state;
+    x ^= (pipeline_u32)(x << 13);
+    x ^= (x >> 17);
+    x ^= (pipeline_u32)(x << 5);
+    g_field_test_rng_state = x;
+    return x;
+}
+
+/* Fills all 32 bytes with PRNG output and builds the num via the same
+ * public byte<->num boundary every other caller in this codebase must use
+ * (see secp256k1.c's own header comment on never assuming a particular
+ * word order) -- deliberately NOT reduced below p first: num_mul's wide
+ * product is well-defined (and the fast/reference reductions must agree)
+ * for any two arbitrary 256-bit values, not just already-canonical field
+ * elements, so leaving the full [0, 2^256) range in play is a strictly
+ * stronger sweep. */
+static void field_test_random_num(pipeline_secp256k1_num *out)
+{
+    pipeline_u8 bytes[PIPELINE_SECP256K1_BYTES];
+    int i;
+    for (i = 0; i < PIPELINE_SECP256K1_BYTES; i += 4) {
+        pipeline_u32 word = field_test_rng_next();
+        bytes[i + 0] = (pipeline_u8)((word >> 24) & 0xFFu);
+        bytes[i + 1] = (pipeline_u8)((word >> 16) & 0xFFu);
+        bytes[i + 2] = (pipeline_u8)((word >> 8) & 0xFFu);
+        bytes[i + 3] = (pipeline_u8)(word & 0xFFu);
+    }
+    pipeline_secp256k1_num_from_bytes(bytes, out);
+}
+
+#define FIELD_MUL_SWEEP_ITERATIONS 4000
+#define FIELD_MUL_SWEEP_SEED 0xC0FFEE12u
+
+/* Checks one (a, b) pair through both reduction paths, updating *allMatch/
+ * *firstMismatch (index -1 means "not yet set") the same way the random
+ * sweep loop does -- shared so the pinned edge vectors below and the
+ * random sweep report failures identically. */
+static void field_mul_differential_check_one(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b,
+                                              int index, int *allMatch, int *firstMismatch)
+{
+    pipeline_secp256k1_num fast, reference;
+
+    pipeline_secp256k1_fe_mul_fast(a, b, &fast);
+    pipeline_secp256k1_fe_mul_reference(a, b, &reference);
+    if (memcmp(&fast, &reference, sizeof(fast)) != 0) {
+        *allMatch = 0;
+        if (*firstMismatch < 0) {
+            *firstMismatch = index;
+        }
+    }
+}
+
+static void test_field_mul_differential_sweep(void)
+{
+    int i;
+    int allMatch = 1;
+    int firstMismatch = -1;
+
+    /* Pinned edge vectors: uniform random sampling below has ~0 chance of
+     * ever hitting the boundary cases where fe_reduce_wide's fold-width
+     * bookkeeping would actually be exercised at its limits (see that
+     * function's header comment for the bounds these are meant to probe):
+     * zero, one, the two operands both at their max representable 256-bit
+     * value (2^256-1, driving hi close to its own max in num_mul's
+     * product), and both operands at p-1 (the max canonical field
+     * element, product close to (p-1)^2). */
+    {
+        pipeline_secp256k1_num zero, one, maxVal, pMinusOne;
+        int edgeAllMatch = 1;
+        int unusedFirstMismatch = -1;
+        static const pipeline_u8 kZeroBytes[PIPELINE_SECP256K1_BYTES] = {0};
+        static const pipeline_u8 kOneBytes[PIPELINE_SECP256K1_BYTES] = {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        };
+        static const pipeline_u8 kMaxBytes[PIPELINE_SECP256K1_BYTES] = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        };
+        /* p - 1 = 2^256 - 2^32 - 978, secp256k1 p = 2^256 - 2^32 - 977. In
+         * big-endian bytes: 24 bytes of 0xFF (the top 192 bits, words
+         * w7..w2, all set), then word1 = 0xFFFFFFFE, then word0 =
+         * 0xFFFFFC2E -- cross-checked directly against kFieldP in
+         * secp256k1.c (word1 = 0xFFFFFFFE, word0 = 0xFFFFFC2F, i.e.
+         * exactly one less in the bottom word) AND independently against
+         * Python: (2**256 - 2**32 - 977 - 1).to_bytes(32, 'big'). */
+        static const pipeline_u8 kPMinusOneBytes[PIPELINE_SECP256K1_BYTES] = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xFF, 0xFF, 0xFC, 0x2E,
+        };
+
+        pipeline_secp256k1_num_from_bytes(kZeroBytes, &zero);
+        pipeline_secp256k1_num_from_bytes(kOneBytes, &one);
+        pipeline_secp256k1_num_from_bytes(kMaxBytes, &maxVal);
+        pipeline_secp256k1_num_from_bytes(kPMinusOneBytes, &pMinusOne);
+
+        /* Edge vectors don't use the sweep's index-based first-mismatch
+         * tracking (every vector here would collide on "not yet set");
+         * edgeAllMatch/unusedFirstMismatch are a scratch pair local to
+         * this block, checked collectively below. */
+        field_mul_differential_check_one(&zero, &zero, 0, &edgeAllMatch, &unusedFirstMismatch);
+        field_mul_differential_check_one(&zero, &maxVal, 0, &edgeAllMatch, &unusedFirstMismatch);
+        field_mul_differential_check_one(&one, &maxVal, 0, &edgeAllMatch, &unusedFirstMismatch);
+        field_mul_differential_check_one(&maxVal, &maxVal, 0, &edgeAllMatch, &unusedFirstMismatch);
+        field_mul_differential_check_one(&pMinusOne, &pMinusOne, 0, &edgeAllMatch, &unusedFirstMismatch);
+        field_mul_differential_check_one(&one, &one, 0, &edgeAllMatch, &unusedFirstMismatch);
+
+        allMatch = edgeAllMatch;
+    }
+    check(allMatch, "field multiply differential sweep: fast reduction matches the naive reference "
+                     "on pinned edge vectors (0, 1, 2^256-1, (p-1)^2)");
+
+    allMatch = 1;
+    firstMismatch = -1;
+    field_test_rng_seed(FIELD_MUL_SWEEP_SEED);
+    for (i = 0; i < FIELD_MUL_SWEEP_ITERATIONS; i++) {
+        pipeline_secp256k1_num a, b;
+
+        field_test_random_num(&a);
+        field_test_random_num(&b);
+        field_mul_differential_check_one(&a, &b, i, &allMatch, &firstMismatch);
+    }
+
+    if (!allMatch) {
+        printf("  field_mul_differential_sweep: first mismatch at iteration %d "
+               "(seed 0x%08lX, %d iterations) -- reproduce exactly with these constants\n",
+               firstMismatch, (unsigned long)FIELD_MUL_SWEEP_SEED, FIELD_MUL_SWEEP_ITERATIONS);
+    }
+    check(allMatch,
+          "field multiply differential sweep: fast field-specialized reduction matches the "
+          "retained naive-reduction reference over 4000 seeded random 256-bit operand pairs");
+}
+
+/*
+ * Host-side field-multiply / operation-count proxy (spec #43 sub-issue
+ * #44's other required proof mechanism). Two independent assertions:
+ *
+ * (1) Per-multiply: the fast field reduction does dramatically fewer
+ *     primitive word operations than the retained naive reference does
+ *     for the exact same inputs -- the direct "pre-change baseline"
+ *     comparison, since the naive reduce_wide_mod path IS what fe_mul
+ *     used to be before this sub-issue (see
+ *     pipeline_secp256k1_fe_mul_reference's header comment).
+ * (2) Per-signature: a real BIP-340 signature's total op count (which
+ *     also includes the still-generic scalar (mod n) path, untouched by
+ *     this sub-issue) stays within a small bound -- empirically measured
+ *     (once, manually, during this sub-issue's development, by
+ *     temporarily forcing fe_mul back to the naive reduce_wide_mod path
+ *     and re-running this same measurement) at ~283K ops with the fast
+ *     field path in place, versus ~28.0M ops for the same signature with
+ *     the naive field path -- a ~99x drop. That manual before/after
+ *     comparison isn't itself re-derivable from this file (there is no
+ *     "sign with the naive field path" entry point to call here), so the
+ *     bound below is set at roughly 3x the measured ~283K -- tight enough
+ *     to catch a real regression, loose enough to tolerate incidental
+ *     op-count drift from unrelated future changes. Wall-clock time is
+ *     deliberately not used here (it does not represent the target
+ *     VR4300 -- see secp256k1.h's header comment).
+ */
+static void test_field_op_count_proxy(void)
+{
+    pipeline_secp256k1_num a, b, out;
+    unsigned long long fastOps, refOps;
+    pipeline_u8 sig[PIPELINE_SCHNORR_SIG_SIZE];
+    unsigned long long signOps;
+    int signOk;
+
+    field_test_rng_seed(0xA5A5A5A5u);
+    field_test_random_num(&a);
+    field_test_random_num(&b);
+
+    pipeline_secp256k1_reset_op_count();
+    pipeline_secp256k1_fe_mul_fast(&a, &b, &out);
+    fastOps = pipeline_secp256k1_get_op_count();
+
+    pipeline_secp256k1_reset_op_count();
+    pipeline_secp256k1_fe_mul_reference(&a, &b, &out);
+    refOps = pipeline_secp256k1_get_op_count();
+
+    check(fastOps > 0 && refOps > 0, "op-count proxy: both field-multiply paths perform a nonzero number of counted operations");
+    check(fastOps * 10 < refOps,
+          "op-count proxy: the fast field multiply's operation count is more than 10x lower "
+          "than the retained naive reference's, for the same operands");
+
+    pipeline_secp256k1_reset_op_count();
+    signOk = pipeline_schnorr_sign(kSchnorrMessageZero, kSchnorrPrivkey, sig);
+    signOps = pipeline_secp256k1_get_op_count();
+
+    check(signOk != 0, "op-count proxy: the signature used to measure per-signature op count still succeeds");
+    check(signOps < 900000ULL,
+          "op-count proxy: a full BIP-340 signature's total primitive-word-op count stays under "
+          "900,000 (measured ~283K with the fast field path; the naive field path alone measures "
+          "~28.0M for the same signature -- a ~99x drop, see this function's header comment)");
+}
+
 int main(void)
 {
     test_format_descriptor_round_trip();
@@ -1090,6 +1323,8 @@ int main(void)
     test_capture_matches_host_build_event();
     test_qr_render_blit_round_trips_through_decode();
     test_qr_display_state_machine();
+    test_field_mul_differential_sweep();
+    test_field_op_count_proxy();
 
     if (g_failures != 0) {
         printf("%d check(s) FAILED\n", g_failures);

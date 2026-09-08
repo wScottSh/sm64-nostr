@@ -69,6 +69,49 @@ static void num_from_small(pipeline_u32 v, pipeline_secp256k1_num *out)
     out->w[0] = v;
 }
 
+/*
+ * Host-side field-multiply / operation-count proxy (spec #43 sub-issue #44,
+ * reused by later sub-issues in this spec). Counts primitive 32-bit-limb
+ * operations (compares, subtracts, adds, scalar-multiply-accumulate steps --
+ * NOT num_mul's own 32x32 partial-product loop, which is identical on both
+ * the fast and naive paths and so contributes nothing to a fast-vs-naive
+ * comparison) performed by the width-parameterized array primitives below
+ * and by reduce_wide_mod's per-bit loop -- i.e. the reduction-side
+ * machine-level work each reduction does, not wall-clock time (which x86
+ * doesn't share with the VR4300; see secp256k1.h's header comment). Read via
+ * pipeline_secp256k1_get_op_count() after pipeline_secp256k1_reset_op_count().
+ *
+ * PIPELINE_SECP256K1_OP_COUNT-gated: every increment below compiles to
+ * nothing unless that macro is defined. tools/pipeline_test/Makefile
+ * defines it for the host test tool only -- the ROM build's
+ * PIPELINE_C99_CFLAGS does NOT define it, so these counters cost the ROM
+ * build exactly nothing (not even a global read-modify-write per limb
+ * operation on the signing hot path this sub-issue exists to speed up).
+ * Not thread-safe when enabled -- the pipeline is single-threaded
+ * everywhere it runs. */
+#ifdef PIPELINE_SECP256K1_OP_COUNT
+static unsigned long long g_field_op_count = 0;
+#define FIELD_OP_COUNT_TICK() (g_field_op_count++)
+#else
+#define FIELD_OP_COUNT_TICK() ((void)0)
+#endif
+
+void pipeline_secp256k1_reset_op_count(void)
+{
+#ifdef PIPELINE_SECP256K1_OP_COUNT
+    g_field_op_count = 0;
+#endif
+}
+
+unsigned long long pipeline_secp256k1_get_op_count(void)
+{
+#ifdef PIPELINE_SECP256K1_OP_COUNT
+    return g_field_op_count;
+#else
+    return 0;
+#endif
+}
+
 /* Width-parameterized little-endian-limb-array compare/subtract, shared by
  * num_cmp/num_sub (width NUM_WORDS) and reduce_wide_mod's 9-word remainder
  * arithmetic (width REM_WORDS) below, so the two widths don't duplicate the
@@ -77,6 +120,7 @@ static int arr_cmp(const pipeline_u32 *a, const pipeline_u32 *b, int width)
 {
     int i;
     for (i = width - 1; i >= 0; i--) {
+        FIELD_OP_COUNT_TICK();
         if (a[i] != b[i]) {
             return (a[i] < b[i]) ? -1 : 1;
         }
@@ -92,6 +136,7 @@ static pipeline_u32 arr_sub(const pipeline_u32 *a, const pipeline_u32 *b, int wi
     for (i = 0; i < width; i++) {
         unsigned long long ai = a[i];
         unsigned long long bi = (unsigned long long)b[i] + borrow;
+        FIELD_OP_COUNT_TICK();
         if (ai >= bi) {
             out[i] = (pipeline_u32)(ai - bi);
             borrow = 0;
@@ -101,6 +146,40 @@ static pipeline_u32 arr_sub(const pipeline_u32 *a, const pipeline_u32 *b, int wi
         }
     }
     return (pipeline_u32)borrow;
+}
+
+/* out = (a + b) mod 2^(32*width); returns the carry-out bit. Width-
+ * parameterized twin of arr_sub, used by fe_reduce_wide's folding steps
+ * (num_add above is the fixed-NUM_WORDS twin used by the rest of the
+ * file). */
+static pipeline_u32 arr_add(const pipeline_u32 *a, const pipeline_u32 *b, int width, pipeline_u32 *out)
+{
+    unsigned long long carry = 0;
+    int i;
+    for (i = 0; i < width; i++) {
+        unsigned long long sum = (unsigned long long)a[i] + b[i] + carry;
+        FIELD_OP_COUNT_TICK();
+        out[i] = (pipeline_u32)sum;
+        carry = sum >> 32;
+    }
+    return (pipeline_u32)carry;
+}
+
+/* out[0..n] = a[0..n) * s (out sized n+1 words, the top word holding the
+ * final carry) -- a width-parameterized multiply-by-small-scalar, used by
+ * fe_reduce_wide to fold the high half of a wide product by secp256k1's
+ * 977 constant. */
+static void arr_mul_small(const pipeline_u32 *a, int n, pipeline_u32 s, pipeline_u32 *out)
+{
+    unsigned long long carry = 0;
+    int i;
+    for (i = 0; i < n; i++) {
+        unsigned long long prod = (unsigned long long)a[i] * s + carry;
+        FIELD_OP_COUNT_TICK();
+        out[i] = (pipeline_u32)prod;
+        carry = prod >> 32;
+    }
+    out[n] = (pipeline_u32)carry;
 }
 
 static int num_cmp(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b)
@@ -180,9 +259,15 @@ static void num_mul(const pipeline_secp256k1_num *a, const pipeline_secp256k1_nu
  * remainder < 2*m < 2^257, 9 words (288 bits) of headroom is always
  * sufficient and the final remainder's top word is always 0.
  *
- * This is deliberately the generic, unoptimized reduction (no use of
- * secp256k1 p's special 2^256-2^32-977 form) -- see secp256k1.h's header
- * comment on the performance/correctness-first tradeoff.
+ * As of spec #43 sub-issue #44, this generic reduction is no longer used
+ * on the field (mod p) path -- fe_reduce_wide below replaces it there with
+ * reduction specialized to p's pseudo-Mersenne form (2^256 - 2^32 - 977).
+ * It is RETAINED for two reasons: (1) the scalar (mod n) path still uses
+ * it via mulmod()/pipeline_secp256k1_scalar_reduce() below -- fast scalar
+ * reduction is sibling issue #45's scope, not this one's; (2) it is the
+ * differential-test oracle pipeline_secp256k1_fe_mul_reference() (see
+ * secp256k1.h) checks the fast field reduction against. See secp256k1.h's
+ * header comment for the fuller picture.
  */
 static void reduce_wide_mod(const wide_num *x, const pipeline_secp256k1_num *m, pipeline_secp256k1_num *out)
 {
@@ -203,6 +288,7 @@ static void reduce_wide_mod(const wide_num *x, const pipeline_secp256k1_num *m, 
         pipeline_u32 carry = bit;
         for (i = 0; i < REM_WORDS; i++) {
             pipeline_u32 nextCarry = rem[i] >> 31;
+            FIELD_OP_COUNT_TICK();
             rem[i] = (rem[i] << 1) | carry;
             carry = nextCarry;
         }
@@ -249,6 +335,113 @@ static void mulmod(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num
     reduce_wide_mod(&wide, m, out);
 }
 
+/*
+ * Word-width of the fold accumulator used by fe_reduce_wide below.
+ * NUM_WORDS (8) is not enough: the first fold's sum can reach just under
+ * 2^289 (see the derivation below), one bit past what 9 words (288 bits)
+ * can hold, so a 9th word is not sufficient headroom either -- hence
+ * NUM_WORDS + 2 (10 words, 320 bits), comfortably clear of 2^289.
+ */
+#define FIELD_ACC_WORDS (NUM_WORDS + 2)
+
+/*
+ * fe_reduce_wide: out = x mod p, specialized to secp256k1's field prime
+ * p = 2^256 - 2^32 - 977 (fold 2^256 = 2^32 + 977 mod p), REPLACING
+ * reduce_wide_mod's generic 512-iteration bit-serial long division on the
+ * field path (spec #43 sub-issue #44 -- this is the dominant cost of a
+ * signature; secp256k1.h's header comment documents the tradeoff this
+ * supersedes).
+ *
+ * Splitting the 512-bit product x into 256-bit halves x = hi*2^256 + lo,
+ * 2^256 = 2^32 + 977 (mod p) gives x = lo + hi*(2^32+977) (mod p), i.e.
+ * x = lo + (hi << 32) + hi*977 (mod p). Bounding each term with hi, lo both
+ * < 2^256: (hi << 32) < 2^288, hi*977 < 977*2^256 < 2^266, lo < 2^256, so
+ * fold 1's sum acc < 2^256 + 2^288 + 2^266 < 2^289 -- hence FIELD_ACC_WORDS
+ * = 10 words (320 bits) above, not 9 (288 bits).
+ *
+ * acc can still be >= 2^256, so a second, much smaller fold repeats the
+ * same trick on acc's own bits above 256 (hi2 = acc >> 256): since
+ * acc < 2^289, hi2 < 2^33, so fold 2's sum tmp = lo2 + (hi2 << 32) + hi2*977
+ * < 2^256 + 2^65 + 2^43 < 2^256 + 2^66 < 2p (p > 2^255, so 2p > 2^256 + a
+ * term far bigger than 2^66 -- comfortably true). tmp being under 2p alone
+ * means a SINGLE conditional subtraction of p already suffices to bring it
+ * under p; the final loop below runs it twice anyway purely as a fixed,
+ * cheap safety margin against a tighter bound derivation being wrong, not
+ * because 2 is a tight requirement -- either way it is NOT a loop whose
+ * length scales with the 512-bit input, unlike reduce_wide_mod's.
+ */
+static void fe_reduce_wide(const wide_num *x, pipeline_secp256k1_num *out)
+{
+    pipeline_u32 acc[FIELD_ACC_WORDS];
+    pipeline_u32 hiShift[FIELD_ACC_WORDS];
+    pipeline_u32 hiMul[FIELD_ACC_WORDS];
+    pipeline_u32 mext[FIELD_ACC_WORDS];
+    int i;
+
+    /* ---- first fold: 512-bit x -> a <= FIELD_ACC_WORDS*32-bit acc ---- */
+    for (i = 0; i < FIELD_ACC_WORDS; i++) {
+        acc[i] = (i < NUM_WORDS) ? x->w[i] : 0; /* acc = lo, zero-extended */
+        hiShift[i] = 0;
+        hiMul[i] = 0;
+    }
+    for (i = 0; i < NUM_WORDS; i++) {
+        hiShift[i + 1] = x->w[NUM_WORDS + i]; /* hiShift = hi << 32 (whole-word shift) */
+    }
+    arr_mul_small(&x->w[NUM_WORDS], NUM_WORDS, 977u, hiMul); /* hiMul[0..NUM_WORDS] = hi * 977 */
+
+    arr_add(acc, hiShift, FIELD_ACC_WORDS, acc);
+    arr_add(acc, hiMul, FIELD_ACC_WORDS, acc);
+
+    /* ---- second fold: collapse acc's bits above 256 (word index
+     * NUM_WORDS and up -- at most a couple of words after the first fold)
+     * the same way, into acc's low 256 bits. ---- */
+    {
+        pipeline_u32 hi2[FIELD_ACC_WORDS];
+        pipeline_u32 hi2Shift[FIELD_ACC_WORDS];
+        pipeline_u32 hi2Mul[FIELD_ACC_WORDS];
+        pipeline_u32 lo2[FIELD_ACC_WORDS];
+        int hi2Words = FIELD_ACC_WORDS - NUM_WORDS;
+
+        for (i = 0; i < FIELD_ACC_WORDS; i++) {
+            hi2[i] = (i < hi2Words) ? acc[i + NUM_WORDS] : 0;
+            hi2Shift[i] = 0;
+            hi2Mul[i] = 0;
+            lo2[i] = (i < NUM_WORDS) ? acc[i] : 0;
+        }
+        for (i = 0; i < hi2Words; i++) {
+            hi2Shift[i + 1] = hi2[i];
+        }
+        arr_mul_small(hi2, hi2Words, 977u, hi2Mul);
+
+        arr_add(lo2, hi2Shift, FIELD_ACC_WORDS, lo2);
+        arr_add(lo2, hi2Mul, FIELD_ACC_WORDS, lo2);
+
+        for (i = 0; i < FIELD_ACC_WORDS; i++) {
+            acc[i] = lo2[i];
+        }
+    }
+
+    /* acc < 2p (see the derivation above -- fold 2 leaves acc/tmp under
+     * 2^256 + 2^66, comfortably under 2p), so a SINGLE conditional
+     * subtraction of p already suffices to bring it under p. This loop
+     * runs it up to 2 times anyway as a fixed, cheap safety margin, not
+     * because 2 is a tight requirement -- either way it is a fixed, small
+     * trip count enforced by the loop bound itself, not data-length-
+     * dependent like reduce_wide_mod's 512-iteration loop. */
+    for (i = 0; i < FIELD_ACC_WORDS; i++) {
+        mext[i] = (i < NUM_WORDS) ? kFieldP.w[i] : 0;
+    }
+    for (i = 0; i < 2; i++) {
+        if (arr_cmp(acc, mext, FIELD_ACC_WORDS) >= 0) {
+            arr_sub(acc, mext, FIELD_ACC_WORDS, acc);
+        }
+    }
+
+    for (i = 0; i < NUM_WORDS; i++) {
+        out->w[i] = acc[i];
+    }
+}
+
 /* ---- byte conversion ---- */
 
 void pipeline_secp256k1_num_from_bytes(const pipeline_u8 in[PIPELINE_SECP256K1_BYTES], pipeline_secp256k1_num *out)
@@ -280,8 +473,36 @@ void pipeline_secp256k1_num_to_bytes(const pipeline_secp256k1_num *in, pipeline_
 
 static void fe_add(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out) { addmod(a, b, &kFieldP, out); }
 static void fe_sub(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out) { submod(a, b, &kFieldP, out); }
-static void fe_mul(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out) { mulmod(a, b, &kFieldP, out); }
-static void fe_sqr(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out) { mulmod(a, a, &kFieldP, out); }
+
+/* out = a * b mod p, via the fast field-specialized reduction
+ * (fe_reduce_wide) -- every field multiply on the signing/verification
+ * path goes through here (sub-issue #44). */
+static void fe_mul(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out)
+{
+    wide_num wide;
+    num_mul(a, b, &wide);
+    fe_reduce_wide(&wide, out);
+}
+static void fe_sqr(const pipeline_secp256k1_num *a, pipeline_secp256k1_num *out) { fe_mul(a, a, out); }
+
+/*
+ * Test-only diagnostic surface (spec #43 sub-issue #44). Exposes the fast
+ * field multiply (identical to fe_mul above) and the RETAINED naive
+ * generic-reduction field multiply (identical to what fe_mul used to be,
+ * before this sub-issue) directly, so the host test tool's differential
+ * sweep can compare fast-vs-naive field multiplication over arbitrary
+ * field elements without going through a full point operation. Never
+ * called by signing/verification themselves -- only by tools/pipeline_test.
+ */
+void pipeline_secp256k1_fe_mul_fast(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out)
+{
+    fe_mul(a, b, out);
+}
+
+void pipeline_secp256k1_fe_mul_reference(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out)
+{
+    mulmod(a, b, &kFieldP, out);
+}
 
 /* out = base^exponent mod p, via square-and-multiply. Shared by fe_inv
  * (exponent = p-2, Fermat's little theorem) and the modular square root

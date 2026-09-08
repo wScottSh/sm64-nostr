@@ -9,23 +9,32 @@
  * doubling/addition/scalar multiplication over secp256k1's short
  * Weierstrass curve y^2 = x^3 + 7 (a = 0, b = 7).
  *
- * This is a from-scratch, minimal, correctness-first port written for this
- * project -- not a vendor drop of bitcoin-core/secp256k1's own (heavily
- * optimized, constant-time, field-specific-reduction) implementation.
- * Field/scalar reduction is done generically via schoolbook binary long
- * division (see reduce_wide_mod in secp256k1.c) rather than secp256k1 p's
- * special fast-reduction form (p = 2^256 - 2^32 - 977) or a constant-time
- * ladder: spec #24 explicitly locks "no cycle-budget gating" for this
- * one-shot, time-stopped-screen signing operation ("Performance /
- * cycle-budget gating: k*G is one-shot on the time-stopped screen; locked
- * with no measurement gate"), so this trades raw speed and side-channel
- * hardening for a smaller, more directly auditable implementation. Scalar
+ * This is a from-scratch, minimal port written for this project -- not a
+ * vendor drop of bitcoin-core/secp256k1's own (heavily optimized,
+ * constant-time) implementation. It is NOT constant-time: spec #24
+ * explicitly locked "no cycle-budget gating" for this one-shot,
+ * time-stopped-screen signing operation ("Performance / cycle-budget
+ * gating: k*G is one-shot on the time-stopped screen; locked with no
+ * measurement gate"), so this trades side-channel hardening for a
+ * smaller, more directly auditable implementation -- that tradeoff is
+ * unchanged by spec #43.
+ *
+ * Spec #43 (sub-issue #44) replaced the field path's reduction: field
+ * multiplies (mod p) now use reduction specialized to secp256k1 p's
+ * pseudo-Mersenne form (p = 2^256 - 2^32 - 977, folding 2^256 = 2^32 + 977
+ * mod p -- see fe_reduce_wide in secp256k1.c) instead of the generic
+ * schoolbook binary long division (reduce_wide_mod), which was the
+ * dominant cost of a signature (a 512-iteration bit-serial divide inside
+ * every field multiply). reduce_wide_mod is retained for the scalar (mod
+ * n) path and, doubly, as the differential-tested naive reference the
+ * fast field reduction is checked against (see
+ * pipeline_secp256k1_fe_mul_reference below and
+ * tools/pipeline_test/main.c's differential sweep) -- it is no longer an
+ * intentional correctness-first tradeoff on the field path, just a
+ * generic reduction still used elsewhere and as an oracle. Scalar
  * multiplication uses Jacobian coordinates (a single field inversion per
  * multiplication, at the very end) rather than naive per-step affine
- * inversion, which would otherwise be prohibitively slow under this
- * generic reduction -- that is a correctness-adjacent performance choice
- * (keeping a single build within a plausible run time), not a
- * cycle-budget commitment.
+ * inversion.
  *
  * Point arithmetic takes/returns the same affine (x, y) representation as
  * tools/nostr_secp256k1.py's scalar_mult/point_add (used at BUILD TIME
@@ -147,5 +156,54 @@ void pipeline_secp256k1_point_add(const pipeline_secp256k1_point *p1, const pipe
  * BIP-340 verification applies to sig[0:32] before treating it as an x
  * coordinate. */
 int pipeline_secp256k1_num_is_valid_field_element(const pipeline_secp256k1_num *a);
+
+/*
+ * ---- Test-only diagnostic surface (spec #43 sub-issue #44) ----
+ *
+ * Never called from signing/verification themselves (schnorr_adapter.c
+ * only ever reaches field multiplication indirectly, through the point-
+ * arithmetic entry points above) -- only from tools/pipeline_test, so a
+ * rewrite of the internal field-multiply representation can be proven
+ * behavior-preserving directly at the field-op boundary, not just through
+ * whole-signature KATs.
+ */
+
+/* out = a * b mod p, via the fast field-specialized reduction (identical
+ * to what every fe_mul call inside this file uses). */
+void pipeline_secp256k1_fe_mul_fast(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out);
+
+/* out = a * b mod p, via the RETAINED naive generic-reduction path
+ * (reduce_wide_mod) -- the differential-test oracle for
+ * pipeline_secp256k1_fe_mul_fast above. */
+void pipeline_secp256k1_fe_mul_reference(const pipeline_secp256k1_num *a, const pipeline_secp256k1_num *b, pipeline_secp256k1_num *out);
+
+/*
+ * Host-side field-multiply / operation-count proxy (spec #43 sub-issue
+ * #44, reused by later sub-issues in this spec's staged landing). Counts
+ * primitive 32-bit-limb operations performed by the width-parameterized
+ * compare/add/subtract/multiply-by-scalar array primitives
+ * (arr_cmp/arr_sub/arr_add/arr_mul_small) and by reduce_wide_mod's per-bit
+ * loop, since the last reset. reduce_wide_mod and fe_reduce_wide (field/
+ * scalar reduction) are their main callers and dominate any real count,
+ * but num_cmp/num_sub (used by a few non-reduction callers too, e.g.
+ * addmod/submod/field negation) share the same width-parameterized
+ * primitives and so are counted as well -- this is a general primitive-
+ * operation counter, not one scoped narrowly to "reduction calls" only.
+ * Deliberately excluded: num_mul's own 32x32 schoolbook partial-product
+ * loop, which is unchanged between the fast and naive field-multiply
+ * paths and so would add nothing to a fast-vs-naive comparison. A deterministic,
+ * architecture-agnostic stand-in for signing cost, since wall-clock time
+ * on x86 does not reflect the VR4300 (see the header comment above).
+ *
+ * Only counts anything when secp256k1.c is compiled with
+ * PIPELINE_SECP256K1_OP_COUNT defined (tools/pipeline_test/Makefile does
+ * this for the host test tool only); otherwise
+ * pipeline_secp256k1_get_op_count() always returns 0 and reset is a no-op
+ * -- so the ROM build (which never defines that macro) pays nothing for
+ * this, not even the counter increments. Not thread-safe when enabled;
+ * this pipeline is single-threaded everywhere it runs.
+ */
+void pipeline_secp256k1_reset_op_count(void);
+unsigned long long pipeline_secp256k1_get_op_count(void);
 
 #endif /* PIPELINE_SECP256K1_H */
