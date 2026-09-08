@@ -21,20 +21,66 @@ check, which runs before this script is ever invoked. This script additionally
 validates the key file's contents so a malformed (not 32-byte-hex) secret
 also fails the build, never silently producing a keyless/garbage-keyed binary.
 
+Also bakes the per-game `t` tag (--tag, defaults to "sm64") into the generated
+header's PIPELINE_EVENT_TAG_1_VALUE -- format v2 (spec #52, sub-issue #54)
+packs this tag onto the wire, so a build for a different game passes its own
+--tag here rather than editing include/event_profile.h.in. Validated against
+TAG_VALUE_RE (an unreserved identifier charset -- letters, digits, `.`, `_`,
+`-`) and against the wire's own per-game tag length budget, read straight
+from src/pipeline/format_descriptor.json's TAG field (never a second,
+hand-duplicated `10` literal here that could drift from the real wire limit)
+-- fails closed, same discipline as the privkey check above. The charset
+restriction (not just "ASCII") is deliberate: this tag is embedded RAW, byte
+-for-byte, into two places that would otherwise be corruptible by a `"` or
+`\` in the value -- the generated C string literal below (PIPELINE_EVENT_
+TAG_1_VALUE), and the signed NIP-01 tags array (event_id.c does not, and per
+docs/qr-handoff-spec.md's wire contract must not, JSON-escape the tag value
+itself) -- so an unrestricted tag could inject into a build's own generated
+header or corrupt its own signed serialization.
+
 Usage:
   gen_event_profile.py --privkey <path> --template <path> --out <path>
                         --label <str> --manifest <path> [--commit <sha>]
-                        [--created-at <epoch>]
+                        [--created-at <epoch>] [--tag <str>]
 """
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import nostr_secp256k1 as secp  # noqa: E402
+
+# Deliberately narrower than "ASCII": the per-game tag is embedded RAW into
+# both a generated C string literal (PIPELINE_EVENT_TAG_1_VALUE) and the
+# signed, UN-escaped NIP-01 tags array (see this file's own header comment),
+# so `"`, `\`, and other C0-control/non-printable bytes must never be legal
+# here -- this is the fail-closed gate for that, not the wire format's own
+# per-byte contract (docs/qr-handoff-spec.md's TAG field itself is "0..10
+# ASCII bytes", broader than this; this script is stricter on purpose for
+# the values it will itself accept and bake).
+TAG_VALUE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+# Path to the single JSON source of truth for the wire layout (spec #52,
+# sub-issue #54) -- this script reads TAG's own "max_size" from there rather
+# than hand-duplicating the 10-byte v7-MEDIUM budget as a second literal
+# that could silently drift from tools/gen_format_descriptor.py's own
+# rendering of the same field.
+FORMAT_DESCRIPTOR_JSON = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "src", "pipeline", "format_descriptor.json"
+)
+
+
+def load_tag_max_size(path):
+    with open(path, "r") as f:
+        descriptor = json.load(f)
+    for field in descriptor["fields"]:
+        if field.get("name") == "TAG" and field.get("var_len"):
+            return field["max_size"]
+    raise ValueError("%s: no var_len TAG field found" % path)
 
 
 def read_privkey_hex(path):
@@ -81,6 +127,14 @@ def main():
     ap.add_argument("--manifest", required=True, help="path to write the event identity manifest (JSON)")
     ap.add_argument("--commit", default=None)
     ap.add_argument("--created-at", type=int, default=None)
+    ap.add_argument(
+        "--tag",
+        default="sm64",
+        help="per-game `t` tag value baked into this build and packed onto the wire "
+        "(format v2, spec #52 sub-issue #54); must match [A-Za-z0-9._-]+ and fit "
+        "within format_descriptor.json's TAG.max_size (10 B at v7-MEDIUM). "
+        "Defaults to \"sm64\" -- this repo's only game today.",
+    )
     args = ap.parse_args()
 
     try:
@@ -90,6 +144,35 @@ def main():
         sys.stderr.write(
             "gen_event_profile.py: FATAL: could not derive event pubkey from %s: %s\n"
             % (args.privkey, e)
+        )
+        return 1
+
+    if not TAG_VALUE_RE.match(args.tag):
+        sys.stderr.write(
+            "gen_event_profile.py: FATAL: --tag %r contains a character outside "
+            "[A-Za-z0-9._-] -- this value is embedded raw into a generated C string "
+            "literal AND the signed, un-escaped NIP-01 tags array, so `\"`, `\\`, "
+            "whitespace, and other punctuation/control bytes are rejected, not just "
+            "non-ASCII\n" % args.tag
+        )
+        return 1
+
+    try:
+        tag_max_size = load_tag_max_size(FORMAT_DESCRIPTOR_JSON)
+    except Exception as e:
+        sys.stderr.write(
+            "gen_event_profile.py: FATAL: could not read TAG's max_size from %s: %s\n"
+            % (FORMAT_DESCRIPTOR_JSON, e)
+        )
+        return 1
+
+    game_tag_bytes = args.tag.encode("ascii")
+    if len(game_tag_bytes) > tag_max_size:
+        sys.stderr.write(
+            "gen_event_profile.py: FATAL: --tag %r is %d bytes, over the %d-byte "
+            "per-game tag budget (format_descriptor.json's TAG.max_size); a longer "
+            "tag requires moving to a wider format (docs/adr/0002), not a silent "
+            "truncation\n" % (args.tag, len(game_tag_bytes), tag_max_size)
         )
         return 1
 
@@ -109,6 +192,7 @@ def main():
         .replace("@PUBKEY_HEX@", pubkey_hex)
         .replace("@PUBKEY_BYTES@", pubkey_bytes_literal)
         .replace("@PRIVKEY_BYTES@", privkey_bytes_literal)
+        .replace("@GAME_TAG@", args.tag)
     )
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
@@ -122,6 +206,7 @@ def main():
             "pubkey_hex": pubkey_hex,
             "npub": npub,
             "created_at": created_at,
+            "game_tag": args.tag,
             "build_date": build_date,
             "commit": commit_sha,
             "event_profile_h": os.path.basename(args.out),

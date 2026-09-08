@@ -92,17 +92,22 @@ check(schnorr.verify(expectedSig, tamperedMessage, pubkey) === false,
 
 // Spec #24, sub-issue #30's end-to-end build_event() vector: privkey 3
 // (same KAT key as above) signing StarCapture "vector A"'s event id --
-// 0xba237b9e...83cc, the exact id already independently pinned against
-// nostr-tools in tools/reference_event_id.js and tools/pipeline_test/
-// main.c's test_event_id_matches_reference()/kExpectedIdA -- rather than
-// BIP-340's own all-zero test vector 0's message. This is the oracle value
+// the exact id already independently pinned against nostr-tools in
+// tools/reference_event_id.js and tools/pipeline_test/main.c's
+// test_event_id_matches_reference()/kExpectedIdA -- rather than BIP-340's
+// own all-zero test vector 0's message. This is the oracle value
 // tools/pipeline_test/main.c's kBuildEventExpectedSig is pinned against
 // (test_build_event_end_to_end), independently reproducing build_event()'s
 // own pipeline_schnorr_sign() output for a real, non-canned message.
-const VECTOR_A_ID_HEX = 'ba237b9e891ede4212571ded17bce2a616191ec67a7632d28dc9c547d35483cc';
+//
+// Format v2 (spec #52, sub-issue #54): vector A's id changed from the
+// pre-v2 value (0xba237b9e...83cc) because TAG_0 changed from
+// "cabinet-leaderboard" to the spec-pinned "ag-lb" -- see
+// tools/reference_event_id.js's own header comment.
+const VECTOR_A_ID_HEX = 'da41e3231cbb228dd6a68ddd57fb54dc00528d62a35990d2ef5870bc832aa4ee';
 const VECTOR_A_EXPECTED_SIG_HEX =
-  '608b0fb8994c167a91c99e1ecc0bb47e3ba6b10c305dac235a0602ff2b64c10' +
-  'ff3cf87989dadd2fca0ce678dfa19fcbf35004a779398bc5b16eab75c1502067e';
+  '69676d63728cd3d1cc1f918678547779e917b03db54832e8f71a0232eb4beed' +
+  'd804ca767605597381ca4a2a9f81d1ff8f20737bd1ec187cb2999ea9b2270487b';
 const vectorAMessage = hexToBytes(VECTOR_A_ID_HEX);
 const vectorASig = schnorr.sign(vectorAMessage, privkey, auxRand);
 check(bytesToHex(vectorASig) === VECTOR_A_EXPECTED_SIG_HEX,

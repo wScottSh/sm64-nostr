@@ -117,27 +117,87 @@ pipeline_u32 pipeline_event_build_content(const StarCapture *capture, char out[P
     return offset;
 }
 
-pipeline_u32 pipeline_event_serialize(const StarCapture *capture, pipeline_u8 out[PIPELINE_EVENT_SERIALIZED_MAX])
+/* Appends the lowercase hex encoding of bytes[0:len). Used for pubkey,
+ * which format v2 carries as raw wire bytes (never a pre-baked hex string)
+ * when reconstructing generically -- see pipeline_event_serialize_from_fields
+ * below. */
+static pipeline_u32 append_hex_bytes(pipeline_u8 *out, pipeline_u32 offset, pipeline_u32 cap,
+                                      const pipeline_u8 *bytes, pipeline_u32 len)
+{
+    static const char kHexDigits[] = "0123456789abcdef";
+    pipeline_u32 i;
+
+    for (i = 0; i < len; i++) {
+        if (offset < cap) {
+            out[offset++] = (pipeline_u8)kHexDigits[(bytes[i] >> 4) & 0xF];
+        }
+        if (offset < cap) {
+            out[offset++] = (pipeline_u8)kHexDigits[bytes[i] & 0xF];
+        }
+    }
+    return offset;
+}
+
+pipeline_u32 pipeline_event_serialize_from_fields(const pipeline_u8 pubkey[PIPELINE_FMT_SIZE_PUBKEY],
+                                                   pipeline_u32 createdAt,
+                                                   const char *tag1,
+                                                   pipeline_u32 tag1Len,
+                                                   const StarCapture *capture,
+                                                   pipeline_u8 out[PIPELINE_EVENT_SERIALIZED_MAX])
 {
     char content[PIPELINE_EVENT_CONTENT_MAX];
     pipeline_u32 cap = PIPELINE_EVENT_SERIALIZED_MAX;
     pipeline_u32 offset = 0;
+    pipeline_u32 i;
 
     pipeline_event_build_content(capture, content);
 
     offset = append_str(out, offset, cap, "[0,\"");
-    offset = append_str(out, offset, cap, PIPELINE_EVENT_PUBKEY_HEX);
+    offset = append_hex_bytes(out, offset, cap, pubkey, PIPELINE_FMT_SIZE_PUBKEY);
     offset = append_str(out, offset, cap, "\",");
-    offset = append_udec(out, offset, cap, (pipeline_u32)PIPELINE_EVENT_CREATED_AT);
+    offset = append_udec(out, offset, cap, createdAt);
     offset = append_str(out, offset, cap, ",");
     offset = append_udec(out, offset, cap, (pipeline_u32)PIPELINE_EVENT_KIND);
+    /* TAG_0 is always the format-v2-pinned constant PIPELINE_EVENT_TAG0_VALUE
+     * ("ag-lb", never a parameter -- see this function's header comment in
+     * event_id.h and PIPELINE_EVENT_KIND/PIPELINE_EVENT_TAG_KEY/
+     * PIPELINE_EVENT_TAG0_VALUE's own definitions there, the single source
+     * for these spec-pinned constants). */
     offset = append_str(out, offset, cap,
-        ",[[\"" PIPELINE_EVENT_TAG_0_KEY "\",\"" PIPELINE_EVENT_TAG_0_VALUE "\"],"
-        "[\"" PIPELINE_EVENT_TAG_1_KEY "\",\"" PIPELINE_EVENT_TAG_1_VALUE "\"]],\"");
+        ",[[\"" PIPELINE_EVENT_TAG_KEY "\",\"" PIPELINE_EVENT_TAG0_VALUE "\"],[\"" PIPELINE_EVENT_TAG_KEY "\",\"");
+    for (i = 0; i < tag1Len; i++) {
+        if (offset < cap) {
+            out[offset++] = (pipeline_u8)tag1[i];
+        }
+    }
+    offset = append_str(out, offset, cap, "\"]],\"");
     offset = append_json_escaped(out, offset, cap, content);
     offset = append_str(out, offset, cap, "\"]");
 
     return offset;
+}
+
+void pipeline_event_compute_id_from_fields(const pipeline_u8 pubkey[PIPELINE_FMT_SIZE_PUBKEY],
+                                            pipeline_u32 createdAt,
+                                            const char *tag1,
+                                            pipeline_u32 tag1Len,
+                                            const StarCapture *capture,
+                                            pipeline_u8 id_out[PIPELINE_EVENT_ID_SIZE])
+{
+    pipeline_u8 buf[PIPELINE_EVENT_SERIALIZED_MAX];
+    pipeline_u32 len = pipeline_event_serialize_from_fields(pubkey, createdAt, tag1, tag1Len, capture, buf);
+
+    pipeline_sha256(buf, len, id_out);
+}
+
+pipeline_u32 pipeline_event_serialize(const StarCapture *capture, pipeline_u8 out[PIPELINE_EVENT_SERIALIZED_MAX])
+{
+    static const pipeline_u8 kPubkeyBytes[PIPELINE_FMT_SIZE_PUBKEY] = PIPELINE_EVENT_PUBKEY_BYTES;
+
+    return pipeline_event_serialize_from_fields(kPubkeyBytes, (pipeline_u32)PIPELINE_EVENT_CREATED_AT,
+                                                 PIPELINE_EVENT_TAG_1_VALUE,
+                                                 (pipeline_u32)PIPELINE_EVENT_TAG_1_LEN,
+                                                 capture, out);
 }
 
 void pipeline_event_compute_id(const StarCapture *capture, pipeline_u8 id_out[PIPELINE_EVENT_ID_SIZE])

@@ -13,12 +13,19 @@
  * types below instead of depending on <stdint.h> (unavailable under the ROM
  * build's -nostdinc) or the decomp's own N64 types.h.
  *
- * Also pulls in format_descriptor.h for its size macro only
- * (PIPELINE_FMT_TOTAL_SIZE, which PIPELINE_BUILT_PAYLOAD_SIZE below is
- * built from) -- the SAME generated, single-source-of-truth constant
- * pack_adapter.h's own PIPELINE_PACKED_SIZE is built from and
- * pipeline_pack()/pipeline_unpack() actually use, never a hand-duplicated
- * literal that could silently drift.
+ * Also pulls in format_descriptor.h for its size macros only
+ * (PIPELINE_FMT_FIXED_SIZE, which PIPELINE_BUILT_PAYLOAD_SIZE below is
+ * built from) -- the SAME generated, single-source-of-truth constants
+ * pack_adapter.h's pipeline_pack()/pipeline_unpack() actually use, never a
+ * hand-duplicated literal that could silently drift. Format v2 (spec #52,
+ * sub-issue #54) also pulls in event_profile.h for PIPELINE_EVENT_TAG_1_LEN
+ * (the per-game tag's compile-time length, itself a sizeof() of a build-
+ * time string macro -- see event_profile.h.in): THIS build's own packed
+ * payload size is fixed at compile time even though the wire FORMAT
+ * supports a variable tag length, because a single ROM build only ever
+ * bakes and packs its own one per-game tag. event_profile.h has no
+ * circular-include hazard with this file (unlike pack_adapter.h -- see the
+ * comment below), so it's included directly.
  *
  * Deliberately included here rather than via pack_adapter.h directly:
  * pack_adapter.h itself #includes "build_event.h" (for StarCapture/
@@ -29,13 +36,14 @@
  * guard, PIPELINE_BUILD_EVENT_H, isn't set yet) and, partway through,
  * reaches THIS #include "pack_adapter.h" line -- which DOES no-op, because
  * PIPELINE_PACK_ADAPTER_H is already open from the outermost include.
- * PIPELINE_PACKED_SIZE (defined later in pack_adapter.h, after that
+ * PIPELINE_PACK_MAX_SIZE (defined later in pack_adapter.h, after that
  * no-op'd include) never gets defined, so referencing it below would be an
- * undeclared-identifier error. format_descriptor.h has no such cycle (it
- * never includes build_event.h), so going one level lower, straight to the
- * generated header, avoids the problem entirely.
+ * undeclared-identifier error. format_descriptor.h/event_profile.h have no
+ * such cycle (neither includes build_event.h), so going one level lower,
+ * straight to the generated headers, avoids the problem entirely.
  */
 #include "format_descriptor.h"
+#include "event_profile.h"
 
 typedef unsigned char  pipeline_u8;
 typedef unsigned short pipeline_u16;
@@ -62,7 +70,19 @@ typedef struct StarCapture {
 
 #define PIPELINE_KEY_SIZE 32
 
-#define PIPELINE_BUILT_PAYLOAD_SIZE PIPELINE_FMT_TOTAL_SIZE
+/* This build's own packed payload size: format v2's wire layout supports a
+ * variable-length per-game tag (0..10 B), but any ONE ROM build only ever
+ * bakes and packs its own single tag (PIPELINE_EVENT_TAG_1_VALUE), whose
+ * length is fixed at compile time (PIPELINE_EVENT_TAG_1_LEN) -- so
+ * PIPELINE_BUILT_PAYLOAD_SIZE below is itself a fixed compile-time
+ * constant for this build, derived from the SAME format_descriptor.h
+ * fixed-size accounting (PIPELINE_FMT_FIXED_SIZE) pack_adapter.h's
+ * pipeline_pack()/pipeline_unpack() use (via PIPELINE_FMT_TOTAL_SIZE(tagLen)),
+ * never a hand-duplicated literal. A decoder handling an ARBITRARY
+ * incoming payload (a different build's tag length) must instead use
+ * PIPELINE_PACK_MAX_SIZE (pack_adapter.h) and the wire TAG_LEN it reads at
+ * runtime -- see pipeline_unpack()'s own contract. */
+#define PIPELINE_BUILT_PAYLOAD_SIZE (PIPELINE_FMT_FIXED_SIZE + PIPELINE_EVENT_TAG_1_LEN)
 
 /*
  * QR bitmap buffer sizing: mirrors qrcodegen_BUFFER_LEN_FOR_VERSION(7) --
@@ -84,11 +104,13 @@ typedef struct StarCapture {
     ((((PIPELINE_BUILT_QR_VERSION) * 4 + 17) * ((PIPELINE_BUILT_QR_VERSION) * 4 + 17) + 7) / 8 + 1)
 
 /*
- * The pipeline's real output (spec #24, sub-issue #30): the packed payload
- * (1-byte format tag + StarCapture's fields + 64-byte Schnorr signature, per
- * format_descriptor.json -- currently 75 B, comfortably inside the ~88 B
- * spine) and the QR bitmap it was encoded into (qrcodegen format; read via
- * pipeline_qr_get_size()/pipeline_qr_get_module(), see qr_adapter.h).
+ * The pipeline's real output (spec #24, sub-issue #30; format v2 self-
+ * contained payload, spec #52 sub-issue #54): the packed payload (format
+ * tag + StarCapture's fields + CREATED_AT + PUBKEY + TAG_LEN/TAG + 64-byte
+ * Schnorr signature, per format_descriptor.json -- 112 + this build's own
+ * tag length, e.g. 116 B for "sm64") and the QR bitmap it was encoded into
+ * (qrcodegen format; read via pipeline_qr_get_size()/pipeline_qr_get_module(),
+ * see qr_adapter.h).
  */
 typedef struct BuiltEvent {
     pipeline_u8 packed_payload[PIPELINE_BUILT_PAYLOAD_SIZE];
