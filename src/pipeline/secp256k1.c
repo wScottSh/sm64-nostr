@@ -11,6 +11,19 @@
  * particular word order -- construct/read every pipeline_secp256k1_num via
  * those two functions or the arithmetic functions in secp256k1.h.
  *
+ * ONE scoped exception (spec #43, sub-issue #47): kCombTable below is
+ * initialized directly from PIPELINE_SECP256K1_COMB_TABLE_INIT, a
+ * generated-header macro (secp256k1_baked.h, rendered by tools/
+ * gen_secp256k1_baked.py) that DOES hardcode this exact little-endian-limb
+ * word order -- a generator-side literal, not a function, so the "no
+ * function... may assume a particular word order" rule above still holds
+ * for actual code; only that one generated constant knows the layout, and
+ * only because it is consumed nowhere but this file (see
+ * secp256k1_baked.h.in's own header comment for why this is safe: the
+ * table is never read by any other translation unit, and a representation
+ * mismatch between the generator and this file would fail the differential
+ * sweep in tools/pipeline_test/main.c immediately, not silently).
+ *
  * `unsigned long long` (a built-in type needing no header, same
  * justification as sha256.h's bitlen field) is used as the carry/widening
  * type for 32x32->64-bit partial products and add/sub carries -- the VR4300
@@ -20,6 +33,7 @@
  */
 
 #include "secp256k1.h"
+#include "secp256k1_baked.h" /* PIPELINE_SECP256K1_COMB_* (spec #43, sub-issue #47) */
 
 #define NUM_WORDS 8
 #define WIDE_WORDS 16
@@ -68,6 +82,50 @@ static const pipeline_secp256k1_num kGy = {{
     0xFB10D4B8u, 0x9C47D08Fu, 0xA6855419u, 0xFD17B448u,
     0x0E1108A8u, 0x5DA4FBFCu, 0x26A3C465u, 0x483ADA77u,
 }};
+
+/*
+ * Fixed-base comb table for k*G (spec #43, sub-issue #47) -- see
+ * secp256k1_baked.h's own header comment and tools/gen_secp256k1_baked.py's
+ * build_comb_table()/validate_comb_table() for the algorithm this table
+ * implements, and point_mul_base_comb() below for how it is consumed. Each
+ * entry is a plain affine (x, y) pair in this file's own internal little-
+ * endian-limb pipeline_secp256k1_num representation (never bytes -- see
+ * secp256k1_baked.h.in's own note on why this ONE generated header carries
+ * values in two different representations for its two different
+ * consumers), so kCombTable can be a `static const` array read directly at
+ * its point_mul_base_comb() call sites with zero runtime byte<->num
+ * conversion and zero extra RAM.
+ *
+ * kCombTable[0] is the unused "no bits set" slot (point_mul_base_comb()
+ * never looks it up -- every table read below is guarded by `s != 0`); its
+ * value is whatever the generator happened to emit for the point at
+ * infinity (never a valid affine point) and must never be read as one.
+ *
+ * sizeof(kCombTable) is asserted at COMPILE time against the VR4300's
+ * 8 KB data-cache budget (via PIPELINE_SECP256K1_COMB_CACHE_BUDGET_BYTES,
+ * the SAME generator-owned budget constant gen_secp256k1_baked.py's
+ * validate_comb_table() checks at generation time, not a second hardcoded
+ * copy of "8192") by pipeline_secp256k1_comb_table_budget_check below (a
+ * negative-array-size trick) -- so a future edit that widens
+ * PIPELINE_SECP256K1_COMB_D without updating the generator's matching
+ * budget check still fails the BUILD closed rather than silently shipping
+ * an oversized table. A second check right below it separately confirms
+ * kCombTable's REAL sizeof() matches PIPELINE_SECP256K1_COMB_TABLE_BYTES
+ * (the generator's own byte-count arithmetic for that same table) exactly
+ * -- catching a struct-layout/padding assumption drifting from the
+ * generator's SIZE * 64-bytes-per-point arithmetic, which the budget
+ * check alone (an inequality) would not.
+ */
+typedef struct {
+    pipeline_secp256k1_num x, y;
+} comb_point;
+
+static const comb_point kCombTable[PIPELINE_SECP256K1_COMB_TABLE_SIZE] = PIPELINE_SECP256K1_COMB_TABLE_INIT;
+
+typedef char pipeline_secp256k1_comb_table_budget_check[
+    (sizeof(kCombTable) <= PIPELINE_SECP256K1_COMB_CACHE_BUDGET_BYTES) ? 1 : -1];
+typedef char pipeline_secp256k1_comb_table_bytes_check[
+    (sizeof(kCombTable) == PIPELINE_SECP256K1_COMB_TABLE_BYTES) ? 1 : -1];
 
 /* ---- fixed-width big-integer primitives (mod 2^256, little-endian limbs) ---- */
 
@@ -942,7 +1000,72 @@ static void point_mul_core(const pipeline_secp256k1_num *k, const pipeline_secp2
     jac_to_affine(&r, out);
 }
 
+/*
+ * Fixed-base comb scalar multiplication for k*G (spec #43, sub-issue #47):
+ * out_affine = k * G, via kCombTable instead of point_mul_core's generic
+ * per-bit double-and-add against a runtime base point. Standard "comb"
+ * method (Handbook of Applied Cryptography, Algorithm 3.44) -- see
+ * secp256k1_baked.h's own header comment and tools/gen_secp256k1_baked.py's
+ * build_comb_table()/_comb_scalar_mult() for the matching Python
+ * construction/oracle this function must stay bit-for-bit consistent with
+ * (tools/pipeline_test/main.c's differential sweep proves that at runtime).
+ *
+ * k is treated as an unsigned PIPELINE_SECP256K1_COMB_D * PIPELINE_
+ * SECP256K1_COMB_E-bit value (258 bits for D=6/E=43), zero-padded above
+ * bit 255 -- k itself is only ever 256 bits wide (pipeline_secp256k1_num),
+ * so every bit position >= 256 this function would otherwise read is
+ * always exactly 0, matching the Python oracle's own
+ * `bit = (k >> bitpos) & 1 if bitpos < 256 else 0` padding rule.
+ *
+ * For each of the E columns (most significant first), doubles the running
+ * accumulator once, then gathers one bit from each of the D rows at that
+ * column into a D-bit digit s and -- unless s is all-zero (no bits set,
+ * kCombTable[0] is never a valid point and is never read) -- adds
+ * kCombTable[s]. At most E doublings + E additions (86 Jacobian point
+ * operations for D=6/E=43), versus point_mul_core's up to 256 doublings +
+ * 256 additions (512) for the same k -- the whole point of sub-issue #47.
+ */
+static void point_mul_base_comb(const pipeline_secp256k1_num *k, pipeline_secp256k1_point *out)
+{
+    jacobian_point acc;
+    int col;
+
+    acc.infinity = 1;
+
+    for (col = PIPELINE_SECP256K1_COMB_E - 1; col >= 0; col--) {
+        jacobian_point doubled;
+        unsigned s;
+        int i;
+
+        jac_double(&acc, &doubled);
+        acc = doubled;
+
+        s = 0;
+        for (i = PIPELINE_SECP256K1_COMB_D - 1; i >= 0; i--) {
+            int bitpos = i * PIPELINE_SECP256K1_COMB_E + col;
+            pipeline_u32 bit = 0;
+            if (bitpos < NUM_WORDS * 32) {
+                bit = (k->w[bitpos / 32] >> (bitpos % 32)) & 1u;
+            }
+            s = (s << 1) | bit;
+        }
+
+        if (s != 0) {
+            jacobian_point added;
+            jac_add_mixed(&acc, &kCombTable[s].x, &kCombTable[s].y, &added);
+            acc = added;
+        }
+    }
+
+    jac_to_affine(&acc, out);
+}
+
 void pipeline_secp256k1_point_mul_base(const pipeline_secp256k1_num *k, pipeline_secp256k1_point *out)
+{
+    point_mul_base_comb(k, out);
+}
+
+void pipeline_secp256k1_point_mul_base_reference(const pipeline_secp256k1_num *k, pipeline_secp256k1_point *out)
 {
     point_mul_core(k, &kGx, &kGy, out);
 }

@@ -53,10 +53,27 @@
  * tools/gen_secp256k1_baked.py and the generated secp256k1_baked.h) and
  * baked into schnorr_adapter.c as a constant, instead of being
  * point_mul_base'd (and Jacobian-to-affine-inverted) on every signature.
- * pipeline_secp256k1_point_mul_base itself is unchanged and still used for
- * R = k'*G (k' is nonce-derived per signature, never a build-time
- * constant) and by pipeline_schnorr_verify's internal self-consistency
- * check.
+ * pipeline_secp256k1_point_mul_base's OTHER call site, R = k'*G (k' is
+ * nonce-derived per signature, never a build-time constant, so it can
+ * never be baked away the way P was), remains -- sub-issue #47 (below)
+ * speeds that one up instead of removing it.
+ *
+ * Spec #43 sub-issue #47 replaced pipeline_secp256k1_point_mul_base's OWN
+ * algorithm: it no longer runs point_mul_core's generic per-bit double-
+ * and-add (256 doublings, up to 256 additions) against the runtime base
+ * point argument. Because this function's base point is always the FIXED
+ * generator G, it now uses a small precomputed fixed-base comb/window
+ * table for G instead (point_mul_base_comb in secp256k1.c) -- COMB_E
+ * doublings (43) each followed by at most one table-lookup addition,
+ * generated and validated at build time by the SAME tools/
+ * gen_secp256k1_baked.py generator #46 added (see secp256k1_baked.h's own
+ * header comment for the table's algorithm and its 8 KB VR4300 data-cache
+ * budget). point_mul_core itself is unchanged and still used by
+ * pipeline_secp256k1_point_mul (arbitrary base point, not fixed -- no comb
+ * table applies) and, as the RETAINED naive reference, by
+ * pipeline_secp256k1_point_mul_base_reference below (this sub-issue's own
+ * differential-test oracle, exactly mirroring how #44/#45 kept
+ * reduce_wide_mod around solely as their fast reductions' oracle).
  *
  * Point arithmetic takes/returns the same affine (x, y) representation as
  * tools/nostr_secp256k1.py's scalar_mult/point_add (used at BUILD TIME
@@ -132,9 +149,10 @@ void pipeline_secp256k1_scalar_negate(const pipeline_secp256k1_num *a, pipeline_
 /* True iff 0 < a < n -- the valid private-key/nonce scalar range. */
 int pipeline_secp256k1_scalar_in_range(const pipeline_secp256k1_num *a);
 
-/* out = k * G (the curve's base point/generator). Undefined (out->infinity
- * set) only if k is 0 mod n, which pipeline_secp256k1_scalar_in_range()
- * rules out for valid callers. */
+/* out = k * G (the curve's base point/generator), via the fixed-base comb
+ * table (spec #43, sub-issue #47 -- point_mul_base_comb in secp256k1.c).
+ * Undefined (out->infinity set) only if k is 0 mod n, which
+ * pipeline_secp256k1_scalar_in_range() rules out for valid callers. */
 void pipeline_secp256k1_point_mul_base(const pipeline_secp256k1_num *k, pipeline_secp256k1_point *out);
 
 /* out = k * base, for an arbitrary affine input point (base->infinity must
@@ -180,15 +198,23 @@ void pipeline_secp256k1_point_add(const pipeline_secp256k1_point *p1, const pipe
 int pipeline_secp256k1_num_is_valid_field_element(const pipeline_secp256k1_num *a);
 
 /*
- * ---- Test-only diagnostic surface (spec #43 sub-issues #44/#45) ----
+ * ---- Test-only diagnostic surface (spec #43 sub-issues #44/#45/#47) ----
  *
  * Never called from signing/verification themselves (schnorr_adapter.c
- * only ever reaches field/scalar multiplication indirectly, through the
- * point-arithmetic/scalar entry points above) -- only from
- * tools/pipeline_test, so a rewrite of the internal field/scalar-multiply
- * representation can be proven behavior-preserving directly at the
- * arithmetic-op boundary, not just through whole-signature KATs.
+ * only ever reaches field/scalar/point multiplication indirectly, through
+ * the point-arithmetic/scalar entry points above) -- only from
+ * tools/pipeline_test, so a rewrite of the internal field/scalar-multiply/
+ * point-multiply representation can be proven behavior-preserving directly
+ * at the arithmetic-op boundary, not just through whole-signature KATs.
  */
+
+/* out = k * G, via the RETAINED naive generic double-and-add path
+ * (point_mul_core, the same algorithm pipeline_secp256k1_point_mul_base
+ * itself used before sub-issue #47) -- the differential-test/op-count-
+ * proxy oracle for pipeline_secp256k1_point_mul_base's comb-table fast
+ * path, exactly mirroring how the _reference functions below are kept
+ * solely as sub-issues #44/#45's own oracles. */
+void pipeline_secp256k1_point_mul_base_reference(const pipeline_secp256k1_num *k, pipeline_secp256k1_point *out);
 
 /* out = a * b mod p, via the fast field-specialized reduction (identical
  * to what every fe_mul call inside this file uses). */

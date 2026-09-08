@@ -560,6 +560,11 @@ PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)
 # header exists. sha256.o/secp256k1.o are built via the C99 carve-out rule
 # below (different CC/CFLAGS override), but a prerequisite is still a
 # prerequisite regardless of which rule ultimately builds the object.
+# secp256k1.o also needs PIPELINE_SECP256K1_BAKED_H now (spec #43,
+# sub-issue #47): it #includes secp256k1_baked.h directly for the
+# PIPELINE_SECP256K1_COMB_* fixed-base comb table macros (kCombTable's own
+# initializer), not just transitively -- the same generated header
+# schnorr_adapter.o already depended on for P's baked bytes (#46).
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
@@ -567,7 +572,7 @@ $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/sha256.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/secp256k1.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/secp256k1.o: $(PIPELINE_FORMAT_DESCRIPTOR_H) $(PIPELINE_SECP256K1_BAKED_H)
 
 # interaction.o (sub-issue #31) is the first NON-pipeline object to #include
 # a pipeline generated header: it #includes event_profile.h directly (for

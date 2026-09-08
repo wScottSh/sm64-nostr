@@ -1579,6 +1579,162 @@ static void test_scalar_differential_sweep(void)
 }
 
 /*
+ * Fixed-base comb k*G differential sweep + cache-budget assertion (spec
+ * #43, sub-issue #47). Reuses the same seeded-xorshift32-PRNG/pinned-edge-
+ * vectors shape #44/#45 established above, this time comparing
+ * pipeline_secp256k1_point_mul_base (the fast path, now
+ * point_mul_base_comb -- a table lookup per comb column) against
+ * pipeline_secp256k1_point_mul_base_reference (the RETAINED naive
+ * per-bit double-and-add, the same algorithm point_mul_base itself used
+ * before this sub-issue) for the SAME k, asserting the two agree on the
+ * full resulting affine point (x, y, and infinity-ness) -- not just x, so
+ * a wrong-parity/sign table entry would be caught here too, exactly like
+ * derive_and_validate()'s own point-vs-just-x distinction in
+ * gen_secp256k1_baked.py.
+ *
+ * k here is drawn from field_test_random_num() (the plain uniform [0,
+ * 2^256) generator #44 established), NOT reduced mod n first: both
+ * point_mul_base and point_mul_base_reference are well-defined for ANY
+ * 256-bit k (a plain double-and-add / comb evaluation of the integer k*G,
+ * with no notion of "canonical scalar range" baked into either algorithm),
+ * so this is the strictly stronger sweep, mirroring field_mul_differential_
+ * check_one's own reasoning for the field-multiply sweep above.
+ */
+#define POINT_MUL_BASE_SWEEP_ITERATIONS 500
+#define POINT_MUL_BASE_SWEEP_SEED 0xB16B00B5u
+
+static int points_equal(const pipeline_secp256k1_point *a, const pipeline_secp256k1_point *b)
+{
+    if (a->infinity || b->infinity) {
+        return a->infinity && b->infinity;
+    }
+    return memcmp(&a->x, &b->x, sizeof(a->x)) == 0 && memcmp(&a->y, &b->y, sizeof(a->y)) == 0;
+}
+
+static void point_mul_base_differential_check_one(const pipeline_secp256k1_num *k, int index, int *allMatch, int *firstMismatch)
+{
+    pipeline_secp256k1_point fast, reference;
+
+    pipeline_secp256k1_point_mul_base(k, &fast);
+    pipeline_secp256k1_point_mul_base_reference(k, &reference);
+    if (!points_equal(&fast, &reference)) {
+        *allMatch = 0;
+        if (*firstMismatch < 0) {
+            *firstMismatch = index;
+        }
+    }
+}
+
+static void test_point_mul_base_comb_differential_sweep(void)
+{
+    int i;
+    int allMatch;
+    int firstMismatch;
+
+    /* Build-time/compile-time cache-budget assertion, re-checked here at
+     * host-test time too (not just by kCombTableBudgetCheck's compile-time
+     * negative-array-size trick in secp256k1.c, and not just by
+     * gen_secp256k1_baked.py's own validate_comb_table() at generation
+     * time): PIPELINE_SECP256K1_COMB_TABLE_BYTES (this generated header's
+     * own accounting of kCombTable's size) must fit the VR4300's 8 KB data
+     * cache. Printed so the chosen size is visible in a normal test run,
+     * not just discoverable by reading the header. */
+    printf("  comb table: COMB_D=%d, COMB_E=%d, %d entries, %d bytes (8 KB budget)\n",
+           (int)PIPELINE_SECP256K1_COMB_D, (int)PIPELINE_SECP256K1_COMB_E,
+           (int)PIPELINE_SECP256K1_COMB_TABLE_SIZE, (int)PIPELINE_SECP256K1_COMB_TABLE_BYTES);
+    check(PIPELINE_SECP256K1_COMB_TABLE_BYTES > 0 &&
+          PIPELINE_SECP256K1_COMB_TABLE_BYTES <= PIPELINE_SECP256K1_COMB_CACHE_BUDGET_BYTES,
+          "comb table: PIPELINE_SECP256K1_COMB_TABLE_BYTES fits within PIPELINE_SECP256K1_COMB_CACHE_BUDGET_BYTES "
+          "(the VR4300's 8 KB data cache budget)");
+
+    /* Pinned edge vectors: zero (k*G undefined/infinity on both paths --
+     * point_mul_core's own early-out and point_mul_base_comb's "every
+     * column digit s is 0" case must agree), one, two, the highest bit
+     * alone set, the lowest COMB_E bits alone set (exercises exactly row
+     * i=0 of the comb decomposition and nothing else), and 2^256-1 (every
+     * bit set, exercising every row/column of the comb decomposition at
+     * once). */
+    {
+        pipeline_secp256k1_num zero, one, two, maxVal, highBit, lowSpan;
+        int edgeAllMatch = 1;
+        int edgeFirstMismatch = -1;
+        static const pipeline_u8 kZeroBytes[PIPELINE_SECP256K1_BYTES] = {0};
+        static const pipeline_u8 kOneBytes[PIPELINE_SECP256K1_BYTES] = {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        };
+        static const pipeline_u8 kTwoBytes[PIPELINE_SECP256K1_BYTES] = {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        };
+        static const pipeline_u8 kMaxBytes[PIPELINE_SECP256K1_BYTES] = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        };
+        /* bit 255 (the top bit) alone set. */
+        static const pipeline_u8 kHighBitBytes[PIPELINE_SECP256K1_BYTES] = {
+            0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        };
+        /* the bottom 43 bits (0x7FFFFFFFFFF) all set -- exactly row i=0's
+         * span for COMB_D=6/COMB_E=43; a mismatch confined to this vector
+         * alone would isolate a bug to row 0's basis point/table entries. */
+        static const pipeline_u8 kLowSpanBytes[PIPELINE_SECP256K1_BYTES] = {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        };
+
+        pipeline_secp256k1_num_from_bytes(kZeroBytes, &zero);
+        pipeline_secp256k1_num_from_bytes(kOneBytes, &one);
+        pipeline_secp256k1_num_from_bytes(kTwoBytes, &two);
+        pipeline_secp256k1_num_from_bytes(kMaxBytes, &maxVal);
+        pipeline_secp256k1_num_from_bytes(kHighBitBytes, &highBit);
+        pipeline_secp256k1_num_from_bytes(kLowSpanBytes, &lowSpan);
+
+        /* Distinct indices (0..5, one per vector below) rather than a
+         * shared 0 -- unlike a bare pass/fail latch, edgeFirstMismatch here
+         * can actually name WHICH pinned vector failed if one does. */
+        point_mul_base_differential_check_one(&zero, 0, &edgeAllMatch, &edgeFirstMismatch);
+        point_mul_base_differential_check_one(&one, 1, &edgeAllMatch, &edgeFirstMismatch);
+        point_mul_base_differential_check_one(&two, 2, &edgeAllMatch, &edgeFirstMismatch);
+        point_mul_base_differential_check_one(&maxVal, 3, &edgeAllMatch, &edgeFirstMismatch);
+        point_mul_base_differential_check_one(&highBit, 4, &edgeAllMatch, &edgeFirstMismatch);
+        point_mul_base_differential_check_one(&lowSpan, 5, &edgeAllMatch, &edgeFirstMismatch);
+
+        if (!edgeAllMatch) {
+            static const char *const kEdgeVectorNames[6] = {
+                "zero", "one", "two", "2^256-1", "high-bit-only", "row-0-span-only",
+            };
+            printf("  point_mul_base_comb edge-vector sweep: first mismatch at vector %d (%s)\n",
+                   edgeFirstMismatch,
+                   (edgeFirstMismatch >= 0 && edgeFirstMismatch < 6) ? kEdgeVectorNames[edgeFirstMismatch] : "?");
+        }
+        check(edgeAllMatch,
+              "fixed-base comb k*G differential sweep: fast comb table matches the naive "
+              "double-and-add reference on pinned edge vectors (0, 1, 2, 2^256-1, "
+              "high-bit-only, row-0-span-only)");
+    }
+
+    allMatch = 1;
+    firstMismatch = -1;
+    field_test_rng_seed(POINT_MUL_BASE_SWEEP_SEED);
+    for (i = 0; i < POINT_MUL_BASE_SWEEP_ITERATIONS; i++) {
+        pipeline_secp256k1_num k;
+
+        field_test_random_num(&k);
+        point_mul_base_differential_check_one(&k, i, &allMatch, &firstMismatch);
+    }
+    if (!allMatch) {
+        printf("  point_mul_base_comb_differential_sweep: first mismatch at iteration %d "
+               "(seed 0x%08lX, %d iterations) -- reproduce exactly with these constants\n",
+               firstMismatch, (unsigned long)POINT_MUL_BASE_SWEEP_SEED, POINT_MUL_BASE_SWEEP_ITERATIONS);
+    }
+    check(allMatch,
+          "fixed-base comb k*G differential sweep: fast comb table matches the retained naive "
+          "double-and-add reference over 500 seeded random 256-bit scalars k");
+}
+
+/*
  * Host-side field-multiply / operation-count proxy (spec #43 sub-issue
  * #44's other required proof mechanism). Two independent assertions:
  *
@@ -1617,29 +1773,27 @@ static void test_scalar_differential_sweep(void)
  *     is deliberately not used here (it does not represent the target
  *     VR4300 -- see secp256k1.h's header comment).
  *
- * (5) Sub-issue #46 removes pipeline_schnorr_sign's OTHER point_mul_base
+ * (5) Sub-issue #46 removed pipeline_schnorr_sign's OTHER point_mul_base
  *     call entirely (P = d'*G, now baked at build time -- see
  *     secp256k1_baked.h and test_baked_public_point_matches_reference()
- *     above), re-measured at ~249K, down from ~279K -- a real but, for
- *     THIS KAT specifically, modest-looking ~11% drop: kSchnorrPrivkey is
- *     the published BIP-340 test vector 0 key (d = 3), an atypically cheap
- *     scalar to multiply by G, since point_mul_core's double-and-add loop
- *     doubles the point-at-infinity (an early-out no-op in jac_double, no
- *     field multiplies at all) for every one of d = 3's 254 leading zero
- *     bits and only does real work on its last two bits -- confirmed
- *     below by this function's own self-proving reconstruction check,
- *     which directly measures pipeline_secp256k1_point_mul_base(d=3) in
- *     isolation (~29,757 ops) and confirms signOps + that isolated cost
- *     reconstructs #45's own measured whole-signature total (~279,207)
- *     -- not a stale one-time-measured comment, but a live assertion
- *     this test re-derives on every run. A real per-event private key
- *     (a full-width, effectively random 256-bit build-time secret, never
- *     a small test-vector integer
- *     like 3) has none of d=3's near-all-zero-bits structure, so removing
- *     its P = d*G call removes a P-computation cost close to R = k'*G's
- *     own (k' is always hash-derived, i.e. already full-width/random) --
- *     roughly halving total signature cost for a real key, even though
- *     this KAT-measured bound only reflects an ~11% drop for d = 3.
+ *     above), measured at the time at ~249K, down from ~279K.
+ *
+ * (6) Sub-issue #47 replaces pipeline_secp256k1_point_mul_base's OWN
+ *     algorithm (used for #46's one remaining call, R = k'*G) with the
+ *     fixed-base comb table (point_mul_base_comb) instead of the generic
+ *     per-bit double-and-add (point_mul_core) #44-#46 left it running --
+ *     see secp256k1.h's own header comment. This directly lowers signOps
+ *     itself (no longer ~249K), so unlike #46 (which only removed a call
+ *     entirely, leaving the remaining call's own cost unchanged), the
+ *     self-proving reconstruction check below no longer applies: there is
+ *     no "P's removed cost" left to reconstruct signOps + isolated-P-cost
+ *     back up to; instead, this sub-issue's own proof is a direct fast-
+ *     vs-naive comparison of pipeline_secp256k1_point_mul_base against
+ *     the RETAINED naive reference (pipeline_secp256k1_point_mul_base_
+ *     reference, the exact algorithm point_mul_base itself used before
+ *     this sub-issue), isolated from signing entirely -- see below, and
+ *     tools/pipeline_test/main.c's test_point_mul_base_comb_differential_
+ *     sweep() for the correctness half of this sub-issue's proof.
  */
 static void test_field_op_count_proxy(void)
 {
@@ -1699,56 +1853,76 @@ static void test_field_op_count_proxy(void)
     signOps = pipeline_secp256k1_get_op_count();
 
     check(signOk != 0, "op-count proxy: the signature used to measure per-signature op count still succeeds");
-    /* 260,000 sits BELOW #45's own measured whole-signature total (~279,207,
-     * with P still runtime-computed) with margin to spare, deliberately --
-     * unlike #45's 320,000 (which only had to clear #45's own measurement),
-     * this bound's whole job is to catch #46 regressing (P's runtime
-     * computation silently coming back), so it must be low enough that the
-     * pre-#46 code would actually fail it; a bound merely set with headroom
-     * over #46's own ~249,450 measurement, without checking it also sits
-     * under #45's ~279,207, would pass even with #46 fully reverted -- see
-     * the self-proving reconstruction check right below, which measures
-     * that ~279,207 figure directly instead of relying on a stale comment
-     * for it. */
-    check(signOps < 260000ULL,
+    /* 90,000 sits comfortably below the ~81,470 this function itself
+     * measures below (printed nowhere, but reproducible: same fixed KAT
+     * key/message/aux_rand every run), yet well BELOW #46's own ~249,450
+     * measurement (P baked, k*G still generic double-and-add) -- so this
+     * bound's job, like #46's own bound before it, is to catch #47
+     * regressing (point_mul_base's comb path silently reverting to
+     * point_mul_core) rather than merely to hold with headroom over
+     * whatever the current number happens to be. */
+    check(signOps < 90000ULL,
           "op-count proxy: a full BIP-340 signature's total primitive-word-op count stays under "
-          "260,000 now that pipeline_schnorr_sign no longer computes P = d*G at runtime at all "
-          "(sub-issue #46 bakes it at build time) -- measured ~249K; ~28.0M with none of "
-          "#44/#45/#46 landed, the original naive baseline -- see this function's header comment "
-          "for the full before/after trace");
+          "90,000 now that R = k'*G itself uses the fixed-base comb table instead of generic "
+          "double-and-add (sub-issue #47) on top of P = d*G being baked at build time "
+          "(sub-issue #46) -- measured ~81K; ~249K with #47 not yet landed (#44/#45/#46 only), "
+          "~28.0M with none of #44/#45/#46/#47 landed, the original naive baseline -- see this "
+          "function's header comment for the full before/after trace");
 
     /*
-     * Self-proving reconstruction (fixes this test's own former reliance on
-     * an unreproducible "~29,757 measured once, by hand" comment): freshly
-     * measure pipeline_secp256k1_point_mul_base(d) in ISOLATION, for the
-     * exact same private key, and confirm signOps (which no longer includes
-     * any P = d*G computation at all) plus that isolated cost together
-     * reconstruct #45's own measured whole-signature total (~279,207) --
-     * proving sub-issue #46 removed almost exactly one P = d*G computation's
-     * worth of op count, not some other unrelated amount, with a number
-     * this file computes itself rather than one a reader has to trust.
+     * (6) Sub-issue #47's own direct proof: pipeline_secp256k1_point_mul_
+     * base (now point_mul_base_comb) against the RETAINED naive reference
+     * pipeline_secp256k1_point_mul_base_reference (point_mul_core, the
+     * exact algorithm point_mul_base itself used before this sub-issue),
+     * for the SAME scalar -- isolated from the rest of signing entirely,
+     * exactly like (1)/(3) above isolate the field/scalar fast-vs-naive
+     * comparisons from the whole-signature bound. k here is a full-width
+     * (not small-integer) scalar, unlike kSchnorrPrivkey's d=3 -- see this
+     * function's header comment point (5) for why d=3 specifically is an
+     * atypically cheap double-and-add input (254 near-free leading-zero-bit
+     * doublings) that would understate the naive path's true cost and so
+     * understate the speedup this check is meant to demonstrate.
      */
     {
-        pipeline_secp256k1_num dPrimeMeasure;
-        pipeline_secp256k1_point pMeasure;
-        unsigned long long pubkeyMulOps;
-        unsigned long long reconstructed;
+        pipeline_secp256k1_num k;
+        pipeline_secp256k1_point fastPoint, referencePoint;
+        unsigned long long pointFastOps, pointRefOps;
 
-        pipeline_secp256k1_num_from_bytes(kSchnorrPrivkey, &dPrimeMeasure);
+        field_test_rng_seed(POINT_MUL_BASE_SWEEP_SEED ^ 0x5AFEu);
+        field_test_random_num(&k);
+
         pipeline_secp256k1_reset_op_count();
-        pipeline_secp256k1_point_mul_base(&dPrimeMeasure, &pMeasure);
-        pubkeyMulOps = pipeline_secp256k1_get_op_count();
+        pipeline_secp256k1_point_mul_base(&k, &fastPoint);
+        pointFastOps = pipeline_secp256k1_get_op_count();
 
-        check(pubkeyMulOps > 0,
-              "op-count proxy: an isolated point_mul_base(d) call for the same private key "
-              "performs a nonzero number of counted operations");
+        pipeline_secp256k1_reset_op_count();
+        pipeline_secp256k1_point_mul_base_reference(&k, &referencePoint);
+        pointRefOps = pipeline_secp256k1_get_op_count();
 
-        reconstructed = signOps + pubkeyMulOps;
-        check(reconstructed > 270000ULL && reconstructed < 290000ULL,
-              "op-count proxy: signOps (P no longer computed) plus a freshly-measured, isolated "
-              "point_mul_base(d) call together land back near sub-issue #45's own measured "
-              "whole-signature total (~279,207, when P was still computed inline) -- proving this "
-              "sub-issue's op-count drop is explained by exactly one removed P = d*G computation");
+        check(pointFastOps > 0 && pointRefOps > 0,
+              "op-count proxy: both point_mul_base paths (comb table and the retained naive "
+              "double-and-add reference) perform a nonzero number of counted operations");
+        /* Measured ~80,084 (comb) vs ~253,562 (naive reference) for this
+         * seed -- a ~3.2x drop, consistent with the theoretical ratio (up
+         * to 512 Jacobian point operations for the naive 256-bit double-
+         * and-add versus at most 86 -- COMB_E doublings + COMB_E additions,
+         * 43 + 43 -- for the comb path, see secp256k1_baked.h's own header
+         * comment). Asserted at 2x rather than the full measured ~3.2x for
+         * margin against a different seed/scalar landing on a slightly
+         * different exact ratio (the comb path's column-skip-on-zero-digit
+         * case makes the exact op count scalar-dependent, unlike the field/
+         * scalar sweeps' fixed-shape comparisons above). */
+        check(pointFastOps * 2 < pointRefOps,
+              "op-count proxy: the fixed-base comb table's k*G operation count is more than 2x "
+              "lower than the retained naive double-and-add reference's, for the same full-width "
+              "scalar (measured ~3.2x in practice) -- sub-issue #47's own acceptance criterion "
+              "(\"the host op-count proxy shows the k*G cost dropping\"), independent of the "
+              "whole-signature bound above");
+        check(memcmp(&fastPoint.x, &referencePoint.x, sizeof(fastPoint.x)) == 0 &&
+              memcmp(&fastPoint.y, &referencePoint.y, sizeof(fastPoint.y)) == 0 &&
+              fastPoint.infinity == referencePoint.infinity,
+              "op-count proxy: the comb and reference point_mul_base calls measured above also "
+              "agree on the resulting point (correctness alongside cost, for this exact scalar)");
     }
 }
 
@@ -1773,6 +1947,7 @@ int main(void)
     test_qr_display_state_machine();
     test_field_mul_differential_sweep();
     test_scalar_differential_sweep();
+    test_point_mul_base_comb_differential_sweep();
     test_field_op_count_proxy();
 
     if (g_failures != 0) {
