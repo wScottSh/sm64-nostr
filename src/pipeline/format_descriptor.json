@@ -1,6 +1,6 @@
 {
-  "_comment": "Machine-readable format descriptor for the packed QR payload (spec #24, sub-issue #26). Single source of truth: tools/gen_format_descriptor.py renders this into a C header consumed identically by the ROM pack adapter (src/pipeline/pack_adapter.c) and the host unpack adapter (tools/pipeline_test), so the two can never disagree on the wire layout. This 75-byte layout is the final, end-to-end shape used by build_event() (serialize/sign/pack landed in #28/#29/#30): a 1-byte format tag, the StarCapture run fields (course/act/coins/frames/nonce16/key_id), and the 64-byte Schnorr signature over the event id.",
-  "format_tag": 1,
+  "_comment": "Machine-readable format descriptor for the packed QR payload (spec #52, sub-issue #54, format v2). Single source of truth: tools/gen_format_descriptor.py renders this into a C header consumed identically by the ROM pack adapter (src/pipeline/pack_adapter.c) and the host unpack adapter (tools/pipeline_test), so the two can never disagree on the wire layout. Format v2 (FORMAT_TAG 0x02) makes the payload self-contained (ADR-0001/ADR-0002): it adds CREATED_AT (u32 BE), PUBKEY (32 B x-only), and a length-prefixed per-game TAG (TAG_LEN 0..10, ASCII) ahead of the existing SIG. `id` is never packed -- the companion recomputes it. Total size is fixed at 112 B plus TAG_LEN (112-122 B), which is why TAG is the one variable-length field this descriptor (and its generator) supports: TAG's actual length is only known at runtime from TAG_LEN, so fields after it (SIG) are addressed relative to TAG_LEN rather than at a fixed compile-time offset.",
+  "format_tag": 2,
   "fields": [
     { "name": "FORMAT_TAG", "size": 1 },
     { "name": "COURSE",     "size": 1 },
@@ -9,6 +9,10 @@
     { "name": "FRAMES",     "size": 4 },
     { "name": "NONCE16",    "size": 2 },
     { "name": "KEY_ID",     "size": 1 },
+    { "name": "CREATED_AT", "size": 4 },
+    { "name": "PUBKEY",     "size": 32 },
+    { "name": "TAG_LEN",    "size": 1 },
+    { "name": "TAG",        "var_len": true, "len_field": "TAG_LEN", "max_size": 10 },
     { "name": "SIG",        "size": 64 }
   ]
 }

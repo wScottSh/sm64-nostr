@@ -14,7 +14,7 @@ int pipeline_qr_encode(const pipeline_u8 *payload, pipeline_u32 payloadLen,
 
     /*
      * The real, documented over-budget boundary: PIPELINE_QR_MAX_PAYLOAD_BYTES
-     * (106, far below dataAndTemp's declared size) is also what
+     * (122, far below dataAndTemp's declared size) is also what
      * qrcodegen_encodeBinary()'s own version-fit search below would reject
      * on its own -- but checking it explicitly here, rather than leaving it
      * as an emergent property of the version/ECC constants below, means
@@ -45,7 +45,7 @@ int pipeline_qr_encode(const pipeline_u8 *payload, pipeline_u32 payloadLen,
 
     return qrcodegen_encodeBinary(dataAndTemp, (int)payloadLen, out,
                                    PIPELINE_QR_ECC, PIPELINE_QR_VERSION, PIPELINE_QR_VERSION,
-                                   qrcodegen_Mask_AUTO, 0);
+                                   PIPELINE_QR_MASK, 0);
 }
 
 int pipeline_qr_get_size(const pipeline_u8 qrcode[PIPELINE_QR_BUFFER_LEN])

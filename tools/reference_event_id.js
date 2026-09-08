@@ -40,13 +40,18 @@
  * event_profile.h (TEST_PRIVKEY_HEX = privkey 3 BIP-340 KAT,
  * TEST_CREATED_AT = 1700000000) -- see tools/pipeline_test/main.c's
  * kExpectedPubkeyHex, which must match PUBKEY_HEX here.
+ *
+ * Format v2 (spec #52, sub-issue #54): TAG_0 is now the spec-pinned
+ * constant "ag-lb" (was "cabinet-leaderboard" pre-v2) -- see
+ * src/pipeline/event_id.h's PIPELINE_EVENT_TAG0_VALUE (its single source)
+ * and docs/adr/0001. TAG_1 ("sm64", the per-game tag) is unchanged.
  */
 const { getEventHash } = require('nostr-tools');
 
 const PUBKEY_HEX = 'f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9';
 const CREATED_AT = 1700000000;
 const KIND = 8064;
-const TAGS = [['t', 'cabinet-leaderboard'], ['t', 'sm64']];
+const TAGS = [['t', 'ag-lb'], ['t', 'sm64']];
 
 function makeEvent(course, act, coins, frames, nonce, keyId) {
   const content = JSON.stringify({ course, act, coins, frames, nonce, keyId });

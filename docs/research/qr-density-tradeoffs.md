@@ -7,11 +7,13 @@ re-checked. Absence of evidence is called out explicitly.
 
 **Frame (design decision already made, not relitigated here):** the QR carries a
 COMPLETE, already-signed, broadcast-ready nostr event; the companion app is
-strictly READ-ONLY (decode bytes -> broadcast to relay, injects no value). The
-current on-wire payload is a 75-byte packed blob at QR version 6 / ECC MEDIUM /
-BYTE mode that OMITS `pubkey` and `created_at` (baked out-of-band in
-`event_profile.h`) — that omission is the defect. Goal: the smallest fully
-self-contained single QR, with the simplest/cheapest possible in-game encoder.
+strictly READ-ONLY (decode bytes -> broadcast to relay, injects no value). At
+the time of this analysis the on-wire payload was a 75-byte packed blob at QR
+version 6 / ECC MEDIUM / BYTE mode that OMITTED `pubkey` and `created_at`
+(baked out-of-band in `event_profile.h`) — that omission was the defect this
+work fixes (format v2 has since landed; see the "Superseded by format v2"
+note below and ADR-0002). Goal: the smallest fully self-contained single QR,
+with the simplest/cheapest possible in-game encoder.
 
 Sources used repeatedly, cited short below:
 - **BIP-340** = https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki
@@ -274,10 +276,17 @@ transmit a value the verifier discards. Do not pack it.
   event (it is inside the serialized array that both `id` and `sig` commit to),
   so the companion must transmit and re-serialize the exact bytes.
 
-This repo currently bakes two `t` tags out-of-band: `["t","cabinet-leaderboard"]`
-and `["t","sm64"]` (`build/us/include/event_profile.h:31-34`). The 19-byte
-`cabinet-leaderboard` is a fixed, known-to-both-sides constant and need not
-travel on the wire; only a genuinely **per-game** value must be inline.
+> **Superseded by format v2 (ADR-0002, spec #52 sub-issue #54):** the analysis
+> below reflects the pre-v2 state, when both `t` tags were baked out-of-band.
+> Format v2 acted on exactly this recommendation — the fixed constant tag (now
+> `["t","ag-lb"]`) stays a spec constant off the wire, while the per-game tag
+> (`["t","sm64"]`) is now packed inline (`TAG_LEN`+`TAG`, see
+> `docs/qr-handoff-spec.md` §2). The capacity figures here remain current.
+
+At research time this repo baked two `t` tags out-of-band: a fixed
+constant tag and a per-game `["t","sm64"]`. The fixed constant is a
+known-to-both-sides value and need not travel on the wire; only a genuinely
+**per-game** value must be inline.
 
 **Byte cost of representations for the per-game identifier** (as the UTF-8 bytes
 that go into the event; on the wire add 1 length-prefix byte if variable-length):

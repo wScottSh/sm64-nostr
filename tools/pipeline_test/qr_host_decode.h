@@ -14,15 +14,20 @@
  * public accessors any real reader (camera scan, companion app) would use.
  *
  * It is "structural" rather than a general-purpose camera-image QR
- * decoder: it knows the fixed version (6) and ECC level (MEDIUM) ahead of
- * time (matching qr_adapter.h's documented choice), so it can skip
- * finder-pattern detection/perspective correction entirely and go straight
- * to walking the same zigzag codeword-placement order and function-module
- * footprint that qrcodegen.c's drawCodewords()/initializeFunctionModules()
- * use, then apply the mask recovered from the format-info bits (the mask
- * is chosen dynamically by qrcodegen_Mask_AUTO at encode time, so this is
- * a real decode, not an assumption), de-interleave the error correction
- * blocks (four, for version 6 / ECC MEDIUM), and parse the resulting
+ * decoder: it knows the fixed version (7, spec #52 sub-issue #53) and ECC
+ * level (MEDIUM) ahead of time (matching qr_adapter.h's documented
+ * choice), so it can skip finder-pattern detection/perspective correction
+ * entirely and go straight to walking the same zigzag codeword-placement
+ * order and function-module footprint that qrcodegen.c's
+ * drawCodewords()/initializeFunctionModules() use -- including, at version
+ * 7+, the two 3x6/6x3 version-info blocks initializeFunctionModules()'s own
+ * drawVersion() reserves (absent below version 7, which is why this map
+ * previously had no such blocks) -- then apply the mask recovered from the
+ * format-info bits (qr_adapter.h now pins one fixed mask at encode time,
+ * but this decoder still recovers whichever mask was actually used from
+ * the format-info bits, exactly as a real reader must, rather than
+ * assuming the encoder's constant), de-interleave the error correction
+ * blocks (four, for version 7 / ECC MEDIUM), and parse the resulting
  * bitstream's mode indicator +
  * character count + byte-mode data directly (no Reed-Solomon error
  * correction is performed: this decodes a bitmap this same test built in

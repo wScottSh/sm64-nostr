@@ -136,14 +136,13 @@ required and must never gate broadcast.
 
 ## 7. Conformance vector
 
-> **TODO (fill on v2 landing):** the concrete `id`/`sig` must be produced by the
-> repo's reference oracles (`tools/reference_event_id.js` via nostr-tools
-> `getEventHash`, and `tools/verify_schnorr_reference.js` via `@noble/curves`)
-> against the actual v2 pipeline — they are **not** hand-written here, to avoid
-> shipping an unverified hash.
+The `id` and `sig` below are **oracle-verified, not hand-written**: computed by
+the repo's v2 pipeline test (`tools/pipeline_test`), then independently
+cross-checked against `nostr-tools`' `getEventHash` (for `id`) and
+`@noble/curves`' BIP-340 Schnorr (for `sig`) — see §7.1 for how to reproduce
+this yourself.
 
-Input fields for the canonical vector (once computed, the expected hex `id` and
-`sig` go here):
+Input fields for the canonical vector:
 
 ```
 COURSE=15 ACT=6 COINS=100 FRAMES=16909060 NONCE16=51966 KEY_ID=0
@@ -151,8 +150,48 @@ CREATED_AT=1700000000  TAG="sm64"
 privkey=0x0000...0003  → PUBKEY=f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9
 ```
 
-A companion is conformant if, from the packed bytes for the above, it produces the
+The packed bytes (§2's wire layout, 116 B = 112 + 4-byte `TAG`), hex-encoded:
+
+```
+020f066401020304cafe006553f100f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f904736d363469676d63728cd3d1cc1f918678547779e917b03db54832e8f71a0232eb4beedd804ca767605597381ca4a2a9f81d1ff8f20737bd1ec187cb2999ea9b2270487b
+```
+
+The resulting reference event (what a conforming companion reconstructs from
+those bytes and broadcasts):
+
+```json
+{
+  "id":         "da41e3231cbb228dd6a68ddd57fb54dc00528d62a35990d2ef5870bc832aa4ee",
+  "pubkey":     "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+  "created_at": 1700000000,
+  "kind":       8064,
+  "tags":       [["t","ag-lb"], ["t","sm64"]],
+  "content":    "{\"course\":15,\"act\":6,\"coins\":100,\"frames\":16909060,\"nonce\":51966,\"keyId\":0}",
+  "sig":        "69676d63728cd3d1cc1f918678547779e917b03db54832e8f71a0232eb4beedd804ca767605597381ca4a2a9f81d1ff8f20737bd1ec187cb2999ea9b2270487b"
+}
+```
+
+A companion is conformant if, from the packed bytes above, it produces the
 exact `id`, `pubkey`, `tags`, `content`, and `sig` of the reference event.
+
+### 7.1 Reproducing this vector (repo access required)
+
+Everything above is enough to validate a companion without touching this repo.
+The rest of this subsection is for maintainers regenerating the vector itself,
+the same way §1 flags `qr_host_decode.c` as a repo-only reference tool, not
+something a companion author needs.
+
+This vector is "vector A" in `tools/pipeline_test/main.c`. Three independent
+checks must agree: (1) `node tools/reference_event_id.js` (the `nostr-tools`
+`getEventHash` oracle for `id`, requires `npm install nostr-tools` in `tools/`);
+(2) `node tools/verify_schnorr_reference.js` (the `@noble/curves` BIP-340
+oracle for `sig`, requires `npm install @noble/curves`); (3)
+`cd tools/pipeline_test && make clean && make test` (the actual pipeline test;
+`test_build_event_end_to_end()` builds this exact vector and asserts its `id`
+and `sig` equal the two oracle values — see the file's own header comment for
+the KAT privkey/aux_rand). On a machine without a local C toolchain, run that
+last step inside the repo's build image instead (see `README.md`'s
+`docker build`/`docker run` invocations for building and mounting it).
 
 ## 8. References
 

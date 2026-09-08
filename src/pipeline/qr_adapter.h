@@ -17,50 +17,78 @@
  * later sub-issue, build_event.c); game glue never calls qrcodegen.c or
  * this adapter directly.
  *
- * Version/ECC choice: fixed version 6, error correction level MEDIUM.
- * getNumDataCodewords(6, MEDIUM) = getNumRawDataModules(6)/8 -
- * ECC_CODEWORDS_PER_BLOCK[MEDIUM][6] * NUM_ERROR_CORRECTION_BLOCKS[MEDIUM][6]
- * = 172 - 16*4 = 108 data CODEWORDS total (PIPELINE_QR_DATA_CODEWORDS) --
+ * Version/ECC choice (spec #52, sub-issue #53): fixed version 7 (45x45),
+ * error correction level MEDIUM, with a SINGLE FIXED MASK (not
+ * qrcodegen_Mask_AUTO). Bumped up from version 6 to make room for format
+ * v2's self-contained payload (pubkey + created_at + tag, ~112-122 B,
+ * docs/adr/0002). Sub-issue #53 landed this geometry/mask change first,
+ * against the OLD v1 payload (75 B), to isolate it from the wire-format
+ * change; sub-issue #54 has since landed format v2 itself, so this symbol
+ * now carries the 112-122 B self-contained payload (docs/qr-handoff-spec.md,
+ * docs/research/qr-density-tradeoffs.md).
+ *
+ * getNumDataCodewords(7, MEDIUM) = getNumRawDataModules(7)/8 -
+ * ECC_CODEWORDS_PER_BLOCK[MEDIUM][7] * NUM_ERROR_CORRECTION_BLOCKS[MEDIUM][7]
+ * = 196 - 18*4 = 124 data CODEWORDS total (PIPELINE_QR_DATA_CODEWORDS) --
  * but that figure includes the mandatory 4-bit mode indicator + 8-bit
  * byte-mode character count header (versions 1-9 use an 8-bit byte-mode
  * count field), so the actual usable PAYLOAD capacity is smaller:
- * floor((108*8 - 12) / 8) = 106 bytes (PIPELINE_QR_MAX_PAYLOAD_BYTES,
- * confirmed empirically against this exact encoder: 106 B round-trips,
- * 107 B is cleanly rejected). That is still comfortably above the ~88 B
- * packed payload budget (spec #24), with 18 bytes / ~20% headroom to
- * spare without needing to move to a larger (version 7+) code, and MEDIUM
- * (not LOW) error correction for realistic camera-scan robustness once
- * the renderer glue (#32, out of scope here) lands.
+ * floor((124*8 - 12) / 8) = 122 bytes (PIPELINE_QR_MAX_PAYLOAD_BYTES,
+ * matching docs/research/qr-density-tradeoffs.md's v7/MEDIUM capacity
+ * table and confirmed empirically against this exact encoder: 122 B
+ * round-trips, 123 B is cleanly rejected). MEDIUM (not LOW) error
+ * correction is kept for realistic camera-scan robustness (glare/moiré/CRT
+ * artifacts, see the research doc's §3) now that the renderer glue (#32)
+ * has landed.
+ *
+ * The mask is pinned to a single fixed value (PIPELINE_QR_MASK) rather
+ * than qrcodegen_Mask_AUTO: AUTO runs all 8 mask patterns and scores each
+ * with a full-grid penalty pass to pick the best one, which is the
+ * dominant compute cost of encoding (research doc §4) -- fixing one mask
+ * eliminates that ~8x overhead on constrained hardware. Any of the 8 mask
+ * values is a structurally valid QR Code (a fixed mask trades away the
+ * penalty-score optimization, not correctness); mask 0 is chosen here with
+ * no further significance. The host decoder (qr_host_decode.c) does not
+ * need to know this constant -- it recovers whichever mask was actually
+ * used from the format-info bits, exactly as a real reader would.
  */
 
 #include "build_event.h"
 #include "qrcodegen.h"
 
-#define PIPELINE_QR_VERSION 6
+#define PIPELINE_QR_VERSION 7
 #define PIPELINE_QR_ECC qrcodegen_Ecc_MEDIUM
 
-/* Module grid side length: version*4+17 = 41 for version 6. */
+/* Fixed mask pattern (0-7) passed to qrcodegen_encodeBinary() instead of
+ * qrcodegen_Mask_AUTO -- see the file header comment above. */
+#define PIPELINE_QR_MASK qrcodegen_Mask_0
+
+/* Module grid side length: version*4+17 = 45 for version 7. */
 #define PIPELINE_QR_MODULE_SIZE (PIPELINE_QR_VERSION * 4 + 17)
 
 /* Size of the qrcodegen-format bitmap buffer (byte 0 = grid size, remaining
- * bytes = packed 1-bpp module bits): qrcodegen_BUFFER_LEN_FOR_VERSION(6). */
+ * bytes = packed 1-bpp module bits): qrcodegen_BUFFER_LEN_FOR_VERSION(7). */
 #define PIPELINE_QR_BUFFER_LEN qrcodegen_BUFFER_LEN_FOR_VERSION(PIPELINE_QR_VERSION)
 
-/* Total data-codeword capacity of a version 6, ECC MEDIUM QR Code (header +
- * payload + terminator/padding): 108 bytes. See the file header comment. */
-#define PIPELINE_QR_DATA_CODEWORDS 108
+/* Total data-codeword capacity of a version 7, ECC MEDIUM QR Code (header +
+ * payload + terminator/padding): 124 bytes. See the file header comment. */
+#define PIPELINE_QR_DATA_CODEWORDS 124
 
 /* Usable BYTE-mode payload capacity after the mandatory 4-bit mode
- * indicator + 8-bit character count header: 106 bytes. See the derivation
+ * indicator + 8-bit character count header: 122 bytes. See the derivation
  * in the file header comment above. This is the real over-budget boundary
- * payloads are rejected against, comfortably above the ~88 B packed
- * payload budget. */
-#define PIPELINE_QR_MAX_PAYLOAD_BYTES 106
+ * payloads are rejected against. This build's own format v2 payload (116 B
+ * for "sm64") sits comfortably under it; the v2 maximum (122 B at
+ * TAG_LEN=10, docs/adr/0002) is the exact ceiling -- a max-length tag fills
+ * the symbol with zero spare capacity, which the compile-time fits-QR guard
+ * (build_event.c, `<=`) enforces. */
+#define PIPELINE_QR_MAX_PAYLOAD_BYTES 122
 
 /*
- * pipeline_qr_encode: encodes payload[0 : payloadLen] as a fixed-version-6/
- * ECC-MEDIUM, BYTE-mode QR Code into out (a qrcodegen-format bitmap; read
- * it back via pipeline_qr_get_size/pipeline_qr_get_module).
+ * pipeline_qr_encode: encodes payload[0 : payloadLen] as a fixed-version-7/
+ * ECC-MEDIUM, BYTE-mode QR Code, with a single fixed mask (PIPELINE_QR_MASK,
+ * not qrcodegen_Mask_AUTO), into out (a qrcodegen-format bitmap; read it
+ * back via pipeline_qr_get_size/pipeline_qr_get_module).
  *
  * Returns nonzero (true) on success. Returns 0 (false) -- writing nothing
  * usable to out -- if payloadLen exceeds PIPELINE_QR_MAX_PAYLOAD_BYTES.

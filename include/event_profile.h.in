@@ -8,11 +8,22 @@
  * include/text_strings.h.in and levels/level_headers.h.in.
  *
  * Carries the event profile: the derived x-only pubkey (from the per-event
- * secret in keys/, or a fixed test vector for host builds), kind 8064, the
- * two required `t` tags, and the build-epoch created_at constant. None of
- * these travel in the packed QR payload (see format_descriptor.h) -- the
- * downstream id/sig verifier recomputes the event and checks against a
- * pubkey it already knows out-of-band.
+ * secret in keys/, or a fixed test vector for host builds), the per-game
+ * tag, and the build-epoch created_at constant.
+ *
+ * Format v2 (spec #52, sub-issue #54, ADR-0001/ADR-0002): pubkey,
+ * created_at, and the per-game tag (TAG_1 below) ALL travel in the packed
+ * QR payload now (see format_descriptor.h's PUBKEY/CREATED_AT/TAG_LEN+TAG
+ * fields) -- build_event()'s pack stage sources them from this generated
+ * header so the QR is a self-contained, broadcast-ready event with no
+ * out-of-band coordination.
+ *
+ * `kind` (8064) and the first tag (`["t","ag-lb"]`) are NOT here: they are
+ * format-v2-pinned SPEC constants, identical for every build/game, so this
+ * generated per-build header does not (and must not) redefine them --
+ * carrying a second copy here would risk drifting from the one true
+ * definition. See src/pipeline/event_id.h's PIPELINE_EVENT_KIND/
+ * PIPELINE_EVENT_TAG_KEY/PIPELINE_EVENT_TAG0_VALUE, the single source.
  *
  * Also carries the raw 32-byte per-event privkey (spec #24, sub-issue #31):
  * capture glue at interact_star_or_key calls build_event(capture, key, ...)
@@ -24,14 +35,22 @@
  * signature, just the key material.
  */
 
-#define PIPELINE_EVENT_KIND       8064
 #define PIPELINE_EVENT_CREATED_AT @CREATED_AT@u
 
 #define PIPELINE_EVENT_TAG_COUNT 2
-#define PIPELINE_EVENT_TAG_0_KEY   "t"
-#define PIPELINE_EVENT_TAG_0_VALUE "cabinet-leaderboard"
-#define PIPELINE_EVENT_TAG_1_KEY   "t"
-#define PIPELINE_EVENT_TAG_1_VALUE "sm64"
+/* TAG_1 is the per-game tag: baked per build (from --tag, gen_event_profile.py;
+ * defaults to "sm64") AND packed onto the wire (format_descriptor.h's TAG
+ * field), so a companion can tell games apart without shared config. The
+ * FIRST tag (`ag-lb`) is a format-v2-pinned spec constant, not baked here --
+ * see this file's header comment. */
+#define PIPELINE_EVENT_TAG_1_VALUE "@GAME_TAG@"
+/* Compile-time length of the per-game tag value (excludes the NUL
+ * terminator) -- sizeof() of a string literal macro is itself a valid
+ * compile-time constant expression, so this is usable anywhere an array
+ * bound or other constant-expression context needs it (build_event.h's
+ * PIPELINE_BUILT_PAYLOAD_SIZE), with zero risk of drifting from
+ * PIPELINE_EVENT_TAG_1_VALUE's actual text. */
+#define PIPELINE_EVENT_TAG_1_LEN (sizeof(PIPELINE_EVENT_TAG_1_VALUE) - 1)
 
 /* Derived x-only pubkey (32 bytes), hex and byte-list forms. */
 #define PIPELINE_EVENT_PUBKEY_HEX "@PUBKEY_HEX@"

@@ -34,11 +34,42 @@
  * grabbed (100-coin/secret-course stars) it is load-bearing leaderboard
  * identity, so it must be tamper-evident under the event signature like every
  * other run value (spec #24 user story 1, "no chance to tamper").
+ *
+ * Format v2 (spec #52, sub-issue #54): pipeline_event_serialize_from_fields()/
+ * pipeline_event_compute_id_from_fields() below are the GENERIC forms --
+ * they take pubkey/created_at/the per-game tag as plain arguments rather
+ * than reading event_profile.h's baked macros, so a caller reconstructing
+ * an event purely from UNPACKED WIRE FIELDS (the companion's job -- see
+ * docs/qr-handoff-spec.md) can recompute the exact same id with ZERO
+ * out-of-band constants -- including `kind` and TAG_0, which is why
+ * PIPELINE_EVENT_KIND/PIPELINE_EVENT_TAG_KEY/PIPELINE_EVENT_TAG0_VALUE
+ * below are defined HERE (this file), not in event_profile.h.in: they are
+ * format-v2-pinned spec constants (docs/qr-handoff-spec.md section 3),
+ * identical for every build and every caller, never per-build baked data
+ * and never a function parameter -- only TAG_1 (the per-game tag) varies
+ * per build and is a parameter. event_profile.h.in's own PIPELINE_EVENT_KIND
+ * (pre-v2) was a hand-duplicated copy of this same constant; it has been
+ * removed from there so there is exactly one definition. pipeline_event_
+ * serialize()/pipeline_event_compute_id() (this build's own baked-profile
+ * convenience wrappers, in event_id.c) call these generic forms with
+ * PIPELINE_EVENT_PUBKEY_BYTES/CREATED_AT/TAG_1_VALUE from event_profile.h
+ * -- one implementation, not two that could drift.
  */
 
 #include "build_event.h"
 
 #define PIPELINE_EVENT_ID_SIZE 32
+
+/* Format-v2-pinned spec constants (docs/qr-handoff-spec.md section 3):
+ * `kind` and the FIRST tag (`["t","ag-lb"]`) are fixed for every build --
+ * part of the published wire-format standard, never baked per-build data
+ * and never packed onto the wire (the companion already knows them from
+ * the spec, the moment it sees FORMAT_TAG 0x02). The per-game SECOND tag
+ * (event_profile.h's PIPELINE_EVENT_TAG_1_VALUE) is the only tag value
+ * that varies per build. */
+#define PIPELINE_EVENT_KIND        8064
+#define PIPELINE_EVENT_TAG_KEY     "t"
+#define PIPELINE_EVENT_TAG0_VALUE  "ag-lb"
 
 /* Generous fixed upper bound on the content JSON's length (unescaped):
  * literal/key overhead (`{"course":`=10, `,"act":`=7, `,"coins":`=9,
@@ -51,8 +82,9 @@
 
 /* Generous fixed upper bound on the full canonical serialization's length:
  * `[0,"` + 64-hex-char pubkey + `",` + up to 10 digits created_at + `,` +
- * up to 5 digits kind + `,[["t","cabinet-leaderboard"],["t","sm64"]],"` +
- * the escaped content (worst case: every content byte is a quote, doubling
+ * up to 5 digits kind + `,[["t","ag-lb"],["t","` + up to 10 tag bytes
+ * (format v2's PIPELINE_FMT_MAX_SIZE_TAG) + `"]],"` + the escaped content
+ * (worst case: every content byte is a quote, doubling
  * PIPELINE_EVENT_CONTENT_MAX) + `"]`. Rounded up with margin. */
 #define PIPELINE_EVENT_SERIALIZED_MAX 512
 
@@ -76,5 +108,36 @@ pipeline_u32 pipeline_event_serialize(const StarCapture *capture, pipeline_u8 ou
  * pipeline_event_compute_id: id_out = SHA256(pipeline_event_serialize(capture)).
  */
 void pipeline_event_compute_id(const StarCapture *capture, pipeline_u8 id_out[PIPELINE_EVENT_ID_SIZE]);
+
+/*
+ * pipeline_event_serialize_from_fields: the generic form of
+ * pipeline_event_serialize() -- pubkey (32 raw bytes, hex-encoded here),
+ * createdAt, and tag1/tag1Len (the per-game tag, NOT NUL-terminated) are
+ * plain arguments instead of event_profile.h's baked macros, so a caller
+ * with only unpacked wire fields (no access to -- or need of -- this
+ * build's own event_profile.h) can still produce the exact canonical
+ * serialization. TAG_0 is always the format-v2-pinned literal "ag-lb" (see
+ * this file's header comment); it is not a parameter. out must be at least
+ * PIPELINE_EVENT_SERIALIZED_MAX bytes. Returns the length written.
+ */
+pipeline_u32 pipeline_event_serialize_from_fields(const pipeline_u8 pubkey[PIPELINE_FMT_SIZE_PUBKEY],
+                                                   pipeline_u32 createdAt,
+                                                   const char *tag1,
+                                                   pipeline_u32 tag1Len,
+                                                   const StarCapture *capture,
+                                                   pipeline_u8 out[PIPELINE_EVENT_SERIALIZED_MAX]);
+
+/*
+ * pipeline_event_compute_id_from_fields: id_out =
+ * SHA256(pipeline_event_serialize_from_fields(...)). See that function's
+ * comment -- this is the "reconstruct purely from unpacked wire fields"
+ * entry point a companion decoder's equivalent logic mirrors.
+ */
+void pipeline_event_compute_id_from_fields(const pipeline_u8 pubkey[PIPELINE_FMT_SIZE_PUBKEY],
+                                            pipeline_u32 createdAt,
+                                            const char *tag1,
+                                            pipeline_u32 tag1Len,
+                                            const StarCapture *capture,
+                                            pipeline_u8 id_out[PIPELINE_EVENT_ID_SIZE]);
 
 #endif /* PIPELINE_EVENT_ID_H */
