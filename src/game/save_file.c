@@ -497,6 +497,18 @@ s32 save_file_star_gate_is_open(UNUSED s32 numStars, UNUSED s32 requiredStars) {
 }
 
 /**
+ * Sandbox seam D: always-TRUE intro-suppression predicate. Substituted at the
+ * spawn-time action-select decision point (init_level, level_update.c) so a
+ * pristine file selects ACT_IDLE instead of ACT_INTRO_CUTSCENE. Because the
+ * opening cutscene's CAM_EVENT_START_INTRO is never set, CUTSCENE_INTRO_PEACH
+ * (and its DIALOG_033 pipe-exit text) never runs. Force-off, not delete:
+ * vanilla act_intro_cutscene code is left intact but unreached.
+ */
+s32 save_file_intro_is_suppressed(void) {
+    return TRUE;
+}
+
+/**
  * Return the bitset of obtained stars in the specified course.
  * If course is COURSE_NONE, return the bitset of obtained castle secret stars.
  */

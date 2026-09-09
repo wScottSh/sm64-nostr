@@ -1183,7 +1183,10 @@ s32 init_level(void) {
                 set_mario_action(gMarioState, ACT_IDLE, 0);
             } else if (!gDebugLevelSelect) {
                 if (gMarioState->action != ACT_UNINITIALIZED) {
-                    if (save_file_exists(gCurrSaveFileNum - 1)) {
+                    // Sandbox seam D: intro-suppression gate. When suppressed (always, currently),
+                    // a pristine file selects ACT_IDLE instead of ACT_INTRO_CUTSCENE, so the
+                    // opening cutscene (and the white fade-in transition below) never runs.
+                    if (save_file_exists(gCurrSaveFileNum - 1) || save_file_intro_is_suppressed()) {
                         set_mario_action(gMarioState, ACT_IDLE, 0);
                     } else {
                         set_mario_action(gMarioState, ACT_INTRO_CUTSCENE, 0);
