@@ -826,6 +826,103 @@ static void test_qr_render_overlay_paint(void) {
 }
 
 /*
+ * Regression test for the garbled-dialog-text bug (star-capture QR screen):
+ * the ROM's US dialog font glyph (main_font_lut[code]) is a 16-wide x 8-tall
+ * ia4 texture that the in-game engine draws through gSPTextureRectangleFlip
+ * (segment2.c dl_ia_text_tex_settings: SetTileSize S=16, T=8) -- i.e. the
+ * stored texels are the 8x16 on-screen glyph TRANSPOSED-AND-FLIPPED. The
+ * pure core decoded them as a plain 8-wide x 16-tall, 4-bytes/row image, so
+ * every glyph came out scrambled (garbled white text). The existing
+ * overlay test could never catch this: its fake glyph is a SOLID block,
+ * invariant under exactly the transform that was wrong.
+ *
+ * This test feeds the REAL committed 'L' glyph bytes
+ * (textures/segment2/font_graphics.05E40.ia4.inc.c -- the source PNG is a
+ * 16x8 image of the letter L) through the font seam and asserts the ON-SCREEN
+ * glyph has the left vertical stroke of an upright 'L' at the pixels the true
+ * letter occupies. The expectation is anchored to ground truth (the asset IS
+ * an L), not to the fix's own transform, so it stays honest.
+ */
+static const unsigned char kRealGlyphL[64] = {
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x0f,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x0f,0x00,0x00,0x00,0x00,0xf0,0x00,
+    0x00,0x0f,0x00,0x00,0x0f,0xff,0x00,0x00,
+    0x00,0x00,0xff,0xff,0xf0,0x00,0x00,0x00,
+};
+
+static const unsigned char *real_L_font_glyph(void *ctx, unsigned char code) {
+    (void) ctx;
+    if (code == QR_RENDER_DIALOG_CODE_SPACE) {
+        return NULL;
+    }
+    return kRealGlyphL;
+}
+
+static void test_qr_render_glyph_orientation(void) {
+    StarCapture capture;
+    BuiltEvent event;
+    QrRenderFont font;
+    QrRenderLayout layout;
+    static unsigned short fb[QR_RENDER_TEST_FB_WIDTH * QR_RENDER_TEST_FB_HEIGHT];
+    int ox, oy, gy;
+    int leftStrokeOn = 1;
+    int buildOk;
+    int i;
+
+    capture.course = 1; capture.act = 1; capture.coins = 0;
+    capture.frames = 1u; capture.nonce16 = 0x1234; capture.keyId = 0;
+    buildOk = build_event(&capture, kBuildEventPrivkey, &event);
+    check(buildOk != 0, "qr_render glyph orientation: build_event succeeds");
+    if (!buildOk) {
+        return;
+    }
+
+    /* Fixed 8px advances so cells are exactly the 8px glyph width apart:
+     * the first cell's leftmost column (gx == 0) can't be written by any
+     * neighbor. */
+    for (i = 0; i < 256; i++) {
+        gFakeCharWidths[i] = 8;
+    }
+    font.charWidths = gFakeCharWidths;
+    font.glyph = real_L_font_glyph;
+    font.ctx = NULL;
+
+    qr_render_layout(pipeline_qr_get_size(event.qr_bitmap),
+                     QR_RENDER_TEST_FB_WIDTH, QR_RENDER_TEST_FB_HEIGHT, &font,
+                     QR_RENDER_COPY_HEADING, QR_RENDER_COPY_BODY, QR_RENDER_COPY_PROMPT,
+                     &layout);
+    check(layout.fits && layout.glyphCount > 0, "qr_render glyph orientation: layout usable");
+    if (!layout.fits || layout.glyphCount == 0) {
+        return;
+    }
+
+    for (i = 0; i < QR_RENDER_TEST_FB_WIDTH * QR_RENDER_TEST_FB_HEIGHT; i++) {
+        fb[i] = QR_RENDER_BLACK_RGBA16;
+    }
+    qr_render_overlay_rgba16(event.qr_bitmap, fb, QR_RENDER_TEST_FB_WIDTH,
+                             QR_RENDER_TEST_FB_HEIGHT, &font);
+
+    /* Upright 'L' from the real bytes has a solid left vertical stroke:
+     * on-screen column gx == 0 is "on" for rows gy == 7..11 (verified against
+     * the asset). The buggy transpose leaves gx == 0 blank on those rows and
+     * scatters the pixels elsewhere. */
+    ox = layout.glyphs[0].x;
+    oy = layout.glyphs[0].y;
+    for (gy = 7; gy <= 11; gy++) {
+        if (fb[(oy + gy) * QR_RENDER_TEST_FB_WIDTH + ox] != QR_RENDER_WHITE_RGBA16) {
+            leftStrokeOn = 0;
+        }
+    }
+    check(leftStrokeOn,
+          "qr_render glyph orientation: real 'L' renders its left vertical stroke "
+          "(font ia4 is 16x8 flipped, not a plain 8x16 image)");
+}
+
+/*
  * BIP-340 test vector 0: secret key 3, x-only pubkey
  * F9308A019258C31049344F85F89D5229B531C845836F99B08601F113BCE036F9.
  * The Makefile generates event_profile.h from this exact private key (see
@@ -2596,6 +2693,7 @@ int main(void)
     test_qr_render_layout_geometry();
     test_qr_render_blit_round_trips_through_decode();
     test_qr_render_overlay_paint();
+    test_qr_render_glyph_orientation();
     test_qr_display_state_machine();
     test_field_mul_differential_sweep();
     test_field_inv_differential_sweep();

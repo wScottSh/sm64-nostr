@@ -96,10 +96,14 @@
  * 0x24..0x3D, space == 0x9E, [A] == 0x54 (charmap.txt).
  *
  *   charWidths : 256-entry per-glyph advance table (gDialogCharWidths).
- *   glyph(ctx,code) : returns a pointer to that glyph's raw ia4 texture --
- *       8x16 px, 4 bits/px, row-major, 4 bytes/row, high nibble = left
- *       pixel, nibble != 0 == an "on" (white) pixel -- or NULL for a blank
- *       code. On device this resolves main_font_lut[code] via
+ *   glyph(ctx,code) : returns a pointer to that glyph's raw ia4 texture as
+ *       the game stores it -- a 16-wide x 8-tall image (4 bits/px, row-major,
+ *       8 bytes/row, high nibble = leftmost/even texel), which the in-game
+ *       engine draws transposed-and-flipped (gSPTextureRectangleFlip, see
+ *       segment2.c dl_ia_text_tex_settings) into the 8x16 on-screen cell. The
+ *       pure core (qr_render_overlay_rgba16) applies that same flip when it
+ *       blits; a nibble != 0 is an "on" (white) pixel. Returns NULL for a
+ *       blank code. On device this resolves main_font_lut[code] via
  *       segmented_to_virtual; a NULL entry (unmapped code) draws nothing.
  */
 typedef const unsigned char *(*QrRenderGlyphFn)(void *ctx, unsigned char code);
