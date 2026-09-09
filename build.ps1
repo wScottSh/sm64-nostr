@@ -210,8 +210,12 @@ if (Test-Path $ManifestPath) {
 # nsec (+ npub fallback): derive from the same vendored codec inside the container.
 $pyCode = 'import sys; sys.path.insert(0,"/sm64/tools"); from nostr_secp256k1 import derive_xonly_pubkey, bech32_encode, npub_from_xonly_pubkey; b=bytes.fromhex(open("/sm64/keys/event_privkey.hex").read().strip()); print(bech32_encode("nsec", b)); print(npub_from_xonly_pubkey(derive_xonly_pubkey(b)))'
 $nsec = $null
+# Windows PowerShell 5.1 strips embedded double quotes when passing args to a
+# native exe (docker.exe), which corrupts the one-liner into invalid Python.
+# Backslash-escape them so the C runtime forwards literal quotes to python3.
+$pyCodeArg = $pyCode -replace '"', '\"'
 try {
-    $derived = & docker run --rm @MountArgs $ImageName python3 -c $pyCode
+    $derived = & docker run --rm @MountArgs $ImageName python3 -c $pyCodeArg
     if ($LASTEXITCODE -eq 0 -and $derived) {
         $nsec = $derived[0]
         if (-not $npub -and $derived.Count -gt 1) { $npub = $derived[1] }
