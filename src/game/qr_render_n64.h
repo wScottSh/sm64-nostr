@@ -12,9 +12,12 @@
  * (src/game/crash_screen.c: "gCrashScreen.framebuffer =
  * (u16 *)(osMemSize | 0xA0000000) - ..."), applied unconditionally on
  * every version -- then delegates every pixel-placement decision to the
- * pure qr_render_blit_rgba16() (qr_render.h). This shell itself contains
- * no module/scale/quiet-zone math, only the address conversion and the
- * SCREEN_WIDTH/SCREEN_HEIGHT (config.h) framing.
+ * pure qr_render_overlay_rgba16() (qr_render.h), passing it the dialog-font
+ * seam built from the game's own gDialogCharWidths + main_font_lut
+ * (ADR-0004). This shell itself contains no module/scale/quiet-zone/layout
+ * math, only the address conversion, the font-glyph resolution
+ * (segmented_to_virtual), and the SCREEN_WIDTH/SCREEN_HEIGHT (config.h)
+ * framing.
  *
  * Deliberately NOT modeled on crash_screen_set_framebuffer()'s own
  * VERSION_EU-conditional branches: that function's `framebuffer` parameter
@@ -33,9 +36,10 @@
  *
  * Deliberately excluded from tools/pipeline_test's host build: this file
  * includes <ultra64.h>, which is unavailable off-target. Its own logic is
- * intentionally as thin as possible (one pointer conversion, one call into
- * the pure core) precisely so there is almost nothing here that host
- * coverage of qr_render_blit_rgba16() doesn't already exercise.
+ * intentionally as thin as possible (one pointer conversion, the font-seam
+ * glyph resolver, one call into the pure core) precisely so there is almost
+ * nothing here that host coverage of qr_render_overlay_rgba16() doesn't
+ * already exercise.
  */
 void qr_render_blit_to_uncached_framebuffer(const pipeline_u8 *qrBitmap, uintptr_t framebuffer);
 

@@ -7,10 +7,33 @@
 #include <ultra64.h>
 
 #include "sm64.h"
+#include "memory.h"    /* segmented_to_virtual */
+#include "segment2.h"  /* main_font_lut        */
 #include "qr_render_n64.h"
 
-void qr_render_blit_to_uncached_framebuffer(const pipeline_u8 *qrBitmap, uintptr_t framebuffer)
-{
+/* gDialogCharWidths is a plain (non-segmented) global defined in
+ * ingame_menu.c with no header declaration; mirror render's own usage. */
+extern u8 gDialogCharWidths[256];
+
+/*
+ * The dialog-font seam adapter (ADR-0004): resolve one glyph's raw ia4
+ * texture from the game's OWN font LUT, exactly as render_generic_char()
+ * does (ingame_menu.c) -- segmented_to_virtual(main_font_lut) to reach the
+ * table, then segmented_to_virtual(entry) to reach the 8x16 ia4 texels.
+ * Unmapped codes are 0x0 in the LUT and return NULL (drawn as blank). This
+ * makes the overlay's text the SAME glyphs the in-game dialog uses.
+ */
+static const unsigned char *qr_render_font_glyph(UNUSED void *ctx, unsigned char code) {
+    void **fontLUT = segmented_to_virtual(main_font_lut);
+    void *packedTexture = fontLUT[code];
+
+    if (packedTexture == NULL) {
+        return NULL;
+    }
+    return (const unsigned char *) segmented_to_virtual(packedTexture);
+}
+
+void qr_render_blit_to_uncached_framebuffer(const pipeline_u8 *qrBitmap, uintptr_t framebuffer) {
     /*
      * `framebuffer` is documented (qr_render_n64.h) as a PHYSICAL
      * framebuffer address -- e.g. one of gPhysicalFramebuffers[...]
@@ -30,6 +53,11 @@ void qr_render_blit_to_uncached_framebuffer(const pipeline_u8 *qrBitmap, uintptr
      * physical value) is the actually-applicable precedent.
      */
     u16 *uncached = (u16 *) (framebuffer | 0xa0000000);
+    QrRenderFont font;
 
-    qr_render_blit_rgba16(qrBitmap, uncached, SCREEN_WIDTH, SCREEN_HEIGHT);
+    font.charWidths = gDialogCharWidths;
+    font.glyph = qr_render_font_glyph;
+    font.ctx = NULL;
+
+    qr_render_overlay_rgba16(qrBitmap, uncached, SCREEN_WIDTH, SCREEN_HEIGHT, &font);
 }
