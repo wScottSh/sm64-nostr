@@ -60,6 +60,23 @@ per-event secret; keys are rotated per event and never committed. See `keys/READ
 
 ## Building
 
+### One command (Windows / PowerShell)
+
+The build wizard chains preflight → key provisioning → Docker `make` → a summary
+panel that prints the ROM's `npub`/`nsec`. From the repo root:
+
+```powershell
+.\build.ps1
+```
+
+Press Enter to mint a fresh ephemeral per-event key, or paste a 64-char hex
+secret to reuse a prior event's. Flags: `-PrivKey <hex>`, `-Clean`,
+`-RebuildImage`, `-Yes` (non-interactive), `-EventName <name>` (parked
+placeholder). See `docs/adr/0003-single-command-build-wizard.md`. The manual
+steps below are the underlying pipeline the wizard runs for you.
+
+### Manual
+
 This fork's operative target is **US**, built with Docker (Ubuntu 18.04). Because the game is modified, the output
 ROM does not match the original US sha1 — hash comparison is expected to differ, so build with `COMPARE=0` (it is
 also auto-disabled by any non-default option). Asset extraction still requires an **unmodified** US ROM at

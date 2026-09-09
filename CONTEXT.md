@@ -24,6 +24,14 @@ Ubiquitous language for the **airgapped Nostr QR leaderboard** work (ticket [#4]
 
 - **qr_display glue** *(deferred)* — the small shared state machine (`qr_present(bitmap)` / `qr_update(input)→done`) owning time-stop, debounced-A, and the one-shot `memset`, so the "never re-summonable" invariant lives in one place across both save flows.
 
+## Build & provisioning
+
+- **Build wizard** — the single-command build pipeline. A thin host launcher (`build.ps1`/`build.sh`) `docker run -it`s an interactive `/wizard`-style bash orchestrator *inside* the container, which provisions the signing key, runs the one blessed `make` shape, and streams the build. Docker-only; the operator fires one command and a signed ROM comes out. See ADR-0003.
+
+- **Ephemeral per-event key** — the paradigm that a ROM's signing key is the identity of *one game at one event*, minted fresh per build by default, freely overwritten, and never a long-lived identity. Its only recoverable surface is the end-of-run panel (`npub`/`nsec`). Distinct from **origin-provenance** (which the key still provides *within* an event): the key is disposable, the provenance guarantee is not.
+
+- **Event name** *(placeholder — not yet implemented)* — a forthcoming human-readable identity for an event, distinct from `PIPELINE_KEY_LABEL` (registry label) and the per-game `t` tag. The build wizard reserves an optional slot for it that no-ops when absent; it is not required to build. Where it lands (manifest/registry sidecar, not the signed wire) is pinned; the concept itself is being built separately.
+
 ## Timing & flow
 
 - **Capture@grab / display@park** — values are frozen at the moment of the star grab (nonce included); the QR is shown later when Mario parks. See #17.
