@@ -132,7 +132,15 @@ void bhv_act_selector_init(void) {
             selectorModelIDs[sVisibleStars] =
                 (stars & (1 << sVisibleStars)) ? MODEL_STAR : MODEL_TRANSPARENT_STAR;
         }
-        sInitSelectedActNum = 1;
+        // sInitSelectedActNum acts as a ceiling in
+        // lvl_update_obj_and_load_act_button_actions (it clamps sLoadedActNum
+        // to sSelectedActIndex + 1 only when sInitSelectedActNum is at least
+        // that high), not as the cursor default. With the seam open all 6
+        // acts are selectable, so the ceiling must cover all 6. The cursor
+        // itself defaults to act 1 via sSelectableStarIndex below, which
+        // bhv_act_selector_loop's all-selectable path turns into
+        // sSelectedActIndex == 0 on the first frame.
+        sInitSelectedActNum = 6;
         sSelectableStarIndex = 0;
     } else {
         sVisibleStars = 0;
