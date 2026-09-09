@@ -255,9 +255,18 @@ void qr_render_overlay_rgba16(const pipeline_u8 *qrBitmap, unsigned short *frame
         }
     }
 
-    /* Authentic ia4 dialog glyphs: 8x16, 4 bytes/row, high nibble = left
-     * pixel; a non-zero nibble is an "on" (white) pixel. Blank codes (NULL
-     * glyph) draw nothing. */
+    /*
+     * Authentic ia4 dialog glyphs. The game's US font glyph (main_font_lut
+     * entry) is NOT a plain 8x16 image: it is stored as a 16-wide x 8-tall
+     * ia4 texture (8 bytes/row, high nibble = leftmost/even texel) that the
+     * in-game engine draws through gSPTextureRectangleFlip -- see segment2.c
+     * dl_ia_text_tex_settings (SetTileSize S=16, T=8) and ingame_menu.c
+     * render_generic_char(). The on-screen 8x16 glyph is that stored texture
+     * transposed-and-flipped: on-screen pixel (gx,gy) samples stored texel
+     * (storedX = 15 - gy, storedY = 7 - gx). Decoding the bytes as a plain
+     * 8x16 image scrambles every glyph (the garbled-text bug). A non-zero
+     * nibble is an "on" (white) pixel; blank codes (NULL glyph) draw nothing.
+     */
     for (i = 0; i < layout.glyphCount; i++) {
         QrRenderGlyphOp *op = &layout.glyphs[i];
         const unsigned char *g = font->glyph(font->ctx, op->code);
@@ -265,14 +274,16 @@ void qr_render_overlay_rgba16(const pipeline_u8 *qrBitmap, unsigned short *frame
             continue;
         }
         for (gy = 0; gy < QR_RENDER_GLYPH_H; gy++) {
-            const unsigned char *rowBytes = g + gy * (QR_RENDER_GLYPH_W / 2);
+            int storedX = (QR_RENDER_GLYPH_H - 1) - gy;  /* 0..15 along stored width */
             int py = op->y + gy;
             if (py < 0 || py >= fbHeight) {
                 continue;
             }
             for (gx = 0; gx < QR_RENDER_GLYPH_W; gx++) {
-                unsigned char byte = rowBytes[gx >> 1];
-                unsigned char nib = (gx & 1) ? (byte & 0x0F) : (unsigned char) (byte >> 4);
+                int storedY = (QR_RENDER_GLYPH_W - 1) - gx;  /* 0..7 stored row */
+                unsigned char byte = g[storedY * (QR_RENDER_GLYPH_H / 2) + (storedX >> 1)];
+                unsigned char nib = (storedX & 1) ? (byte & 0x0F)
+                                                  : (unsigned char) (byte >> 4);
                 int pxx = op->x + gx;
                 if (nib != 0 && pxx >= 0 && pxx < fbWidth) {
                     framebuffer[py * fbWidth + pxx] = QR_RENDER_WHITE_RGBA16;
