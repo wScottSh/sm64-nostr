@@ -544,9 +544,26 @@ s32 save_file_get_course_coin_score(s32 fileIndex, s32 courseIndex) {
 }
 
 /**
+ * Sandbox seam E: always-TRUE cannon-unlock predicate, consulted at the top
+ * of save_file_is_cannon_unlocked() before its real per-course cannon-bit
+ * read. Force-off, not delete: the vanilla bit read stays in the tree but is
+ * unreached while this predicate returns TRUE, matching seam D.
+ */
+s32 save_file_cannons_are_forced_open(void) {
+    return TRUE;
+}
+
+/**
  * Return TRUE if the cannon is unlocked in the current course.
+ *
+ * Sandbox seam E consults save_file_cannons_are_forced_open() first, so this
+ * currently always returns TRUE regardless of the stored per-course bit.
  */
 s32 save_file_is_cannon_unlocked(void) {
+    if (save_file_cannons_are_forced_open() == TRUE) {
+        return TRUE;
+    }
+
     return (gSaveBuffer.files[gCurrSaveFileNum - 1][0].courseStars[gCurrCourseNum] & (1 << 7)) != 0;
 }
 
