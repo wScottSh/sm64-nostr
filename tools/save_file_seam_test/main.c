@@ -22,7 +22,7 @@
  *
  * Seam F: asserts save_file_star_collection_is_recorded() reports FALSE
  * directly, and behaviorally, that the interaction.c grab-site guard this
- * predicate gates -- `if (save_file_star_collection_is_recorded() == TRUE)
+ * predicate gates -- `if (save_file_star_collection_is_recorded())
  * save_file_collect_star_or_key(...)` -- is exercised the same way the real
  * call site is: since the predicate is FALSE, save_file_collect_star_or_key()
  * is never actually invoked, so the stored star bitfield and the live star
