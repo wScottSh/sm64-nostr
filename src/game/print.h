@@ -24,7 +24,9 @@
 #define GLYPH_COIN            51
 #define GLYPH_MARIO_HEAD      52
 #define GLYPH_STAR            53
-#define GLYPH_PERIOD          54
+#define GLYPH_PERIOD          54 // JP/SH only; US/CN reuse this null slot below
+// US/CN only red-coin HUD marker (spec #75, #78); JP/SH keep GLYPH_PERIOD here
+#define GLYPH_RED_COIN        54
 #define GLYPH_BETA_KEY        55
 #define GLYPH_APOSTROPHE      56
 #define GLYPH_DOUBLE_QUOTE    57

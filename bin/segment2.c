@@ -260,6 +260,17 @@ ALIGNED8 static const Texture texture_hud_char_beta_key[] = {
 };
 #endif
 
+#if defined(VERSION_CN) || defined(VERSION_US)
+// US/CN: no region ships a red-coin HUD glyph in vanilla. This community-
+// drawn 16x16 rgba16 glyph (by thecozies, HackerSM64 v2.0.0) fills the null
+// US/CN main_hud_lut slot that GLYPH_PERIOD/texture_hud_char_decimal_point
+// occupies on JP/SH -- NOT a JP-ROM rip. See NOTICE and spec #75 sub-issue
+// #78.
+ALIGNED8 static const Texture texture_hud_char_red_coin[] = {
+#include "textures/segment2/segment2.hud_char_red_coin_custom.rgba16.inc.c"
+};
+#endif
+
 #if defined(VERSION_CN)
 ALIGNED8 static const Texture texture_hud_char_cn_04A00[] = {
 #include "textures/segment2/segment2_cn.04A00.rgba16.inc.c"
@@ -10977,7 +10988,11 @@ const Texture *const main_hud_lut[] = {
                   0x0,                 0x0,                0x0,                0x0,
                   0x0,                 0x0,                0x0,                0x0,
                   0x0,                 0x0, texture_hud_char_multiply, texture_hud_char_coin,
-    texture_hud_char_mario_head, texture_hud_char_star,               0x0,               0x0,
+    // Slot 54 (GLYPH_RED_COIN on US/CN, GLYPH_PERIOD on JP/SH): the
+    // red-coin readout marker glyph, community-drawn art (thecozies,
+    // HackerSM64 v2.0.0), not a JP-ROM rip. See NOTICE and spec #75
+    // sub-issue #78.
+    texture_hud_char_mario_head, texture_hud_char_star, texture_hud_char_red_coin, 0x0,
     texture_hud_char_apostrophe, texture_hud_char_double_quote,
 #if defined(VERSION_CN)
     texture_hud_char_cn_04A00, texture_hud_char_cn_04C00, texture_hud_char_cn_04E00, texture_hud_char_cn_05000,
