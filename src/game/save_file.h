@@ -161,6 +161,8 @@ void save_file_clear_flags(u32 flags);
 u32 save_file_get_flags(void);
 // Sandbox seam B: star-requirement gate; currently always open (returns TRUE), ignoring its args.
 s32 save_file_star_gate_is_open(s32 numStars, s32 requiredStars);
+// Sandbox seam D: intro-suppression gate; currently always suppressed (returns TRUE).
+s32 save_file_intro_is_suppressed(void);
 u32 save_file_get_star_flags(s32 fileIndex, s32 courseIndex);
 void save_file_set_star_flags(s32 fileIndex, s32 courseIndex, u32 starFlags);
 s32 save_file_get_course_coin_score(s32 fileIndex, s32 courseIndex);

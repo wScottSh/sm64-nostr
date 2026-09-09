@@ -1183,7 +1183,10 @@ s32 init_level(void) {
                 set_mario_action(gMarioState, ACT_IDLE, 0);
             } else if (!gDebugLevelSelect) {
                 if (gMarioState->action != ACT_UNINITIALIZED) {
-                    if (save_file_exists(gCurrSaveFileNum - 1)) {
+                    // Sandbox seam D: intro-suppression gate. When suppressed (always, currently),
+                    // a pristine file selects ACT_IDLE instead of ACT_INTRO_CUTSCENE, so the
+                    // opening cutscene (and the white fade-in transition below) never runs.
+                    if (save_file_exists(gCurrSaveFileNum - 1) || save_file_intro_is_suppressed()) {
                         set_mario_action(gMarioState, ACT_IDLE, 0);
                     } else {
                         set_mario_action(gMarioState, ACT_INTRO_CUTSCENE, 0);
@@ -1254,7 +1257,12 @@ s32 lvl_init_from_save_file(UNUSED s16 arg0, s32 levelNum) {
 #endif
     sWarpDest.type = WARP_TYPE_NOT_WARPING;
     sDelayedWarpOp = WARP_OP_NONE;
-    gNeverEnteredCastle = !save_file_exists(gCurrSaveFileNum - 1);
+    // Sandbox seam D: intro-suppression gate (same predicate as the ACT_IDLE branch above).
+    // When suppressed (always, currently), gNeverEnteredCastle is forced FALSE ("already
+    // entered"), so the intro-only Lakitu bridge stop (bhvCameraLakitu) and Bowser's front-door
+    // taunt (act_warp_door_spawn, DIALOG_021) never gate open, and normal castle music plays
+    // immediately instead of the quiet first-entry cue (set_background_music, sound_init.c).
+    gNeverEnteredCastle = !save_file_exists(gCurrSaveFileNum - 1) && !save_file_intro_is_suppressed();
 
     gCurrLevelNum = levelNum;
     gCurrCourseNum = COURSE_NONE;
