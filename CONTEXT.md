@@ -22,6 +22,8 @@ Ubiquitous language for the **airgapped Nostr QR leaderboard** work (ticket [#4]
 
 - **QR bitmap** — the pipeline's **output seam**: a 1-bpp bitmap, not framebuffer pixels. The renderer glue blits it via direct RGBA16 writes to the uncached framebuffer (`crash_screen_draw_glyph` precedent, `crash_screen.c:81-101`). Host tests decode the bitmap; encoding is never fused into the framebuffer write.
 
+- **Star-capture overlay** — what the renderer glue actually composites (issue #84, ADR-0004): the QR flush-left at 2px/module and an **authentic SM64 dialog box** to its right (real ia4 glyphs + `gDialogCharWidths`, ROM box-height formula, translucent black), the pair centered inside the 8px overscan band. The pure core (`qr_render.c`) owns all placement/wrap/blend math and is host-tested; the one thing that varies — the dialog font — is an injected **font seam** (`QrRenderFont`), supplied on device from `main_font_lut`/`gDialogCharWidths` and faked in the host test. `QR_RENDER_MODULE_SCALE_PX` (2) is a to-be-photo-tested LED-first bet; fall back to 3/4px there alone.
+
 - **qr_display glue** *(deferred)* — the small shared state machine (`qr_present(bitmap)` / `qr_update(input)→done`) owning time-stop, debounced-A, and the one-shot `memset`, so the "never re-summonable" invariant lives in one place across both save flows.
 
 ## Build & provisioning

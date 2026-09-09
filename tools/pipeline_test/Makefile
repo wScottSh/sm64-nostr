@@ -70,7 +70,9 @@
 # unmodified, mirroring how src/pipeline/*.c is already compiled twice.
 # main.c's test_qr_render_blit_round_trips_through_decode() renders a real
 # build_event() qr_bitmap into an in-memory RGBA16 buffer via
-# qr_render_blit_rgba16(), reconstructs the module grid by reading pixels
+# qr_render_blit_qr_at() (issue #84's overlay redesign; the pure core also
+# adds qr_render_layout()/qr_render_overlay_rgba16()), reconstructs the grid
+# by reading pixels
 # back out of that buffer (reversing the fixed scale + quiet zone), packs
 # that reconstructed grid into a qrcodegen-format buffer, and feeds it to
 # the existing qr_host_decode() -- asserting the decoded bytes equal

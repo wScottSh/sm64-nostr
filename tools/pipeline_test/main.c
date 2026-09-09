@@ -66,10 +66,10 @@
  *     paths call the same pipeline_capture_build()/build_event(), so
  *     identical inputs structurally cannot diverge.
  *
- * #32 adds test_qr_render_blit_round_trips_through_decode() (renderer
+ * #32/#84 add test_qr_render_blit_round_trips_through_decode() (renderer
  * glue, src/game/qr_render.h/.c): renders a real build_event() qr_bitmap
  * into an in-memory plain RGBA16 buffer via the SAME pure
- * qr_render_blit_rgba16() the ROM build compiles (src/game is compiled a
+ * qr_render_blit_qr_at() the ROM build compiles (src/game is compiled a
  * second time here, unmodified, exactly like src/pipeline already is), then
  * reconstructs the module grid by sampling the CENTER pixel of every
  * module's scaled block back out of that buffer (reversing the fixed
@@ -459,10 +459,47 @@ static void test_pipeline_unpack_boundary_and_rejections(void)
 #define QR_RENDER_TEST_FB_HEIGHT 240
 
 /*
- * qr_render_blit_rgba16() round-trip test (spec #24, sub-issue #32). See
- * the file header comment above for the full render->reconstruct->decode
- * shape. Uses a StarCapture distinct from vector A above just to exercise
- * a different payload, signed with the same BIP-340 KAT privkey.
+ * A fake QrRenderFont for the host tests (issue #84 / ADR-0004): the real
+ * dialog font lives in segmented ROM data the host can't reach, so the pure
+ * qr_render core takes the font as a seam. Every advance is a fixed 6px
+ * (space 5px), and every glyph is a solid 8x16 block (all ia4 nibbles 0xF),
+ * so a rendered glyph is detectable as a run of white pixels and the
+ * word-wrap math is driven by known widths. The space code returns a NULL
+ * glyph (nothing to draw).
+ */
+static unsigned char gFakeCharWidths[256];
+static unsigned char gFakeSolidGlyph[64];
+
+static const unsigned char *fake_font_glyph(void *ctx, unsigned char code) {
+    (void) ctx;
+    if (code == QR_RENDER_DIALOG_CODE_SPACE) {
+        return NULL;
+    }
+    return gFakeSolidGlyph;
+}
+
+static void init_fake_font(QrRenderFont *font) {
+    int i;
+    for (i = 0; i < 256; i++) {
+        gFakeCharWidths[i] = 6;
+    }
+    gFakeCharWidths[QR_RENDER_DIALOG_CODE_SPACE] = 5;
+    for (i = 0; i < 64; i++) {
+        gFakeSolidGlyph[i] = 0xFF;
+    }
+    font->charWidths = gFakeCharWidths;
+    font->glyph = fake_font_glyph;
+    font->ctx = NULL;
+}
+
+/*
+ * qr_render overlay round-trip test (issue #84; was sub-issue #32's centered
+ * blit). Renders the full overlay's QR (now 2px/module, flush-left at the
+ * layout's qrX/qrY) and proves it still decodes to build_event's exact
+ * packed payload -- the render->reconstruct->decode shape from the file
+ * header, re-anchored on the new left-positioned geometry. Uses a
+ * StarCapture distinct from vector A just to exercise a different payload,
+ * signed with the same BIP-340 KAT privkey.
  */
 static void test_qr_render_blit_round_trips_through_decode(void)
 {
@@ -505,24 +542,38 @@ static void test_qr_render_blit_round_trips_through_decode(void)
     }
 
     /* Compute expected geometry and assert the image fits BEFORE calling
-     * the blit -- qr_render_blit_rgba16() itself now refuses to write
+     * the blit -- qr_render_blit_qr_at() itself now refuses to write
      * anything if this doesn't hold (see qr_render.c's own defensive
      * bound), but this test's own geometry assertions must not run after
      * a call that could, in principle, already have misbehaved. */
     gridSize  = pipeline_qr_get_size(event.qr_bitmap);
     imageSize = (gridSize + 2 * QR_RENDER_QUIET_ZONE_MODULES) * QR_RENDER_MODULE_SCALE_PX;
-    originX = (QR_RENDER_TEST_FB_WIDTH  - imageSize) / 2;
-    originY = (QR_RENDER_TEST_FB_HEIGHT - imageSize) / 2;
+
+    /* Left-positioned origin now comes from the pure layout (QR flush-left of
+     * the horizontally-centered QR+box pair), not from centering the QR in
+     * the whole framebuffer. */
+    {
+        QrRenderFont font;
+        QrRenderLayout layout;
+        init_fake_font(&font);
+        qr_render_layout(gridSize, QR_RENDER_TEST_FB_WIDTH, QR_RENDER_TEST_FB_HEIGHT, &font,
+                         QR_RENDER_COPY_HEADING, QR_RENDER_COPY_BODY, QR_RENDER_COPY_PROMPT,
+                         &layout);
+        check(layout.fits, "qr_render: overlay layout fits the 320x240 framebuffer");
+        originX = layout.qrX;
+        originY = layout.qrY;
+    }
 
     check(imageSize == QR_RENDER_IMAGE_SIZE_PX,
-          "qr_render: computed image size matches QR_RENDER_IMAGE_SIZE_PX (212x212 for v7/scale4/quiet4)");
+          "qr_render: computed image size matches QR_RENDER_IMAGE_SIZE_PX (106x106 for v7/scale2/quiet4)");
     check(imageSize <= QR_RENDER_TEST_FB_WIDTH && imageSize <= QR_RENDER_TEST_FB_HEIGHT,
           "qr_render: image fits within the 320x240 N64 framebuffer");
     if (imageSize > QR_RENDER_TEST_FB_WIDTH || imageSize > QR_RENDER_TEST_FB_HEIGHT) {
         return;
     }
 
-    qr_render_blit_rgba16(event.qr_bitmap, fb, QR_RENDER_TEST_FB_WIDTH, QR_RENDER_TEST_FB_HEIGHT);
+    qr_render_blit_qr_at(event.qr_bitmap, fb, QR_RENDER_TEST_FB_WIDTH, QR_RENDER_TEST_FB_HEIGHT,
+                         originX, originY);
 
     /* Quiet-zone assertion: every pixel in the fixed-width quiet-zone ring
      * is exactly QR_RENDER_WHITE_RGBA16 -- never the pre-blit sentinel and
@@ -597,6 +648,181 @@ static void test_qr_render_blit_round_trips_through_decode(void)
     check(decodeOk != 0 && decodedLen == (int) PIPELINE_BUILT_PAYLOAD_SIZE &&
           memcmp(decoded, event.packed_payload, (size_t) PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
           "qr_render: render->reconstruct->decode == build_event's exact packed_payload");
+}
+
+/*
+ * qr_render_ascii_to_dialog(): the copy is authored ASCII but the font seam
+ * is indexed by DIALOG char codes (charmap.txt). Pin the whole mapping the
+ * overlay copy relies on, including the [A]-button sentinel and the
+ * unknown -> space fallback (issue #84 / ADR-0004).
+ */
+static void test_qr_render_ascii_encoding(void) {
+    int ok = 1;
+    ok = ok && qr_render_ascii_to_dialog('0') == 0x00;
+    ok = ok && qr_render_ascii_to_dialog('9') == 0x09;
+    ok = ok && qr_render_ascii_to_dialog('A') == 0x0A;
+    ok = ok && qr_render_ascii_to_dialog('Z') == 0x23;
+    ok = ok && qr_render_ascii_to_dialog('a') == 0x24;
+    ok = ok && qr_render_ascii_to_dialog('z') == 0x3D;
+    ok = ok && qr_render_ascii_to_dialog(' ') == 0x9E;
+    ok = ok && qr_render_ascii_to_dialog('!') == 0xF2;
+    ok = ok && qr_render_ascii_to_dialog('.') == 0x3F;
+    ok = ok && qr_render_ascii_to_dialog(',') == 0x6F;
+    ok = ok && qr_render_ascii_to_dialog('\'') == 0x3E;
+    ok = ok && qr_render_ascii_to_dialog('\x01') == QR_RENDER_DIALOG_CODE_A_BUTTON;
+    ok = ok && qr_render_ascii_to_dialog('@') == QR_RENDER_DIALOG_CODE_SPACE; /* unknown */
+    check(ok, "qr_render: ASCII->dialog-code map (letters/digits/space/!/./,/'/[A]/fallback)");
+}
+
+/*
+ * qr_render_layout(): the pure geometry plan (issue #84 / ADR-0004). Asserts
+ * the 2px QR flush-left of a horizontally-centered pair, the ROM box height
+ * formula, vertical centering, and that everything -- QR, box, and every
+ * emitted glyph -- lands inside the 8px overscan band and the box interior.
+ */
+static void test_qr_render_layout_geometry(void) {
+    QrRenderFont font;
+    QrRenderLayout layout;
+    QrRenderLayout tiny;
+    int i;
+    int allGlyphsInsideBox = 1;
+
+    init_fake_font(&font);
+    qr_render_layout(PIPELINE_QR_MODULE_SIZE, 320, 240, &font,
+                     QR_RENDER_COPY_HEADING, QR_RENDER_COPY_BODY, QR_RENDER_COPY_PROMPT,
+                     &layout);
+
+    check(layout.fits, "qr_render layout: fits at 320x240");
+    check(layout.qrImagePx == QR_RENDER_IMAGE_SIZE_PX && layout.qrImagePx == 106,
+          "qr_render layout: QR image is 106px (45 modules + 2*4 quiet, 2px/module)");
+    /* pair = 106 + 6 + 143 = 255; centered -> startX = (320-255)/2 = 32 */
+    check(layout.qrX == 32, "qr_render layout: QR flush-left at x=32 (pair centered)");
+    check(layout.qrY == (240 - 106) / 2, "qr_render layout: QR vertically centered");
+    check(layout.boxX == 32 + 106 + QR_RENDER_PAIR_GAP_PX,
+          "qr_render layout: box sits one gap right of the QR");
+    check(layout.boxW == QR_RENDER_DLG_BOX_W, "qr_render layout: box is the ROM 143px width");
+    check(layout.boxH == QR_RENDER_DLG_LINE_PITCH * layout.lineCount + 8,
+          "qr_render layout: box height is the ROM formula 16*lines + 8");
+    check(layout.lineCount >= 3, "qr_render layout: >= 3 lines (heading + body + prompt)");
+    check(layout.boxY == (240 - layout.boxH) / 2, "qr_render layout: box vertically centered");
+
+    /* Overscan-safe band: everything within [8, 232). */
+    check(layout.qrY >= QR_RENDER_OVERSCAN_PX
+          && layout.qrY + layout.qrImagePx <= 240 - QR_RENDER_OVERSCAN_PX,
+          "qr_render layout: QR within the 8px overscan band");
+    check(layout.boxY >= QR_RENDER_OVERSCAN_PX
+          && layout.boxY + layout.boxH <= 240 - QR_RENDER_OVERSCAN_PX,
+          "qr_render layout: box within the 8px overscan band");
+
+    check(layout.glyphCount > 0, "qr_render layout: emits glyph ops");
+    for (i = 0; i < layout.glyphCount; i++) {
+        QrRenderGlyphOp *op = &layout.glyphs[i];
+        if (op->x < layout.boxX + QR_RENDER_DLG_BOX_INSET
+            || op->x + QR_RENDER_GLYPH_W > layout.boxX + layout.boxW
+            || op->y < layout.boxY
+            || op->y + QR_RENDER_GLYPH_H > layout.boxY + layout.boxH) {
+            allGlyphsInsideBox = 0;
+            break;
+        }
+    }
+    check(allGlyphsInsideBox, "qr_render layout: every glyph op lands inside the box interior");
+
+    /* A framebuffer too small for the pair reports !fits and emits nothing. */
+    qr_render_layout(PIPELINE_QR_MODULE_SIZE, 120, 120, &font,
+                     QR_RENDER_COPY_HEADING, QR_RENDER_COPY_BODY, QR_RENDER_COPY_PROMPT,
+                     &tiny);
+    check(!tiny.fits && tiny.glyphCount == 0,
+          "qr_render layout: !fits (and no glyphs) when the pair can't fit");
+}
+
+/*
+ * qr_render_overlay_rgba16(): the composite paint. Proves the QR still
+ * decodes from its left origin, the dialog box darkens the frozen frame
+ * where no glyph covers it, and a real (fake-solid) glyph writes white
+ * pixels over the darkened box (issue #84 / ADR-0004).
+ */
+static void test_qr_render_overlay_paint(void) {
+    StarCapture capture;
+    BuiltEvent event;
+    QrRenderFont font;
+    QrRenderLayout layout;
+    static unsigned short fb[QR_RENDER_TEST_FB_WIDTH * QR_RENDER_TEST_FB_HEIGHT];
+    unsigned short cornerBefore, cornerAfter, cornerExpected;
+    int r, g, b;
+    int i;
+    int buildOk;
+
+    capture.course = 5; capture.act = 2; capture.coins = 7;
+    capture.frames = 0x11223344u; capture.nonce16 = 0xC0DE; capture.keyId = 0;
+    buildOk = build_event(&capture, kBuildEventPrivkey, &event);
+    check(buildOk != 0, "qr_render overlay: build_event succeeds for the paint test");
+    if (!buildOk) {
+        return;
+    }
+
+    init_fake_font(&font);
+    qr_render_layout(pipeline_qr_get_size(event.qr_bitmap),
+                     QR_RENDER_TEST_FB_WIDTH, QR_RENDER_TEST_FB_HEIGHT, &font,
+                     QR_RENDER_COPY_HEADING, QR_RENDER_COPY_BODY, QR_RENDER_COPY_PROMPT,
+                     &layout);
+    check(layout.fits && layout.glyphCount > 0, "qr_render overlay: layout usable for paint");
+    if (!layout.fits || layout.glyphCount == 0) {
+        return;
+    }
+
+    for (i = 0; i < QR_RENDER_TEST_FB_WIDTH * QR_RENDER_TEST_FB_HEIGHT; i++) {
+        fb[i] = 0x1234; /* sentinel the box blend must transform */
+    }
+
+    /* Box top-left corner is box-only: past the QR, above/left of any glyph
+     * (glyphs start at inset 7 / top pad 4). Capture it before/after. */
+    cornerBefore = fb[layout.boxY * QR_RENDER_TEST_FB_WIDTH + layout.boxX];
+
+    qr_render_overlay_rgba16(event.qr_bitmap, fb, QR_RENDER_TEST_FB_WIDTH,
+                             QR_RENDER_TEST_FB_HEIGHT, &font);
+
+    cornerAfter = fb[layout.boxY * QR_RENDER_TEST_FB_WIDTH + layout.boxX];
+    r = ((0x1234 >> 11) & 0x1F) * QR_RENDER_DLG_BOX_KEEP / 255;
+    g = ((0x1234 >> 6) & 0x1F) * QR_RENDER_DLG_BOX_KEEP / 255;
+    b = ((0x1234 >> 1) & 0x1F) * QR_RENDER_DLG_BOX_KEEP / 255;
+    cornerExpected = (unsigned short) ((r << 11) | (g << 6) | (b << 1) | 1);
+    check(cornerBefore == 0x1234 && cornerAfter == cornerExpected,
+          "qr_render overlay: box darkens the frozen frame toward black (alpha ~150)");
+
+    /* The first glyph is a solid fake block; its top-left pixel is white. */
+    check(fb[layout.glyphs[0].y * QR_RENDER_TEST_FB_WIDTH + layout.glyphs[0].x]
+          == QR_RENDER_WHITE_RGBA16,
+          "qr_render overlay: an authentic-path glyph writes white over the box");
+
+    /* And the QR still decodes from its left origin. */
+    {
+        pipeline_u8 reconstructed[PIPELINE_QR_BUFFER_LEN];
+        unsigned char decoded[PIPELINE_BUILT_PAYLOAD_SIZE];
+        int decodedLen = -1;
+        int gridSize = pipeline_qr_get_size(event.qr_bitmap);
+        int row, col;
+        int decodeOk;
+
+        memset(reconstructed, 0, sizeof(reconstructed));
+        reconstructed[0] = (pipeline_u8) gridSize;
+        for (row = 0; row < gridSize; row++) {
+            int sampleY = layout.qrY + (QR_RENDER_QUIET_ZONE_MODULES + row) * QR_RENDER_MODULE_SCALE_PX
+                          + QR_RENDER_MODULE_SCALE_PX / 2;
+            for (col = 0; col < gridSize; col++) {
+                int sampleX = layout.qrX + (QR_RENDER_QUIET_ZONE_MODULES + col) * QR_RENDER_MODULE_SCALE_PX
+                              + QR_RENDER_MODULE_SCALE_PX / 2;
+                unsigned short pixel = fb[sampleY * QR_RENDER_TEST_FB_WIDTH + sampleX];
+                int index = row * gridSize + col;
+                if (pixel == QR_RENDER_BLACK_RGBA16) {
+                    reconstructed[(index >> 3) + 1] |= (pipeline_u8) (1 << (index & 7));
+                }
+            }
+        }
+        decodeOk = qr_host_decode(reconstructed, decoded, (int) sizeof(decoded), &decodedLen);
+        check(decodeOk != 0 && decodedLen == (int) PIPELINE_BUILT_PAYLOAD_SIZE
+              && memcmp(decoded, event.packed_payload, (size_t) PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
+              "qr_render overlay: QR still decodes to build_event's payload from its left origin");
+    }
 }
 
 /*
@@ -2366,7 +2592,10 @@ int main(void)
     test_live_wire_vectors_round_trip();
     test_capture_build_known_answer();
     test_capture_matches_host_build_event();
+    test_qr_render_ascii_encoding();
+    test_qr_render_layout_geometry();
     test_qr_render_blit_round_trips_through_decode();
+    test_qr_render_overlay_paint();
     test_qr_display_state_machine();
     test_field_mul_differential_sweep();
     test_field_inv_differential_sweep();
