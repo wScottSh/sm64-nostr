@@ -351,6 +351,20 @@ void save_file_reload(void) {
 }
 
 /**
+ * Sandbox seam F: always-FALSE star-collection-recording predicate, consulted
+ * at the single star-grab record call (interact_star_or_key, interaction.c)
+ * before it calls save_file_collect_star_or_key(). Force-off, not delete: the
+ * vanilla record call stays in the tree but is unreached while this predicate
+ * returns FALSE, matching seams D/E. With the star bitfield never written,
+ * save_file_get_total_star_count() stays at 0, which transitively suppresses
+ * the whole Power Star / milestone-dialog series (it never crosses a
+ * threshold) without a separate dialog-site predicate.
+ */
+s32 save_file_star_collection_is_recorded(void) {
+    return FALSE;
+}
+
+/**
  * Update the current save file after collecting a star or a key.
  * If coin score is greater than the current high score, update it.
  */
@@ -544,9 +558,26 @@ s32 save_file_get_course_coin_score(s32 fileIndex, s32 courseIndex) {
 }
 
 /**
+ * Sandbox seam E: always-TRUE cannon-unlock predicate, consulted at the top
+ * of save_file_is_cannon_unlocked() before its real per-course cannon-bit
+ * read. Force-off, not delete: the vanilla bit read stays in the tree but is
+ * unreached while this predicate returns TRUE, matching seam D.
+ */
+s32 save_file_cannons_are_forced_open(void) {
+    return TRUE;
+}
+
+/**
  * Return TRUE if the cannon is unlocked in the current course.
+ *
+ * Sandbox seam E consults save_file_cannons_are_forced_open() first, so this
+ * currently always returns TRUE regardless of the stored per-course bit.
  */
 s32 save_file_is_cannon_unlocked(void) {
+    if (save_file_cannons_are_forced_open()) {
+        return TRUE;
+    }
+
     return (gSaveBuffer.files[gCurrSaveFileNum - 1][0].courseStars[gCurrCourseNum] & (1 << 7)) != 0;
 }
 
