@@ -20,8 +20,9 @@ operational, not cryptographic: the per-event signing key is injected at build t
 and the binary is never distributed. See `CONTEXT.md` for the domain glossary and the design decisions behind all
 of this.
 
-Scope of this repo is the **ROM only**. The companion phone app (scan → re-publish) and the leaderboard
-(aggregation, display) are separate, out-of-scope efforts.
+Scope of this repo is the **ROM only**. The reader (a generic phone camera scans the plaintext-URL QR →
+the website behind the URL re-publishes) and the leaderboard (aggregation, display) are separate,
+out-of-scope efforts. See ADR-0005.
 
 ## The pipeline
 

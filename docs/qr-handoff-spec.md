@@ -7,8 +7,17 @@ against it.
 
 > **Status:** this spec defines **format v2**, the self-contained layout. The ROM
 > in `master` currently emits **format v1** (`FORMAT_TAG 0x01`, 75 B, no pubkey /
-> created_at / tag on the wire). A v2 companion must reject v1. Do not ship a
-> companion against this spec until the ROM emits `FORMAT_TAG 0x02`.
+> created_at / tag on the wire). A v2 reader must reject v1. Do not ship a reader
+> against this spec until the ROM emits `FORMAT_TAG 0x02`.
+>
+> **Reader/airgap model superseded by ADR-0005.** The reader is a **generic phone
+> camera → plaintext-URL QR → website**, not a dedicated "companion app" (ADR-0001,
+> retracted). The wire format below is also being reworked from a raw BYTE blob to a
+> **URL-carried** payload (format **v3**); that rewrite lands with the v3 layout
+> synthesis (issue #102). Until then, treat every "companion" / "raw binary blob" /
+> "BYTE segment" reference below as the *v2* model — historically accurate, but
+> pending replacement. The invariant that does **not** change: **zero far-side
+> reconstruction** (ADR-0005).
 
 ## 0. The one thing to internalize
 

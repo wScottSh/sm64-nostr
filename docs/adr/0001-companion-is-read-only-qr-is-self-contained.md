@@ -1,5 +1,15 @@
 # The companion app is read-only; the QR is a complete, self-contained event
 
+> **RETRACTED — INCORRECT (not superseded).** This decision rests on a
+> **dedicated read-only companion app** as the airgap reader — a premise the
+> owner never stated (an AI assumption). The airgap reader is a **generic phone
+> camera → plaintext-URL QR → website** (see **ADR-0005**). The half of this ADR
+> that survives — the QR carries a *complete, already-signed, self-contained*
+> event, and the far side decodes-and-broadcasts while injecting no value — is
+> re-affirmed and made explicit as the **zero far-side reconstruction** invariant
+> in ADR-0005. Read the text below only for history; wherever it says "companion
+> app," the reader is now the phone-camera-plus-website of ADR-0005.
+
 The QR carries a **complete, already-signed, broadcast-ready Nostr event**, and the
 companion app is **strictly read-only** — it decodes the QR and broadcasts to a
 relay, injecting no value of its own. The whole point of the project is that the
