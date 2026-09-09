@@ -351,6 +351,20 @@ void save_file_reload(void) {
 }
 
 /**
+ * Sandbox seam F: always-FALSE star-collection-recording predicate, consulted
+ * at the single star-grab record call (interact_star_or_key, interaction.c)
+ * before it calls save_file_collect_star_or_key(). Force-off, not delete: the
+ * vanilla record call stays in the tree but is unreached while this predicate
+ * returns FALSE, matching seams D/E. With the star bitfield never written,
+ * save_file_get_total_star_count() stays at 0, which transitively suppresses
+ * the whole Power Star / milestone-dialog series (it never crosses a
+ * threshold) without a separate dialog-site predicate.
+ */
+s32 save_file_star_collection_is_recorded(void) {
+    return FALSE;
+}
+
+/**
  * Update the current save file after collecting a star or a key.
  * If coin score is greater than the current high score, update it.
  */

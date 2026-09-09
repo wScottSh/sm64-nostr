@@ -166,6 +166,8 @@ s32 save_file_intro_is_suppressed(void);
 u32 save_file_get_star_flags(s32 fileIndex, s32 courseIndex);
 void save_file_set_star_flags(s32 fileIndex, s32 courseIndex, u32 starFlags);
 s32 save_file_get_course_coin_score(s32 fileIndex, s32 courseIndex);
+// Sandbox seam F: star-collection-recording gate; currently always off (returns FALSE).
+s32 save_file_star_collection_is_recorded(void);
 // Sandbox seam E: cannon-unlock gate; currently always open (returns TRUE).
 s32 save_file_cannons_are_forced_open(void);
 s32 save_file_is_cannon_unlocked(void);
