@@ -34,6 +34,8 @@ Ubiquitous language for the **airgapped Nostr QR leaderboard** work (ticket [#4]
 
 ## Sandbox seams
 
+The fork deliberately opens progression gates so a fresh file plays as an open sandbox. Each such gate is a **sandbox seam**: a single, named, always-open decision point, kept together so the sandbox behavior is discoverable in one place.
+
 - **Sandbox seam A** — fixed mask of "unlocked" progress flags (`SAVE_FLAG_SANDBOX_UNLOCK_MASK`) OR'd into `save_file_get_flags()` at read-time so a fresh save behaves as an open sandbox. Excludes star-collection flags, so HUD/course progress stays honest.
 
 - **Sandbox seam B** — `save_file_star_gate_is_open()`, an always-open star-requirement predicate substituted at the live star-count comparison sites (doors, endless-staircase warp, MIPS, Toad checks) so every star gate is passable at 0 stars.
