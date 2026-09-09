@@ -16,8 +16,11 @@
     64-char hex secret to use instead of minting a fresh one (skips the prompt).
 
 .PARAMETER EventName
-    PARKED PLACEHOLDER -- a forthcoming human-readable event identity. Accepted and
-    recorded intent only; no-ops today, not required to build.
+    REQUIRED human-readable event identity (spec #75, sub-issue #76), shown
+    locally in the castle HUD corner -- an event ROM cannot be built without
+    one. A-Z, 0-9, and space only (case-folded to upper), 15 chars max;
+    gen_event_profile.py validates and rejects (never truncates) inside the
+    container. Prompted for interactively if omitted (unless -Yes).
 
 .PARAMETER Clean
     Scratch build (`make clean` first) instead of incremental.
@@ -29,10 +32,10 @@
     Non-interactive: accept every default (fresh-minted key) without prompting.
 
 .EXAMPLE
-    .\build.ps1
+    .\build.ps1 -EventName "SUMMER JAM 2026"
 
 .EXAMPLE
-    .\build.ps1 -Clean -PrivKey 77c8613773502387564e091595793df42751daae66dad4475719e4cf70023f2d
+    .\build.ps1 -Clean -EventName "SUMMER JAM 2026" -PrivKey 77c8613773502387564e091595793df42751daae66dad4475719e4cf70023f2d
 #>
 [CmdletBinding()]
 param(
@@ -154,19 +157,35 @@ if (-not (Test-Path $KeyDir)) { New-Item -ItemType Directory -Path $KeyDir | Out
 [System.IO.File]::WriteAllText($KeyFile, $keyHex + "`n", (New-Object System.Text.UTF8Encoding($false)))
 Write-Step "wrote $KeyFile"
 
-# --- Stage 4: event name (PARKED PLACEHOLDER) --------------------------------
-Write-Stage 4 'Event name (placeholder)'
-if ($EventName) {
-    Write-Step "Event name '$EventName' noted, but the event-name concept is not"
-    Write-Step "implemented yet -- it is recorded here only and does NOT affect this build."
-} else {
-    Write-Step "Not implemented yet -- skipped. (Reserved: -EventName <name>.)"
+# --- Stage 4: event name (REQUIRED, spec #75 sub-issue #76) ------------------
+Write-Stage 4 'Event name'
+if (-not $EventName -and -not $Yes) {
+    Write-Step "Every event ROM must state, honestly and locally, which event"
+    Write-Step "it was built for -- this is shown in the castle HUD corner."
+    Write-Step "A-Z, 0-9, and space only (case-folded to upper), 15 chars max."
+    $EventName = Read-Host "  event name (e.g. SUMMER JAM 2026)"
 }
-Write-Ok "nothing required today"
+if (-not $EventName -or -not $EventName.Trim()) {
+    Fail @"
+No -EventName supplied. An event ROM cannot be built without one (spec #75,
+sub-issue #76) -- the build refuses to produce a nameless binary.
+
+Pass one, e.g.: .\build.ps1 -EventName "SUMMER JAM 2026"
+(A-Z, 0-9, space only after case-folding; 15 chars max -- the actual
+charset/length gate runs inside the container via gen_event_profile.py and
+will FATAL out with a clear reason if this value doesn't pass it.)
+"@
+}
+Write-Ok "event name '$EventName' will be baked into this build (validated inside the container)"
 
 # --- Stage 5: build ----------------------------------------------------------
 Write-Stage 5 'Build (Docker)'
-$makeCmd = 'make VERSION=us COMPARE=0 COMPILER=gcc -j"$(nproc)"'
+# Single-quote the event name for the container's `sh -c`, escaping any
+# embedded single quotes ('\'' is the standard sh idiom) -- gen_event_
+# profile.py's own charset gate is the real validator; this quoting only
+# has to survive shell parsing, not pre-validate the content.
+$shSafeEventName = $EventName -replace "'", "'\''"
+$makeCmd = 'make VERSION=us COMPARE=0 COMPILER=gcc -j"$(nproc)" PIPELINE_EVENT_NAME=' + "'" + $shSafeEventName + "'"
 if ($Clean) {
     Write-Step "Scratch build requested -- running 'make clean' first."
     $makeCmd = 'make clean && ' + $makeCmd

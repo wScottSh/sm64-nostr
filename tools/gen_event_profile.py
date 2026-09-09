@@ -38,10 +38,22 @@ docs/qr-handoff-spec.md's wire contract must not, JSON-escape the tag value
 itself) -- so an unrestricted tag could inject into a build's own generated
 header or corrupt its own signed serialization.
 
+Also bakes a REQUIRED, display-only --event-name (spec #75, sub-issue #76)
+into the generated header's PIPELINE_EVENT_NAME -- a human-readable identity
+for the event a ROM was built for, shown locally in the castle HUD corner.
+Deliberately kept separate from --label (registry label) and --tag (per-game
+wire tag): unlike both, --event-name has NO default (the Makefile's
+PIPELINE_EVENT_NAME fails closed with a $(error) before this script ever
+runs, mirroring PIPELINE_PRIVKEY_FILE's own fail-closed check), and unlike
+--tag, --event-name is validated here and then NEVER read by build_event()'s
+pack stage -- it must never appear in the packed QR payload or the signed
+NIP-01 event. See normalize_event_name() below and this script's
+PIPELINE_EVENT_NAME_LEN emission.
+
 Usage:
   gen_event_profile.py --privkey <path> --template <path> --out <path>
-                        --label <str> --manifest <path> [--commit <sha>]
-                        [--created-at <epoch>] [--tag <str>]
+                        --label <str> --manifest <path> --event-name <str>
+                        [--commit <sha>] [--created-at <epoch>] [--tag <str>]
 """
 import argparse
 import json
@@ -63,6 +75,27 @@ import nostr_secp256k1 as secp  # noqa: E402
 # ASCII bytes", broader than this; this script is stricter on purpose for
 # the values it will itself accept and bake).
 TAG_VALUE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+# Event-name charset (spec #75, sub-issue #76): A-Z, 0-9, and space, checked
+# AFTER uppercase-folding a-z->A-Z (see normalize_event_name()). This is the
+# HUD font's actual glyph budget (print_text's US LUT, extended per #67/#69),
+# not a wire-safety restriction like TAG_VALUE_RE above -- the event name
+# never reaches the wire at all (see normalize_event_name()'s own comment).
+#
+# A literal frozenset of legal single characters -- NOT a `^...$`-anchored
+# regex applied per character. `$` in Python `re` matches both "end of
+# string" AND "just before a trailing newline", so a per-char `^[A-Z0-9 ]*$`
+# match against "\n" would wrongly succeed (the `*` matches zero chars, then
+# `$` matches before the newline). A plain membership test has no such
+# lookalike-anchor hazard.
+EVENT_NAME_ALLOWED_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
+)
+
+# Length cap (spec #75, sub-issue #76): power-meter left edge (x=108) to the
+# vanilla TV-safe right margin at the fixed 12px-per-char HUD pitch. Overflow
+# is REJECTED, never truncated -- see normalize_event_name().
+EVENT_NAME_MAX_LEN = 15
 
 # Path to the single JSON source of truth for the wire layout (spec #52,
 # sub-issue #54) -- this script reads TAG's own "max_size" from there rather
@@ -99,6 +132,48 @@ def read_privkey_hex(path):
     return privkey_bytes
 
 
+def normalize_event_name(raw):
+    """Validate and normalize --event-name (spec #75, sub-issue #76):
+    uppercase-fold a-z->A-Z, then accept only A-Z/0-9/space, then enforce
+    the EVENT_NAME_MAX_LEN cap. Returns the normalized string, or raises
+    ValueError naming the offending character/length -- this is the
+    fail-closed gate for a NAMELESS OR GARBLED ROM, mirroring TAG_VALUE_RE's
+    validation shape above: never silently drop a bad character, never
+    silently truncate an overlong name.
+
+    Display-only: the caller must never pass the return value anywhere near
+    build_event()'s pack stage or the signed NIP-01 event -- see this
+    script's own module docstring and event_profile.h.in's PIPELINE_EVENT_
+    NAME comment for the airgapped honesty invariant this enforces.
+    """
+    if not raw or not raw.strip():
+        raise ValueError(
+            "--event-name must not be empty or all-whitespace -- an event "
+            "ROM must state, honestly and locally, which event it was built "
+            "for (a nameless ROM cannot be built)"
+        )
+
+    folded = "".join(ch.upper() if "a" <= ch <= "z" else ch for ch in raw)
+
+    for ch in folded:
+        if ch not in EVENT_NAME_ALLOWED_CHARS:
+            raise ValueError(
+                "--event-name %r contains %r, outside the allowed A-Z, 0-9, "
+                "space charset (checked after uppercase-folding a-z->A-Z) -- "
+                "rename the event; this character is rejected, never "
+                "silently dropped" % (raw, ch)
+            )
+
+    if len(folded) > EVENT_NAME_MAX_LEN:
+        raise ValueError(
+            "--event-name %r is %d chars, over the %d-char cap -- shorten "
+            "it; an overlong name is rejected, never silently truncated"
+            % (raw, len(folded), EVENT_NAME_MAX_LEN)
+        )
+
+    return folded
+
+
 def resolve_commit_sha(explicit):
     if explicit:
         return explicit
@@ -125,6 +200,17 @@ def main():
     ap.add_argument("--out", required=True, help="output event_profile.h path")
     ap.add_argument("--label", required=True, help="event label for the registry row")
     ap.add_argument("--manifest", required=True, help="path to write the event identity manifest (JSON)")
+    ap.add_argument(
+        "--event-name",
+        required=True,
+        help="REQUIRED, display-only event name (spec #75, sub-issue #76); "
+        "no default -- a nameless ROM cannot be built. Uppercase-folded, "
+        "must match A-Z/0-9/space after folding, capped at %d chars "
+        "(rejected, not truncated, if longer). Baked into event_profile.h's "
+        "PIPELINE_EVENT_NAME for the castle HUD corner only -- never packed "
+        "onto the QR wire or the signed event. Kept separate from --label "
+        "and --tag." % EVENT_NAME_MAX_LEN,
+    )
     ap.add_argument("--commit", default=None)
     ap.add_argument("--created-at", type=int, default=None)
     ap.add_argument(
@@ -176,6 +262,12 @@ def main():
         )
         return 1
 
+    try:
+        event_name = normalize_event_name(args.event_name)
+    except ValueError as e:
+        sys.stderr.write("gen_event_profile.py: FATAL: %s\n" % e)
+        return 1
+
     pubkey_hex = pubkey_bytes.hex()
     npub = secp.npub_from_xonly_pubkey(pubkey_bytes)
     created_at = args.created_at if args.created_at is not None else int(time.time())
@@ -193,6 +285,7 @@ def main():
         .replace("@PUBKEY_BYTES@", pubkey_bytes_literal)
         .replace("@PRIVKEY_BYTES@", privkey_bytes_literal)
         .replace("@GAME_TAG@", args.tag)
+        .replace("@EVENT_NAME@", event_name)
     )
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
@@ -203,6 +296,7 @@ def main():
         args.manifest,
         {
             "label": args.label,
+            "event_name": event_name,
             "pubkey_hex": pubkey_hex,
             "npub": npub,
             "created_at": created_at,
