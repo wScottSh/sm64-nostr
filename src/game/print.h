@@ -9,7 +9,12 @@
 #define TEXRECT_MAX_Y 220
 
 #define GLYPH_SPACE           -1
+#define GLYPH_J               19
+#define GLYPH_Q               26
 #define GLYPH_U               30
+#define GLYPH_V               31
+#define GLYPH_X               33
+#define GLYPH_Z               35
 #define GLYPH_EXCLAMATION_PNT 36
 #define GLYPH_TWO_EXCLAMATION 37
 #define GLYPH_QUESTION_MARK   38

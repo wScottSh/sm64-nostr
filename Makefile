@@ -637,6 +637,13 @@ $(BUILD_DIR)/src/game/qr_display_n64.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/src/game/mario_actions_cutscene.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 $(BUILD_DIR)/src/game/game_init.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
 
+# hud.o (spec #75, sub-issue #77) #includes event_profile.h directly, for
+# PIPELINE_EVENT_NAME/PIPELINE_EVENT_NAME_LEN (the castle HUD corner's baked
+# event name, drawn where the retired star counter used to be) -- the same
+# generated-header hazard interaction.o's own prerequisite line above already
+# documents.
+$(BUILD_DIR)/src/game/hud.o: $(PIPELINE_EVENT_PROFILE_H)
+
 # Event profile header: derives the x-only pubkey from the per-event secret
 # (PIPELINE_PRIVKEY_FILE, checked for existence above) and bakes it, plus
 # the fixed event shape (kind 8064, the two `t` tags, build-epoch

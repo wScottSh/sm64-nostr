@@ -13,11 +13,15 @@
 #include "area.h"
 #include "save_file.h"
 #include "print.h"
+#include "course_table.h"
+#include "event_profile.h"
 
 /* @file hud.c
  * This file implements HUD rendering and power meter animations.
- * That includes stars, lives, coins, camera status, power meter, timer
- * cannon reticle, and the unused keys.
+ * That includes lives, coins, the top-right corner (event name in castle/
+ * hub -- see render_hud_top_right_corner; the vanilla star counter is
+ * retired, spec #75), camera status, power meter, timer cannon reticle, and
+ * the unused keys.
  **/
 
 struct PowerMeterHUD {
@@ -272,33 +276,40 @@ void render_hud_coins(void) {
     print_text_fmt_int(198, HUD_TOP_Y, "%d", gHudDisplay.coins);
 }
 
-#ifdef VERSION_JP
-#define HUD_STARS_X 73
-#else
-#define HUD_STARS_X 78
-#endif
-
 /**
- * Renders the amount of stars collected.
- * Disables "X" glyph when Mario has 100 stars or more.
+ * Renders the top-right HUD corner, which the vanilla star counter used to
+ * occupy (spec #75: retire the star counter, repurpose the corner). Mode is
+ * decided by one predicate: castle/hub iff gCurrCourseNum == COURSE_NONE
+ * (true for exactly the three hub levels -- interior, grounds, courtyard --
+ * that draw the HUD, via the data-driven gLevelToCourseNumTable), in-level
+ * otherwise. This function draws under the SAME flag bit the retired star
+ * counter used (HUD_DISPLAY_FLAG_STAR_COUNT, see render_hud below), so
+ * "whether to draw at all" stays suppressed exactly when the star counter
+ * was (transitions, credits, menus, camera modes all inherit the existing
+ * gating with no special-casing here).
+ *
+ * Castle/hub: draws the ROM's baked, display-only event name
+ * (PIPELINE_EVENT_NAME, from the generated event_profile.h -- see that
+ * header's comment for the airgapped honesty invariant: this value is never
+ * sourced by the QR pack stage). Right-aligned, growing left, anchored to
+ * the vanilla star counter's own right edge
+ * (GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(48)) so names of differing lengths
+ * share a fixed right edge and never clip. The origin_x subtraction uses
+ * PIPELINE_EVENT_NAME_LEN * 12 -- the HUD font's fixed 12px advance per
+ * glyph, verified in print.c's render_textrect -- so this constant-folds at
+ * build time; render_hud itself stays dumb, a single print_text call.
+ *
+ * In-level: intentionally draws nothing yet. Sub-issue #78 fills this branch
+ * with the relocated yellow coin counter and the red-coin readout.
  */
-void render_hud_stars(void) {
-    s8 showX = 0;
-
-    if (gHudFlash == 1 && gGlobalTimer & 8) {
-        return;
+void render_hud_top_right_corner(void) {
+    if (gCurrCourseNum == COURSE_NONE) {
+        print_text(GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(48) - PIPELINE_EVENT_NAME_LEN * 12,
+                   HUD_TOP_Y, PIPELINE_EVENT_NAME);
+    } else {
+        // In-level corner content lands here in sub-issue #78 (relocated
+        // yellow coin counter + red-coin readout). Draw nothing for now.
     }
-
-    if (gHudDisplay.stars < 100) {
-        showX = 1;
-    }
-
-    print_text(GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(HUD_STARS_X), HUD_TOP_Y, "-"); // 'Star' glyph
-    if (showX == 1) {
-        print_text(GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(HUD_STARS_X) + 16, HUD_TOP_Y, "*"); // 'X' glyph
-    }
-    print_text_fmt_int((showX * 14) + GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(HUD_STARS_X - 16),
-                       HUD_TOP_Y, "%d", gHudDisplay.stars);
 }
 
 /**
@@ -446,7 +457,7 @@ void render_hud(void) {
         }
 
         if (hudDisplayFlags & HUD_DISPLAY_FLAG_STAR_COUNT) {
-            render_hud_stars();
+            render_hud_top_right_corner();
         }
 
         if (hudDisplayFlags & HUD_DISPLAY_FLAG_KEYS) {
