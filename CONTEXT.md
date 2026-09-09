@@ -30,7 +30,7 @@ Ubiquitous language for the **airgapped Nostr QR leaderboard** work (ticket [#4]
 
 - **Ephemeral per-event key** — the paradigm that a ROM's signing key is the identity of *one game at one event*, minted fresh per build by default, freely overwritten, and never a long-lived identity. Its only recoverable surface is the end-of-run panel (`npub`/`nsec`). Distinct from **origin-provenance** (which the key still provides *within* an event): the key is disposable, the provenance guarantee is not.
 
-- **Event name** *(placeholder — not yet implemented)* — a forthcoming human-readable identity for an event, distinct from `PIPELINE_KEY_LABEL` (registry label) and the per-game `t` tag. The build wizard reserves an optional slot for it that no-ops when absent; it is not required to build. Where it lands (manifest/registry sidecar, not the signed wire) is pinned; the concept itself is being built separately.
+- **Event name** *(implemented, spec #75 sub-issue #76)* — a REQUIRED human-readable identity for an event, distinct from `PIPELINE_KEY_LABEL` (registry label) and the per-game `t` tag: an event ROM cannot be built without one. Supplied via the Makefile's `PIPELINE_EVENT_NAME` (no default; `$(error)`s at parse time if unset/empty, mirroring the privkey fail-closed check) and the build wizard's `-EventName` (prompts interactively when omitted). Validated and normalized by `gen_event_profile.py` — uppercase-folded, restricted to `A-Z 0-9 space`, capped at 15 chars (rejected, never truncated, if over) — and baked into `include/event_profile.h.in` as `PIPELINE_EVENT_NAME`/`PIPELINE_EVENT_NAME_LEN`. Display-only: never sourced by `build_event()`'s pack stage, never on the QR wire or in the signed event.
 
 ## Timing & flow
 

@@ -314,6 +314,21 @@ ifeq ($(filter clean distclean print-% pipeline-test,$(MAKECMDGOALS)),)
   endif
 endif
 
+# Fail closed on a missing/blank event name (spec #75, sub-issue #76): a
+# nameless ROM cannot be built. Mirrors the privkey fail-closed check
+# immediately above -- same exemptions, same reasoning (goals that don't
+# actually build a ROM never need it). PIPELINE_EVENT_NAME has deliberately
+# NO default (unlike PIPELINE_KEY_LABEL above): pass it on the make command
+# line, e.g. `make PIPELINE_EVENT_NAME="SUMMER JAM 2026"`. The REAL
+# validation (charset, length, uppercase-folding) happens inside
+# gen_event_profile.py's normalize_event_name() -- this check only catches
+# the unset/empty case before that script is ever invoked.
+ifeq ($(filter clean distclean print-% pipeline-test,$(MAKECMDGOALS)),)
+  ifeq ($(strip $(PIPELINE_EVENT_NAME)),)
+    $(error PIPELINE_EVENT_NAME is unset/empty: the Nostr pipeline requires a human-readable event name to build (spec #75, sub-issue #76) -- an event ROM must state, honestly and locally, which event it was built for. Pass one on the command line, e.g. make PIPELINE_EVENT_NAME="SUMMER JAM 2026". The build refuses to produce a nameless binary)
+  endif
+endif
+
 BIN_DIRS := bin bin/$(VERSION)
 
 ifeq ($(VERSION),cn)
@@ -597,6 +612,13 @@ PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)
 # consumers (schnorr_adapter.o for P's baked bytes #46, secp256k1.o for the
 # PIPELINE_SECP256K1_COMB_* comb table #47) are likewise covered by that guard.
 
+# hud.o (spec #75, sub-issue #77) #includes event_profile.h directly, for
+# PIPELINE_EVENT_NAME/PIPELINE_EVENT_NAME_LEN (the castle HUD corner's baked
+# event name, drawn where the retired star counter used to be) -- the same
+# generated-header hazard interaction.o's own prerequisite line above already
+# documents.
+$(BUILD_DIR)/src/game/hud.o: $(PIPELINE_EVENT_PROFILE_H)
+
 # Event profile header: derives the x-only pubkey from the per-event secret
 # (PIPELINE_PRIVKEY_FILE, checked for existence above) and bakes it, plus
 # the fixed event shape (kind 8064, the two `t` tags, build-epoch
@@ -607,7 +629,7 @@ PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)
 # recipe (see stamp_rom_registry.py), so a shipped .z64 is always traceable.
 $(PIPELINE_EVENT_PROFILE_H): $(PIPELINE_EVENT_PROFILE_H_IN) $(PIPELINE_PRIVKEY_FILE) $(GEN_EVENT_PROFILE_PY) $(TOOLS_DIR)/nostr_secp256k1.py
 	$(call print,Generating event profile:,$<,$@)
-	$(V)$(PYTHON) $(GEN_EVENT_PROFILE_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_EVENT_PROFILE_H_IN) --out $@ --label $(PIPELINE_KEY_LABEL) --manifest $(PIPELINE_EVENT_MANIFEST)
+	$(V)$(PYTHON) $(GEN_EVENT_PROFILE_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_EVENT_PROFILE_H_IN) --out $@ --label $(PIPELINE_KEY_LABEL) --manifest $(PIPELINE_EVENT_MANIFEST) --event-name "$(PIPELINE_EVENT_NAME)"
 
 # Format descriptor header: single source of truth for the packed QR
 # payload's field layout, rendered from src/pipeline/format_descriptor.json.

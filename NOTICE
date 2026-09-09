@@ -1,0 +1,55 @@
+This project incorporates third-party assets not covered by LICENSE.md
+(sm64-port's CC0 waiver applies only to material this project's own
+contributors authored or that Nintendo's copyright never covered).
+
+## HUD font glyphs: hud_char_j / hud_char_q / hud_char_v / hud_char_x / hud_char_z
+
+Files:
+  textures/segment2/segment2.hud_char_j_custom.rgba16.png
+  textures/segment2/segment2.hud_char_q_custom.rgba16.png
+  textures/segment2/segment2.hud_char_v_custom.rgba16.png
+  textures/segment2/segment2.hud_char_x_custom.rgba16.png
+  textures/segment2/segment2.hud_char_z_custom.rgba16.png
+
+Source:   HackerSM64 (https://github.com/HackerN64/HackerSM64), v2.0.0
+Author:   thecozies
+Added:    2021-12-30 (HackerSM64 commit f3e61a31)
+
+These five 16x16 rgba16 glyphs are original community-drawn art that fills
+the null J/Q/V/X/Z slots left by the vanilla US (and CN) HUD font -- they
+are NOT extracted from any Nintendo ROM, and are used here specifically to
+avoid the Nintendo-IP JP-ROM-ripped alternative. HackerSM64 ships no
+LICENSE file; this NOTICE records the provenance and attributes the
+original artist and source project, per HackerSM64's own stated intent as
+a base for romhacks. If you are the artist/maintainers and want a
+different attribution or removal, please open an issue.
+
+Wired into the null `main_hud_lut` slots in bin/segment2.c (spec #75,
+sub-issue #77): src/game/hud.c's render_hud_top_right_corner uses the
+existing print_text HUD font path, and these glyphs are what make names
+containing J/Q/V/X/Z render as real letters instead of garbage.
+
+## Red-coin HUD glyph: red_coin
+
+File:
+  textures/segment2/segment2.hud_char_red_coin_custom.rgba16.png
+
+Source:   HackerSM64 (https://github.com/HackerN64/HackerSM64), v2.0.0
+Author:   thecozies
+Added:    2021-12-30 (HackerSM64 commit f3e61a31)
+
+This 16x16 rgba16 glyph is original community-drawn art matching the shape
+of the vanilla GLYPH_COIN glyph, recolored red -- it is NOT extracted from
+any Nintendo ROM (no region ships a red-coin HUD glyph in vanilla SM64),
+and is used here specifically to avoid inventing a JP-ROM-ripped
+alternative. HackerSM64 ships no LICENSE file; this NOTICE records the
+provenance and attributes the original artist and source project, per
+HackerSM64's own stated intent as a base for romhacks. If you are the
+artist/maintainers and want a different attribution or removal, please
+open an issue.
+
+Wired into the null US/CN `main_hud_lut` slot 54 (GLYPH_RED_COIN, the slot
+GLYPH_PERIOD/texture_hud_char_decimal_point occupies on JP/SH) in
+bin/segment2.c (spec #75, sub-issue #78): src/game/hud.c's
+render_hud_top_right_corner draws it as the in-level red-coin readout's
+marker glyph, shown once gRedCoinsCollected >= 1.

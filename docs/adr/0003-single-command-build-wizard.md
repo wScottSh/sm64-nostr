@@ -24,7 +24,7 @@ minting-and-overwriting freely is the intended paradigm, not a hazard.
 - **The wizard is the orchestrator, not a checklist.** Unlike a stock `/wizard`
   (which drives steps only a human can do), this one *does* the automatable work
   itself (mint key, run `make`); it prompts only for what genuinely needs human
-  input — the key choice and, later, the event name.
+  input — the key choice and the event name.
 - **Key provisioning defaults to fresh-generate.** Press Enter to accept a
   newly-minted key; paste your own hex/`nsec` only to reuse a prior event's key.
   An existing `keys/event_privkey.hex` is overwritten without ceremony — the key
@@ -47,8 +47,12 @@ minting-and-overwriting freely is the intended paradigm, not a hazard.
   rebuilds. Interactive by default; every prompt has a pass-through flag
   (`--privkey`, `--event-name`, `--label`, `--yes`) so a repeat/CI build can run
   silently. Default build is incremental; `--clean` for scratch.
-- **Event name is a parked placeholder.** A new concept (a human-readable event
-  identity, distinct from `PIPELINE_KEY_LABEL` and the `t` tag) is being built
-  separately. The wizard reserves a `--event-name` slot / optional prompt that
-  no-ops when absent and will thread into the manifest/registry sidecar — not the
-  signed wire — when it lands. It is **not required** to build today.
+- **Event name is REQUIRED (spec #75, sub-issue #76).** A human-readable event
+  identity, distinct from `PIPELINE_KEY_LABEL` and the `t` tag, shown locally
+  in the castle HUD corner — an event ROM cannot be built without one. The
+  wizard's `-EventName` prompts interactively when omitted (fails closed
+  under `-Yes` with no value) and threads the value into `make` as
+  `PIPELINE_EVENT_NAME`; `gen_event_profile.py` inside the container does the
+  real charset/length validation (A-Z, 0-9, space; 15 chars max; reject, never
+  truncate) and bakes it into `PIPELINE_EVENT_NAME` — display-only, never the
+  signed wire.

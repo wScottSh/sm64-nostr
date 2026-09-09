@@ -90,6 +90,14 @@ ALIGNED8 static const Texture texture_hud_char_I[] = {
 ALIGNED8 static const Texture texture_hud_char_J[] = {
 #include "textures/segment2/segment2.02600.rgba16.inc.c"
 };
+#else
+// US/EU/CN: the vanilla ROM has no J glyph. This community-drawn 16x16
+// rgba16 glyph (by thecozies, HackerSM64 v2.0.0) fills the null US
+// main_hud_lut slot -- NOT a JP-ROM rip, so it carries no Nintendo IP. See
+// NOTICE and spec #75 sub-issue #77.
+ALIGNED8 static const Texture texture_hud_char_J[] = {
+#include "textures/segment2/segment2.hud_char_j_custom.rgba16.inc.c"
+};
 #endif
 
 ALIGNED8 static const Texture texture_hud_char_K[] = {
@@ -120,6 +128,12 @@ ALIGNED8 static const Texture texture_hud_char_P[] = {
 ALIGNED8 static const Texture texture_hud_char_Q[] = {
 #include "textures/segment2/segment2.03400.rgba16.inc.c"
 };
+#else
+// US/EU/CN: community-drawn glyph (thecozies, HackerSM64 v2.0.0), not a
+// JP-ROM rip. See NOTICE and spec #75 sub-issue #77.
+ALIGNED8 static const Texture texture_hud_char_Q[] = {
+#include "textures/segment2/segment2.hud_char_q_custom.rgba16.inc.c"
+};
 #endif
 
 ALIGNED8 static const Texture texture_hud_char_R[] = {
@@ -142,6 +156,12 @@ ALIGNED8 static const Texture texture_hud_char_U[] = {
 ALIGNED8 static const Texture texture_hud_char_V[] = {
 #include "textures/segment2/segment2.03E00.rgba16.inc.c"
 };
+#else
+// US/CN: community-drawn glyph (thecozies, HackerSM64 v2.0.0), not a JP-ROM
+// rip. See NOTICE and spec #75 sub-issue #77.
+ALIGNED8 static const Texture texture_hud_char_V[] = {
+#include "textures/segment2/segment2.hud_char_v_custom.rgba16.inc.c"
+};
 #endif
 
 ALIGNED8 static const Texture texture_hud_char_W[] = {
@@ -152,6 +172,12 @@ ALIGNED8 static const Texture texture_hud_char_W[] = {
 ALIGNED8 static const Texture texture_hud_char_X[] = {
 #include "textures/segment2/segment2.04200.rgba16.inc.c"
 };
+#else
+// US/EU/CN: community-drawn glyph (thecozies, HackerSM64 v2.0.0), not a
+// JP-ROM rip. See NOTICE and spec #75 sub-issue #77.
+ALIGNED8 static const Texture texture_hud_char_X[] = {
+#include "textures/segment2/segment2.hud_char_x_custom.rgba16.inc.c"
+};
 #endif
 
 ALIGNED8 static const Texture texture_hud_char_Y[] = {
@@ -161,6 +187,12 @@ ALIGNED8 static const Texture texture_hud_char_Y[] = {
 #if defined(VERSION_EU) || defined(VERSION_JP) || defined(VERSION_SH)
 ALIGNED8 static const Texture texture_hud_char_Z[] = {
 #include "textures/segment2/segment2.04600.rgba16.inc.c"
+};
+#else
+// US/CN: community-drawn glyph (thecozies, HackerSM64 v2.0.0), not a JP-ROM
+// rip. See NOTICE and spec #75 sub-issue #77.
+ALIGNED8 static const Texture texture_hud_char_Z[] = {
+#include "textures/segment2/segment2.hud_char_z_custom.rgba16.inc.c"
 };
 #endif
 
@@ -225,6 +257,17 @@ ALIGNED8 static const Texture texture_hud_char_decimal_point[] = {
 #if defined(VERSION_JP) || defined(VERSION_SH)
 ALIGNED8 static const Texture texture_hud_char_beta_key[] = {
 #include "textures/segment2/segment2.06000.rgba16.inc.c"
+};
+#endif
+
+#if defined(VERSION_CN) || defined(VERSION_US)
+// US/CN: no region ships a red-coin HUD glyph in vanilla. This community-
+// drawn 16x16 rgba16 glyph (by thecozies, HackerSM64 v2.0.0) fills the null
+// US/CN main_hud_lut slot that GLYPH_PERIOD/texture_hud_char_decimal_point
+// occupies on JP/SH -- NOT a JP-ROM rip. See NOTICE and spec #75 sub-issue
+// #78.
+ALIGNED8 static const Texture texture_hud_char_red_coin[] = {
+#include "textures/segment2/segment2.hud_char_red_coin_custom.rgba16.inc.c"
 };
 #endif
 
@@ -10919,11 +10962,11 @@ const Texture *const main_hud_lut[] = {
     texture_hud_char_8, texture_hud_char_9, texture_hud_char_A, texture_hud_char_B,
     texture_hud_char_C, texture_hud_char_D, texture_hud_char_E, texture_hud_char_F,
 #if defined(VERSION_EU)
-    texture_hud_char_G, texture_hud_char_H, texture_hud_char_I,                0x0,
+    texture_hud_char_G, texture_hud_char_H, texture_hud_char_I, texture_hud_char_J,
     texture_hud_char_K, texture_hud_char_L, texture_hud_char_M, texture_hud_char_N,
-    texture_hud_char_O, texture_hud_char_P,                0x0, texture_hud_char_R,
+    texture_hud_char_O, texture_hud_char_P, texture_hud_char_Q, texture_hud_char_R,
     texture_hud_char_S, texture_hud_char_T, texture_hud_char_U, texture_hud_char_V,
-    texture_hud_char_W,                0x0, texture_hud_char_Y, texture_hud_char_Z,
+    texture_hud_char_W, texture_hud_char_X, texture_hud_char_Y, texture_hud_char_Z,
                    0x0,                0x0,                0x0,                0x0,
                    0x0,                0x0,                0x0,                0x0,
                    0x0,                0x0,                0x0,                0x0,
@@ -10931,16 +10974,25 @@ const Texture *const main_hud_lut[] = {
     texture_hud_char_mario_head, texture_hud_char_star,    0x0,                0x0,
     texture_hud_char_apostrophe, texture_hud_char_double_quote, texture_hud_char_umlaut,
 #elif defined(VERSION_CN) || defined(VERSION_US)
-    texture_hud_char_G, texture_hud_char_H, texture_hud_char_I,                0x0,
+    // J/Q/V/X/Z: US and CN ROMs never carried these glyphs. Filled from
+    // community-drawn art (thecozies, HackerSM64 v2.0.0) via the
+    // texture_hud_char_{J,Q,V,X,Z} #else branches above -- see NOTICE and
+    // spec #75 sub-issue #77. This is the fix for issue #77's acceptance
+    // criterion "a name containing J/Q/V/X/Z renders correctly".
+    texture_hud_char_G, texture_hud_char_H, texture_hud_char_I, texture_hud_char_J,
     texture_hud_char_K, texture_hud_char_L, texture_hud_char_M, texture_hud_char_N,
-    texture_hud_char_O, texture_hud_char_P,                0x0, texture_hud_char_R,
-    texture_hud_char_S, texture_hud_char_T, texture_hud_char_U,                0x0,
-    texture_hud_char_W,                0x0, texture_hud_char_Y,                0x0,
+    texture_hud_char_O, texture_hud_char_P, texture_hud_char_Q, texture_hud_char_R,
+    texture_hud_char_S, texture_hud_char_T, texture_hud_char_U, texture_hud_char_V,
+    texture_hud_char_W, texture_hud_char_X, texture_hud_char_Y, texture_hud_char_Z,
                   0x0,                 0x0,                0x0,                0x0,
                   0x0,                 0x0,                0x0,                0x0,
                   0x0,                 0x0,                0x0,                0x0,
                   0x0,                 0x0, texture_hud_char_multiply, texture_hud_char_coin,
-    texture_hud_char_mario_head, texture_hud_char_star,               0x0,               0x0,
+    // Slot 54 (GLYPH_RED_COIN on US/CN, GLYPH_PERIOD on JP/SH): the
+    // red-coin readout marker glyph, community-drawn art (thecozies,
+    // HackerSM64 v2.0.0), not a JP-ROM rip. See NOTICE and spec #75
+    // sub-issue #78.
+    texture_hud_char_mario_head, texture_hud_char_star, texture_hud_char_red_coin, 0x0,
     texture_hud_char_apostrophe, texture_hud_char_double_quote,
 #if defined(VERSION_CN)
     texture_hud_char_cn_04A00, texture_hud_char_cn_04C00, texture_hud_char_cn_04E00, texture_hud_char_cn_05000,

@@ -66,14 +66,17 @@ The build wizard chains preflight → key provisioning → Docker `make` → a s
 panel that prints the ROM's `npub`/`nsec`. From the repo root:
 
 ```powershell
-.\build.ps1
+.\build.ps1 -EventName "SUMMER JAM 2026"
 ```
 
 Press Enter to mint a fresh ephemeral per-event key, or paste a 64-char hex
-secret to reuse a prior event's. Flags: `-PrivKey <hex>`, `-Clean`,
-`-RebuildImage`, `-Yes` (non-interactive), `-EventName <name>` (parked
-placeholder). See `docs/adr/0003-single-command-build-wizard.md`. The manual
-steps below are the underlying pipeline the wizard runs for you.
+secret to reuse a prior event's. `-EventName <name>` is REQUIRED (A-Z, 0-9,
+space only, 15 chars max) — an event ROM cannot be built without one; the
+wizard prompts for it if omitted, unless `-Yes` is also given, in which case
+a missing `-EventName` fails the build outright rather than prompting.
+Other flags: `-PrivKey <hex>`, `-Clean`, `-RebuildImage`, `-Yes`
+(non-interactive). See `docs/adr/0003-single-command-build-wizard.md`. The
+manual steps below are the underlying pipeline the wizard runs for you.
 
 ### Manual
 

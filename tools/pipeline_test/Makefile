@@ -101,6 +101,13 @@
 # #includes this generated header instead of computing P = d*G at runtime;
 # main.c's differential-sweep test confirms the baked P matches a
 # reference-computed d*G for TEST_PRIVKEY_HEX.
+#
+# Spec #75 sub-issue #76 (--event-name build input) makes ../gen_event_
+# profile.py's --event-name REQUIRED (no default, mirroring the privkey
+# fail-closed discipline), so EVENT_PROFILE_H's recipe below now always
+# passes a fixed, in-charset, KAT-style value ("HOST TEST") -- this host
+# tool has no HUD to render the name on, so the value itself is arbitrary,
+# but the flag must be present or gen_event_profile.py now refuses to run.
 
 CC           := gcc
 PYTHON       := python3
@@ -161,7 +168,7 @@ $(FORMAT_DESCRIPTOR_H): $(FORMAT_DESCRIPTOR_JSON) $(TOOLS_DIR)/gen_format_descri
 
 $(EVENT_PROFILE_H): $(EVENT_PROFILE_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_event_profile.py $(TOOLS_DIR)/nostr_secp256k1.py
 	@mkdir -p $(INC_DIR)
-	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat --manifest $(EVENT_MANIFEST) --commit host-test --created-at $(TEST_CREATED_AT)
+	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat --manifest $(EVENT_MANIFEST) --commit host-test --created-at $(TEST_CREATED_AT) --event-name "HOST TEST"
 
 $(SECP256K1_BAKED_H): $(SECP256K1_BAKED_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_secp256k1_baked.py $(TOOLS_DIR)/nostr_secp256k1.py
 	@mkdir -p $(INC_DIR)
