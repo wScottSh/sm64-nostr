@@ -298,6 +298,11 @@ PIPELINE_SECP256K1_BAKED_H_IN := include/secp256k1_baked.h.in
 PIPELINE_SECP256K1_BAKED_H    := $(BUILD_DIR)/include/secp256k1_baked.h
 GEN_SECP256K1_BAKED_PY        := $(TOOLS_DIR)/gen_secp256k1_baked.py
 
+# The three generated headers that live ONLY in $(BUILD_DIR)/include (no source
+# copy): any TU that #includes one -- directly or transitively -- must not be
+# compiled before it has been rendered. See the order-only guard below O_FILES.
+PIPELINE_GENERATED_HEADERS := $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H) $(PIPELINE_SECP256K1_BAKED_H)
+
 # Fail closed: a normal build must never produce a keyless binary. This
 # mirrors the MIPS-toolchain $(error) check above (same exemptions: goals
 # that don't actually build the ROM never need the real per-event secret --
@@ -362,6 +367,30 @@ ULTRA_O_FILES := $(foreach file,$(ULTRA_S_FILES),$(BUILD_DIR)/$(file:.s=.o)) \
 GODDARD_O_FILES := $(foreach file,$(GODDARD_C_FILES),$(BUILD_DIR)/$(file:.c=.o))
 
 LIBGCC_O_FILES := $(foreach file,$(LIBGCC_C_FILES),$(BUILD_DIR)/$(file:.c=.o))
+
+# Drift-proof generated-header ordering guard (spec #52 sub-issue #54 fallout).
+#
+# The pipeline's three generated headers live only in $(BUILD_DIR)/include and
+# are #included -- often transitively, through pipeline/build_event.h -- by a
+# growing, hard-to-enumerate set of TUs (game glue as well as src/pipeline).
+# src/game sorts before src/pipeline in SRC_DIRS, so on a clean/parallel build
+# make is free to compile a consumer before these headers are rendered, reading
+# either a missing or a STALE copy. That is exactly what bit qr_render.o when
+# build_event.h started #including event_profile.h (for PIPELINE_EVENT_TAG_1_LEN,
+# BuiltEvent's packed_payload[] bound): its hand-written prerequisite line still
+# only listed format_descriptor.h -> "PIPELINE_EVENT_TAG_1_LEN undeclared".
+#
+# Rather than maintain a per-object list that silently rots whenever a header
+# grows a new #include, gate EVERY object on these headers as an ORDER-ONLY
+# prerequisite (after the `|`): it forces the headers to be rendered before any
+# object compiles, but -- unlike a normal prerequisite -- does NOT rebuild an
+# object merely because a header's timestamp moved. Content-freshness (rebuild
+# when a header's CONTENT changes) is already covered by the -MMD/-MP `.d` files
+# pulled in via `-include $(DEP_FILES)` below, which record these generated
+# headers as normal prerequisites once an object has been built once. So this
+# one line makes a stale/missing generated header impossible for any current or
+# future consumer, with zero per-file upkeep.
+$(O_FILES) $(ULTRA_O_FILES) $(GODDARD_O_FILES) $(LIBGCC_O_FILES): | $(PIPELINE_GENERATED_HEADERS)
 
 # Automatic dependency files
 DEP_FILES := $(O_FILES:.o=.d) $(ULTRA_O_FILES:.o=.d) $(GODDARD_O_FILES:.o=.d) $(LIBGCC_O_FILES:.o=.d) $(BUILD_DIR)/$(LD_SCRIPT).d
@@ -555,72 +584,18 @@ $(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
 # list too.
 PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o $(PIPELINE_C99_PORT_O)
 
-# pack_adapter.o #includes format_descriptor.h directly; event_id.o
-# genuinely does #include event_profile.h (the baked serialization prefix).
-# build_event.o needs both: event_profile.h transitively (via event_id.h),
-# and format_descriptor.h directly -- build_event.h itself now #includes
-# format_descriptor.h for PIPELINE_FMT_TOTAL_SIZE (sub-issue #30, BuiltEvent's
-# packed_payload size). Because event_id.h/schnorr_adapter.h/qr_adapter.h ALL
-# #include build_event.h -- and so, transitively, do sha256.h and
-# secp256k1.h (both #include "build_event.h" too, for the pipeline_u8/
-# pipeline_u32 typedefs) -- format_descriptor.h is transitively required to
-# compile every one of these six objects, not just the four sub-issue #30
-# actually touched. capture.o (sub-issue #31) is the same story: capture.h
-# #includes build_event.h too. Listed explicitly here (rather than left to
-# transitive #include order happening to already be right) so a
-# clean/parallel build can't compile any of them before the generated
-# header exists. sha256.o/secp256k1.o are built via the C99 carve-out rule
-# below (different CC/CFLAGS override), but a prerequisite is still a
-# prerequisite regardless of which rule ultimately builds the object.
-# secp256k1.o also needs PIPELINE_SECP256K1_BAKED_H now (spec #43,
-# sub-issue #47): it #includes secp256k1_baked.h directly for the
-# PIPELINE_SECP256K1_COMB_* fixed-base comb table macros (kCombTable's own
-# initializer), not just transitively -- the same generated header
-# schnorr_adapter.o already depended on for P's baked bytes (#46).
-$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H) $(PIPELINE_SECP256K1_BAKED_H)
-$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/sha256.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/$(PIPELINE_SRC_DIR)/secp256k1.o: $(PIPELINE_FORMAT_DESCRIPTOR_H) $(PIPELINE_SECP256K1_BAKED_H)
-
-# interaction.o (sub-issue #31) is the first NON-pipeline object to #include
-# a pipeline generated header: it #includes event_profile.h directly (for
-# PIPELINE_EVENT_PRIVKEY_BYTES) and, transitively via pipeline/build_event.h,
-# format_descriptor.h too. Without this prerequisite, a clean/parallel build
-# could compile interaction.o (src/game sorts before src/pipeline in
-# SRC_DIRS, and `all: $(PIPELINE_EVENT_PROFILE_H) ...` is declared after
-# `all: $(ROM)`) before either generated header exists.
-$(BUILD_DIR)/src/game/interaction.o: $(PIPELINE_EVENT_PROFILE_H) $(PIPELINE_FORMAT_DESCRIPTOR_H)
-
-# qr_render.o/qr_render_n64.o (sub-issue #32, renderer glue) #include
-# qr_render.h -> pipeline/qr_adapter.h -> pipeline/build_event.h ->
-# format_descriptor.h -- the same generated-header hazard interaction.o's
-# own prerequisite line above already documents (src/game sorts before
-# src/pipeline in SRC_DIRS). Unlike interaction.o, neither file touches
-# event_profile.h, so only the format descriptor is needed here.
-$(BUILD_DIR)/src/game/qr_render.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/src/game/qr_render_n64.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
-
-# qr_display.o/qr_display_n64.o (sub-issue #33, qr_display state machine)
-# #include qr_display.h -> pipeline/build_event.h -> format_descriptor.h --
-# the same generated-header hazard interaction.o's own prerequisite line
-# above already documents. mario_actions_cutscene.o (sub-issue #33's two
-# save-flow call sites) now #includes qr_display_n64.h AND
-# qr_pending_star_event.h, and game_init.o (sub-issue #33's render-hook call
-# site in display_and_vsync()) now #includes qr_display_n64.h -- all of
-# which reach pipeline/build_event.h the same way, so each needs the same
-# prerequisite -- interaction.h itself was deliberately NOT extended to
-# reach build_event.h (see qr_pending_star_event.h's own header comment)
-# specifically so this prerequisite would stay confined to the objects that
-# actually need it instead of spreading to every other src/game/*.c that
-# #includes interaction.h.
-$(BUILD_DIR)/src/game/qr_display.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/src/game/qr_display_n64.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/src/game/mario_actions_cutscene.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
-$(BUILD_DIR)/src/game/game_init.o: $(PIPELINE_FORMAT_DESCRIPTOR_H)
+# NOTE: the generated pipeline headers (format_descriptor.h, event_profile.h,
+# secp256k1_baked.h) that pack_adapter.o/build_event.o/event_id.o/
+# schnorr_adapter.o/qr_adapter.o/capture.o/sha256.o/secp256k1.o and the
+# src/game consumers (interaction.o, qr_render*.o, qr_display*.o,
+# mario_actions_cutscene.o, game_init.o) #include -- directly or transitively
+# via pipeline/build_event.h -- are NO LONGER listed here per-object. They are
+# all covered by the single order-only guard next to O_FILES above
+# ($(...O_FILES): | $(PIPELINE_GENERATED_HEADERS)), which orders the generated
+# headers ahead of every object, while the -MMD `.d` files handle rebuild-on-
+# change. New consumers need no edit here. secp256k1_baked.h's two genuine
+# consumers (schnorr_adapter.o for P's baked bytes #46, secp256k1.o for the
+# PIPELINE_SECP256K1_COMB_* comb table #47) are likewise covered by that guard.
 
 # Event profile header: derives the x-only pubkey from the per-event secret
 # (PIPELINE_PRIVKEY_FILE, checked for existence above) and bakes it, plus
