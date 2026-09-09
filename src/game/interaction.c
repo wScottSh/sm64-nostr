@@ -969,7 +969,7 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
 
         // Sandbox seam F: star-collection recording is gated off, so the single
         // star-grab record call below is skipped and the star bit is never written.
-        if (save_file_star_collection_is_recorded() == TRUE) {
+        if (save_file_star_collection_is_recorded()) {
             save_file_collect_star_or_key(m->numCoins, starIndex);
         }
 

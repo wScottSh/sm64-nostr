@@ -56,24 +56,28 @@ extern struct SaveBuffer gSaveBuffer;
 // and save_file_is_cannon_unlocked()'s vanilla read).
 #define CANNON_OPEN_BIT (1 << 7)
 
+// Shared fixture reset: zero the save buffer and point the globals at file 1 /
+// the given course, so each behavioral test starts from a known blank save.
+static void reset_save_fixture(s16 courseNum) {
+    memset(&gSaveBuffer, 0, sizeof(gSaveBuffer));
+    gCurrSaveFileNum = 1;
+    gCurrCourseNum = courseNum;
+}
+
 static void test_cannons_are_forced_open_predicate(void) {
     check(save_file_cannons_are_forced_open() == TRUE,
           "save_file_cannons_are_forced_open() returns TRUE");
 }
 
 static void test_cannon_unlocked_on_fresh_zeroed_save(void) {
-    memset(&gSaveBuffer, 0, sizeof(gSaveBuffer));
-    gCurrSaveFileNum = 1;
-    gCurrCourseNum = 0;
+    reset_save_fixture(/* courseNum */ 0);
 
     check(save_file_is_cannon_unlocked() == TRUE,
           "save_file_is_cannon_unlocked() is open on a fresh/zeroed save");
 }
 
 static void test_cannon_unlocked_with_bit_explicitly_unset(void) {
-    memset(&gSaveBuffer, 0, sizeof(gSaveBuffer));
-    gCurrSaveFileNum = 1;
-    gCurrCourseNum = 2;
+    reset_save_fixture(/* courseNum */ 2);
 
     // Set some unrelated star-collection bits, but leave the cannon-open bit
     // (bit 7) explicitly clear, on the exact course under test.
@@ -95,7 +99,7 @@ static void test_star_collection_is_recorded_predicate(void) {
 // tool (it pulls in the whole object/camera/pipeline graph), so this is a
 // deliberate reimplementation of just the guard's shape, NOT a call into the
 // real call site:
-//   if (save_file_star_collection_is_recorded() == TRUE) {
+//   if (save_file_star_collection_is_recorded()) {
 //       save_file_collect_star_or_key(m->numCoins, starIndex);
 //   }
 //   m->numStars = save_file_get_total_star_count(...);
@@ -105,15 +109,13 @@ static void test_star_collection_is_recorded_predicate(void) {
 // guard's own logic is one `if` with no branches this file doesn't already
 // cover, the reimplementation risk is low, but it is a reimplementation.
 static void simulate_guarded_star_grab(s16 coinScore, s16 starIndex) {
-    if (save_file_star_collection_is_recorded() == TRUE) {
+    if (save_file_star_collection_is_recorded()) {
         save_file_collect_star_or_key(coinScore, starIndex);
     }
 }
 
 static void test_star_grab_leaves_stored_star_bitfield_unchanged(void) {
-    memset(&gSaveBuffer, 0, sizeof(gSaveBuffer));
-    gCurrSaveFileNum = 1;
-    gCurrCourseNum = 1;
+    reset_save_fixture(/* courseNum */ 1);
     gCurrLevelNum = LEVEL_BOB;
 
     u32 starFlagsBefore = save_file_get_star_flags(gCurrSaveFileNum - 1, COURSE_NUM_TO_INDEX(gCurrCourseNum));
@@ -128,9 +130,7 @@ static void test_star_grab_leaves_stored_star_bitfield_unchanged(void) {
 }
 
 static void test_star_grab_leaves_live_star_total_unchanged(void) {
-    memset(&gSaveBuffer, 0, sizeof(gSaveBuffer));
-    gCurrSaveFileNum = 1;
-    gCurrCourseNum = 3;
+    reset_save_fixture(/* courseNum */ 3);
     gCurrLevelNum = LEVEL_WF;
 
     s16 totalBefore = save_file_get_total_star_count(gCurrSaveFileNum - 1, COURSE_MIN - 1, COURSE_MAX - 1);

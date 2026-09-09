@@ -337,7 +337,7 @@ void bobomb_buddy_cannon_dialog(s16 dialogFirstText, s16 dialogSecondText) {
             // Sandbox seam E: go through the same accessor the cannon lid itself
             // reads, so the Buddy never offers to unlock a cannon that is already
             // open. One source of truth, not a second gate.
-            if (save_file_is_cannon_unlocked() == TRUE) {
+            if (save_file_is_cannon_unlocked()) {
                 o->oBobombBuddyCannonStatus = BOBOMB_BUDDY_CANNON_OPENED;
                 break;
             }

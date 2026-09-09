@@ -574,7 +574,7 @@ s32 save_file_cannons_are_forced_open(void) {
  * currently always returns TRUE regardless of the stored per-course bit.
  */
 s32 save_file_is_cannon_unlocked(void) {
-    if (save_file_cannons_are_forced_open() == TRUE) {
+    if (save_file_cannons_are_forced_open()) {
         return TRUE;
     }
 
