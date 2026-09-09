@@ -86,6 +86,17 @@ void bhv_act_selector_star_type_loop(void) {
 }
 
 /**
+ * Sandbox seam C: always-open star-select act gate. Substituted at the two
+ * act-selector hooks below (init and loop) so every act star in a course is
+ * always visible and selectable, regardless of collection progress. Does not
+ * touch sObtainedStars or the star bitfield, which continue to feed the
+ * HUD/course-progress counts honestly.
+ */
+static s32 star_select_all_acts_unlocked(void) {
+    return TRUE;
+}
+
+/**
  * Renders the 100 coin star with an special star selector type.
  */
 void render_100_coin_star(u8 stars) {
@@ -109,40 +120,56 @@ void bhv_act_selector_init(void) {
     s32 selectorModelIDs[10];
     u8 stars = save_file_get_star_flags(gCurrSaveFileNum - 1, COURSE_NUM_TO_INDEX(gCurrCourseNum));
 
-    sVisibleStars = 0;
-    while (i != sObtainedStars) {
-        if (stars & (1 << sVisibleStars)) { // Star has been collected
-            selectorModelIDs[sVisibleStars] = MODEL_STAR;
-            i++;
-        } else { // Star has not been collected
-            selectorModelIDs[sVisibleStars] = MODEL_TRANSPARENT_STAR;
-            // If this is the first star that has not been collected, set
-            // the default selection to this star.
-            if (sInitSelectedActNum == 0) {
-                sInitSelectedActNum = sVisibleStars + 1;
-                sSelectableStarIndex = sVisibleStars;
-            }
+    if (star_select_all_acts_unlocked()) {
+        // Sandbox seam C: draw all six act selectors directly, regardless of
+        // collection progress. Each selector's model still follows the real
+        // per-course star flags (solid if collected, translucent otherwise).
+        // Deliberately does not reuse the vanilla collected-count loop below,
+        // whose termination depends on sObtainedStars: demanding 6 visible
+        // slots with fewer collected stars would loop forever and overrun
+        // selectorModelIDs[10].
+        for (sVisibleStars = 0; sVisibleStars < 6; sVisibleStars++) {
+            selectorModelIDs[sVisibleStars] =
+                (stars & (1 << sVisibleStars)) ? MODEL_STAR : MODEL_TRANSPARENT_STAR;
         }
-        sVisibleStars++;
-    }
-
-    // If the stars have been collected in order so far, show the next star.
-    if (sVisibleStars == sObtainedStars && sVisibleStars != 6) {
-        selectorModelIDs[sVisibleStars] = MODEL_TRANSPARENT_STAR;
-        sInitSelectedActNum = sVisibleStars + 1;
-        sSelectableStarIndex = sVisibleStars;
-        sVisibleStars++;
-    }
-
-    // If all stars have been collected, set the default selection to the last star.
-    if (sObtainedStars == 6) {
-        sInitSelectedActNum = sVisibleStars;
-    }
-
-    //! Useless, since sInitSelectedActNum has already been set in this
-    //! scenario by the code that shows the next uncollected star.
-    if (sObtainedStars == 0) {
         sInitSelectedActNum = 1;
+        sSelectableStarIndex = 0;
+    } else {
+        sVisibleStars = 0;
+        while (i != sObtainedStars) {
+            if (stars & (1 << sVisibleStars)) { // Star has been collected
+                selectorModelIDs[sVisibleStars] = MODEL_STAR;
+                i++;
+            } else { // Star has not been collected
+                selectorModelIDs[sVisibleStars] = MODEL_TRANSPARENT_STAR;
+                // If this is the first star that has not been collected, set
+                // the default selection to this star.
+                if (sInitSelectedActNum == 0) {
+                    sInitSelectedActNum = sVisibleStars + 1;
+                    sSelectableStarIndex = sVisibleStars;
+                }
+            }
+            sVisibleStars++;
+        }
+
+        // If the stars have been collected in order so far, show the next star.
+        if (sVisibleStars == sObtainedStars && sVisibleStars != 6) {
+            selectorModelIDs[sVisibleStars] = MODEL_TRANSPARENT_STAR;
+            sInitSelectedActNum = sVisibleStars + 1;
+            sSelectableStarIndex = sVisibleStars;
+            sVisibleStars++;
+        }
+
+        // If all stars have been collected, set the default selection to the last star.
+        if (sObtainedStars == 6) {
+            sInitSelectedActNum = sVisibleStars;
+        }
+
+        //! Useless, since sInitSelectedActNum has already been set in this
+        //! scenario by the code that shows the next uncollected star.
+        if (sObtainedStars == 0) {
+            sInitSelectedActNum = 1;
+        }
     }
 
     // Render star selector objects
@@ -169,7 +196,7 @@ void bhv_act_selector_loop(void) {
     u8 starIndexCounter;
     u8 stars = save_file_get_star_flags(gCurrSaveFileNum - 1, COURSE_NUM_TO_INDEX(gCurrCourseNum));
 
-    if (sObtainedStars != 6) {
+    if (!star_select_all_acts_unlocked() && sObtainedStars != 6) {
         // Sometimes, stars are not selectable even if they appear on the screen.
         // This code filters selectable and non-selectable stars.
         sSelectedActIndex = 0;
