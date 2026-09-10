@@ -73,25 +73,40 @@ void pipeline_capture_build(pipeline_u8 course,
 #define PIPELINE_COURSE_NONE 0
 
 /*
+ * PIPELINE_STAR_INDEX_ACT_4/5: mirrors STAR_INDEX_ACT_4/5
+ * (include/object_constants.h, values 3/4) -- the MIPS stars (1 & 2), which
+ * the pipeline's pure code cannot include the game header for. This is the
+ * starIndex value carried in keyId (o->oBhvParams >> 24 & 0x1F at the grab
+ * site) for those two stars specifically.
+ */
+#define PIPELINE_STAR_INDEX_ACT_4 3
+#define PIPELINE_STAR_INDEX_ACT_5 4
+
+/*
  * pipeline_select_frames: the pure frames-selection helper (format-v3
- * spec.md §3.4, spec #109 sub-issue #112 -- the ONE new seam that spec
- * proposes). Takes every input the grab-site branch needs as plain
+ * spec.md §3.4, spec #109 sub-issues #112/#113 -- the ONE new seam that
+ * spec proposes). Takes every input the grab-site branch needs as plain
  * parameters -- courseNum, starIndex, the live globalTimer read, and the
  * course/room-entry snapshot -- and returns the `frames` value the wire
  * payload's FRAMES field carries. The gGlobalTimer snapshot-on-entry itself
  * (src/game/level_update.c's sCourseStartFrame) is N64 glue and is verified
  * on-device, not host-tested; this is the pure decision on top of it.
  *
- * This ticket (#112) implements exactly two cases:
+ * Three cases, matching the spec's pseudo-code exactly:
  *   - real course (courseNum != PIPELINE_COURSE_NONE): elapsed in-course
  *     frames, globalTimer - courseStartFrame.
+ *   - MIPS stars 1 & 2 (courseNum == PIPELINE_COURSE_NONE and starIndex is
+ *     PIPELINE_STAR_INDEX_ACT_4 or _ACT_5, #113): elapsed since the guarded
+ *     LEVEL_CASTLE-area-3 (basement) entry snapshot, globalTimer -
+ *     courseStartFrame -- the SAME sCourseStartFrame storage the real-course
+ *     branch reads, re-snapshotted on basement entry by the strictly-guarded
+ *     area-change path in src/game/level_update.c (warp_area()). Whether
+ *     that storage currently holds a course-start or a basement-entry
+ *     snapshot is decided upstream by whichever of level_update.c's two
+ *     snapshot sites most recently fired -- this helper makes no such
+ *     choice itself; it only selects which of these three cases applies.
  *   - everything else: the 0 sentinel ("no in-course time" -- safe, since
  *     control-gain always precedes a grab, so a real time is always > 0).
- *
- * starIndex is accepted now (unused by #112's two cases) so the follow-on
- * MIPS star-index 3/4 branch (#113, course-less basement grab timed from
- * its own guarded snapshot) can slot into this SAME function without
- * changing its signature or call sites.
  */
 pipeline_u32 pipeline_select_frames(pipeline_u8 courseNum,
                                      pipeline_u8 starIndex,

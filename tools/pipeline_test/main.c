@@ -1841,21 +1841,44 @@ static void test_select_frames_non_course_sentinel(void)
     check(frames == 0, "pipeline_select_frames: non-course grab (starIndex not 3/4) reports the 0 sentinel");
 }
 
-static void test_select_frames_mips_star_index_is_sentinel_until_113(void)
+static void test_select_frames_mips_star_index_elapsed(void)
 {
-    /* #112 does not yet implement the MIPS star-index 3/4 branch (#113) --
-     * until then, courseNum == PIPELINE_COURSE_NONE with starIndex 3 or 4
-     * still falls through to the 0 sentinel, exactly like any other
-     * course-less grab. This pins today's (pre-#113) behavior so a future
-     * regression in #113's own tests, not this one, is what should change
-     * it. */
-    pipeline_u32 framesIdx3 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 3,
-                                                      (pipeline_u32) 5000, (pipeline_u32) 100);
-    pipeline_u32 framesIdx4 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 4,
-                                                      (pipeline_u32) 5000, (pipeline_u32) 100);
+    /* #113: courseNum == PIPELINE_COURSE_NONE with starIndex 3 or 4 (MIPS
+     * stars 1 & 2, STAR_INDEX_ACT_4/5) reports elapsed-since-basement-entry
+     * -- globalTimer - courseStartFrame, reading the SAME courseStartFrame
+     * parameter the real-course branch uses (level_update.c's warp_area()
+     * re-snapshots sCourseStartFrame on the guarded LEVEL_CASTLE-area-3
+     * transition; this helper doesn't care which entry it's timing from). */
+    pipeline_u32 framesIdx3 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE,
+                                                      (pipeline_u8) PIPELINE_STAR_INDEX_ACT_4,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 4600);
+    pipeline_u32 framesIdx4 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE,
+                                                      (pipeline_u8) PIPELINE_STAR_INDEX_ACT_5,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 4600);
 
-    check(framesIdx3 == 0 && framesIdx4 == 0,
-          "pipeline_select_frames: MIPS star indices (3/4) still report the 0 sentinel pre-#113");
+    check(framesIdx3 == 400 && framesIdx4 == 400,
+          "pipeline_select_frames: MIPS star indices (3/4) report elapsed-since-basement-entry frames (400)");
+}
+
+static void test_select_frames_non_mips_course_less_star_index_still_sentinel(void)
+{
+    /* Guard against over-broadening the new MIPS branch: a course-less grab
+     * with a star index that is NOT 3 or 4 (e.g. a regular 1-8 act star
+     * somehow grabbed outside a course, or the 100-coin/grand-star indices)
+     * must still fall through to the 0 sentinel -- only starIndex 3/4
+     * qualifies. Includes the immediate boundary neighbors (2 and 5) of the
+     * new branch, where an off-by-one would most likely hide. */
+    pipeline_u32 framesIdx0 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 0,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 4600);
+    pipeline_u32 framesIdx2 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 2,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 4600);
+    pipeline_u32 framesIdx5 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 5,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 4600);
+    pipeline_u32 framesIdx6 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 6,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 4600);
+
+    check(framesIdx0 == 0 && framesIdx2 == 0 && framesIdx5 == 0 && framesIdx6 == 0,
+          "pipeline_select_frames: course-less non-MIPS star indices (incl. boundary 2/5) still report the 0 sentinel");
 }
 
 static void test_capture_matches_host_build_event(void)
@@ -3002,7 +3025,8 @@ int main(void)
     test_select_frames_real_course_elapsed();
     test_select_frames_real_course_at_entry_is_zero();
     test_select_frames_non_course_sentinel();
-    test_select_frames_mips_star_index_is_sentinel_until_113();
+    test_select_frames_mips_star_index_elapsed();
+    test_select_frames_non_mips_course_less_star_index_still_sentinel();
     test_capture_matches_host_build_event();
     test_qr_render_ascii_encoding();
     test_qr_render_layout_geometry();

@@ -916,15 +916,18 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
             int pipelineBuildOk;
             pipeline_u32 pipelineFrames;
 
-            /* format-v3 spec §3.4 (spec #109 sub-issue #112): `frames` is no
-             * longer the raw since-boot gGlobalTimer -- it is the pure
+            /* format-v3 spec §3.4 (spec #109 sub-issues #112/#113): `frames`
+             * is no longer the raw since-boot gGlobalTimer -- it is the pure
              * frames-selection helper (src/pipeline/capture.h) applied to
              * this grab's course/starIndex plus the in-course snapshot
              * (src/game/level_update.c's sCourseStartFrame, read via its
-             * accessor). This ticket's two cases: a real course reports
-             * elapsed-since-course-entry; everything else (including a
-             * course-less MIPS grab, until #113 adds its basement-snapshot
-             * branch inside the SAME helper) reports the 0 sentinel. */
+             * accessor). Three cases: a real course reports
+             * elapsed-since-course-entry; a course-less MIPS grab
+             * (starIndex 3/4) reports elapsed-since-basement-entry, reading
+             * the SAME accessor -- level_update.c's warp_area() re-snapshots
+             * it on the guarded LEVEL_CASTLE-area-3 transition, so this call
+             * site doesn't need to know which entry it is timing from;
+             * everything else reports the 0 sentinel. */
             pipelineFrames = pipeline_select_frames((pipeline_u8) gCurrCourseNum, (pipeline_u8) starIndex,
                                                       (pipeline_u32) gGlobalTimer,
                                                       (pipeline_u32) pipeline_get_course_start_frame());

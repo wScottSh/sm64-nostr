@@ -210,8 +210,10 @@ s8 gNeverEnteredCastle;
  * specifically (not just "any warp reaches init_mario_after_warp") is what
  * keeps a multi-area course's intra-course area changes from resetting
  * this snapshot, satisfying that requirement without needing a separate
- * warp_area() hook. (The MIPS/basement-room guarded snapshot is #113, not
- * added here.) */
+ * warp_area() hook -- except for one strictly-guarded case: the
+ * LEVEL_CASTLE-area-3 (basement/MIPS-room) re-snapshot added in warp_area()
+ * itself (spec #109 sub-issue #113), which intentionally reuses this SAME
+ * storage for the MIPS-star timing case. */
 static u32 sCourseStartFrame;
 
 /* Read-only accessor for the game glue at interact_star_or_key
@@ -527,6 +529,30 @@ void init_mario_after_warp(void) {
 void warp_area(void) {
     if (sWarpDest.type != WARP_TYPE_NOT_WARPING) {
         if (sWarpDest.type == WARP_TYPE_CHANGE_AREA) {
+            /* Nostr pipeline MIPS/basement-room frame timer (spec #109
+             * sub-issue #113, format-v3-spec.md §3.4). Basement entry
+             * (LEVEL_CASTLE area 3, levels/castle_inside/script.c's
+             * AREA(3, ...)) is an intra-castle area change -- gCurrLevelNum
+             * doesn't change, so initiate_warp() sets WARP_TYPE_CHANGE_AREA,
+             * not WARP_TYPE_CHANGE_LEVEL, and init_mario_after_warp()'s own
+             * sCourseStartFrame snapshot (gated to WARP_TYPE_CHANGE_LEVEL,
+             * see that snapshot's declaration comment above) never fires
+             * for it. This is the ONLY place this file snapshots on a
+             * WARP_TYPE_CHANGE_AREA transition, and it is strictly guarded
+             * to gCurrLevelNum == LEVEL_CASTLE && sWarpDest.areaIdx == 3 (the
+             * destination area, read before load_area()/init_mario_after_warp()
+             * clear sWarpDest) so no other intra-level area change -- e.g. a
+             * multi-area main course's own internal transitions -- ever
+             * resets an in-course timer mid-run. sCourseStartFrame is
+             * deliberately reused (not a second static) per the spec's own
+             * pseudo-code: the MIPS branch in pipeline_select_frames()
+             * (src/pipeline/capture.c) reads it through the SAME
+             * pipeline_get_course_start_frame() accessor the real-course
+             * branch uses. */
+            if (gCurrLevelNum == LEVEL_CASTLE && sWarpDest.areaIdx == 3) {
+                sCourseStartFrame = gGlobalTimer;
+            }
+
             level_control_timer(TIMER_CONTROL_HIDE);
             unload_mario_area();
             load_area(sWarpDest.areaIdx);
