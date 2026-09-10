@@ -104,10 +104,15 @@ check(schnorr.verify(expectedSig, tamperedMessage, pubkey) === false,
 // pre-v2 value (0xba237b9e...83cc) because TAG_0 changed from
 // "cabinet-leaderboard" to the spec-pinned "ag-lb" -- see
 // tools/reference_event_id.js's own header comment.
-const VECTOR_A_ID_HEX = 'da41e3231cbb228dd6a68ddd57fb54dc00528d62a35990d2ef5870bc832aa4ee';
+//
+// Format v3 (spec #109, sub-issue #111): vector A's id/sig changed again
+// because a third tag, ["n","TEST"], is now part of the signed
+// serialization -- see tools/reference_event_id.js's own header comment for
+// why "TEST" (not the pre-#111 "HOST TEST").
+const VECTOR_A_ID_HEX = '91ff8df59c339bf5c643750cdb1c7edf99c48aa9ce7879a22c9a52da7b84362f';
 const VECTOR_A_EXPECTED_SIG_HEX =
-  '69676d63728cd3d1cc1f918678547779e917b03db54832e8f71a0232eb4beed' +
-  'd804ca767605597381ca4a2a9f81d1ff8f20737bd1ec187cb2999ea9b2270487b';
+  '0f4ba80ae33f8e8e1be408387f0e8e233ba2c7b079120e0c1286d9750375953' +
+  'f4f15887578cf4693a3ad4546f899e176b1253998d9fef3a8a19dbaf867f512b0';
 const vectorAMessage = hexToBytes(VECTOR_A_ID_HEX);
 const vectorASig = schnorr.sign(vectorAMessage, privkey, auxRand);
 check(bytesToHex(vectorASig) === VECTOR_A_EXPECTED_SIG_HEX,

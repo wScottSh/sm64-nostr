@@ -131,6 +131,33 @@
  * scalar-path fast-vs-naive op-count comparison, plus tightens that
  * function's own per-signature op-count bound now that the scalar path
  * (previously still generic/untouched by #44) is fast too.
+ *
+ * Spec #109 sub-issue #110 (format v3's second variable-length field, NAME)
+ * bumps FORMAT_TAG to 0x03 and adds NAME_LEN/NAME (mirroring TAG_LEN/TAG)
+ * ahead of SIG: pipeline_pack()/pipeline_unpack() gain a name buffer +
+ * length parameter pair, test_pipeline_pack_unpack_name_round_trip() adds
+ * the dedicated event-name pack/unpack round-trip, and every existing
+ * pipeline_pack()/pipeline_unpack() call site (test_format_descriptor_round_trip,
+ * test_build_event_end_to_end, test_pipeline_unpack_boundary_and_rejections)
+ * is updated for the new signature and format v3's larger PIPELINE_FMT_FIXED_SIZE.
+ * test_live_wire_vectors_round_trip() now asserts REJECTION of its frozen
+ * real-device format-v2 captures (FORMAT_TAG 0x02) -- #110's own explicit
+ * acceptance criterion -- rather than acceptance; see that test's own
+ * updated header comment.
+ *
+ * Spec #109 sub-issue #111 threads the real baked event name
+ * (PIPELINE_EVENT_NAME, "TEST" for this host tool -- see the Makefile's own
+ * comment) into both the signed serialization (event_id.c's
+ * pipeline_event_serialize(), a third tag ["n","TEST"]) and build_event()'s
+ * pack call (PIPELINE_BUILT_PAYLOAD_SIZE grows from 117 to 121 B). Every
+ * id/sig oracle value derived from the baked profile -- kExpectedIdA/B/C,
+ * kBuildEventExpectedIdA, kBuildEventExpectedSig, and the pinned
+ * expectedSerialized string in test_content_escaping_path() -- was
+ * re-derived against tools/reference_event_id.js/
+ * tools/verify_schnorr_reference.js for the new three-tag serialization
+ * (see those scripts' own updated header comments); test_build_event_
+ * end_to_end()'s unpacked-name assertion now expects the real baked name,
+ * not a zero-length placeholder.
  */
 #include <stdio.h>
 #include <string.h>
@@ -188,6 +215,12 @@ static void check(int ok, const char *what)
  * changed from "cabinet-leaderboard" to the spec-pinned "ag-lb" (see
  * tools/reference_event_id.js/tools/verify_schnorr_reference.js's own
  * header comments for the re-derivation).
+ *
+ * Format v3 (spec #109, sub-issue #111): both changed AGAIN because
+ * build_event() now folds this host tool's baked PIPELINE_EVENT_NAME
+ * ("TEST", tools/pipeline_test/Makefile's --event-name) into a third
+ * signed tag, ["n","TEST"] -- see tools/reference_event_id.js/
+ * tools/verify_schnorr_reference.js's own updated header comments.
  */
 static const pipeline_u8 kBuildEventPrivkey[PIPELINE_KEY_SIZE] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -196,14 +229,14 @@ static const pipeline_u8 kBuildEventPrivkey[PIPELINE_KEY_SIZE] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
 };
 static const pipeline_u8 kBuildEventExpectedIdA[PIPELINE_EVENT_ID_SIZE] = {
-    0xda, 0x41, 0xe3, 0x23, 0x1c, 0xbb, 0x22, 0x8d, 0xd6, 0xa6, 0x8d, 0xdd, 0x57, 0xfb, 0x54, 0xdc,
-    0x00, 0x52, 0x8d, 0x62, 0xa3, 0x59, 0x90, 0xd2, 0xef, 0x58, 0x70, 0xbc, 0x83, 0x2a, 0xa4, 0xee,
+    0x91, 0xff, 0x8d, 0xf5, 0x9c, 0x33, 0x9b, 0xf5, 0xc6, 0x43, 0x75, 0x0c, 0xdb, 0x1c, 0x7e, 0xdf,
+    0x99, 0xc4, 0x8a, 0xa9, 0xce, 0x78, 0x79, 0xa2, 0x2c, 0x9a, 0x52, 0xda, 0x7b, 0x84, 0x36, 0x2f,
 };
 static const pipeline_u8 kBuildEventExpectedSig[PIPELINE_SCHNORR_SIG_SIZE] = {
-    0x69, 0x67, 0x6d, 0x63, 0x72, 0x8c, 0xd3, 0xd1, 0xcc, 0x1f, 0x91, 0x86, 0x78, 0x54, 0x77, 0x79,
-    0xe9, 0x17, 0xb0, 0x3d, 0xb5, 0x48, 0x32, 0xe8, 0xf7, 0x1a, 0x02, 0x32, 0xeb, 0x4b, 0xee, 0xdd,
-    0x80, 0x4c, 0xa7, 0x67, 0x60, 0x55, 0x97, 0x38, 0x1c, 0xa4, 0xa2, 0xa9, 0xf8, 0x1d, 0x1f, 0xf8,
-    0xf2, 0x07, 0x37, 0xbd, 0x1e, 0xc1, 0x87, 0xcb, 0x29, 0x99, 0xea, 0x9b, 0x22, 0x70, 0x48, 0x7b,
+    0x0f, 0x4b, 0xa8, 0x0a, 0xe3, 0x3f, 0x8e, 0x8e, 0x1b, 0xe4, 0x08, 0x38, 0x7f, 0x0e, 0x8e, 0x23,
+    0x3b, 0xa2, 0xc7, 0xb0, 0x79, 0x12, 0x0e, 0x0c, 0x12, 0x86, 0xd9, 0x75, 0x03, 0x75, 0x95, 0x3f,
+    0x4f, 0x15, 0x88, 0x75, 0x78, 0xcf, 0x46, 0x93, 0xa3, 0xad, 0x45, 0x46, 0xf8, 0x99, 0xe1, 0x76,
+    0xb1, 0x25, 0x39, 0x98, 0xd9, 0xfe, 0xf3, 0xa8, 0xa1, 0x9d, 0xba, 0xf8, 0x67, 0xf5, 0x12, 0xb0,
 };
 
 static void test_build_event_end_to_end(void)
@@ -219,6 +252,8 @@ static void test_build_event_end_to_end(void)
     pipeline_u8 pubkeyOut[PIPELINE_FMT_SIZE_PUBKEY];
     pipeline_u8 tagOut[PIPELINE_PACK_MAX_TAG_LEN];
     pipeline_u8 tagLenOut;
+    pipeline_u8 nameOut[PIPELINE_PACK_MAX_NAME_LEN];
+    pipeline_u8 nameLenOut;
     pipeline_u8 sigOut[PIPELINE_FMT_SIZE_SIG];
     int unpackRc;
     pipeline_u8 recomputedId[PIPELINE_EVENT_ID_SIZE];
@@ -239,12 +274,20 @@ static void test_build_event_end_to_end(void)
         return;
     }
 
-    /* Report the actual packed payload size: 112 B fixed (format v2's
-     * FORMAT_TAG..PUBKEY..TAG_LEN..SIG spine, see format_descriptor.json)
-     * plus this build's own per-game tag length (4 for "sm64") = 116 B,
-     * comfortably inside the v7/MEDIUM 122 B ceiling. */
-    check(PIPELINE_BUILT_PAYLOAD_SIZE == 116u,
-          "build_event's packed_payload size is 116 B (112 + 4-byte \"sm64\" tag), within the v7/MEDIUM 122 B ceiling");
+    /* Report the actual packed payload size: 113 B fixed (format v3's
+     * FORMAT_TAG..PUBKEY..TAG_LEN..NAME_LEN..SIG spine, see
+     * format_descriptor.json) plus this build's own per-game tag length
+     * (4 for "sm64") plus this build's own baked event-name length (4 for
+     * "TEST", spec #109 sub-issue #111 threads the real baked name into
+     * build_event -- see build_event.c's own comment) = 121 B, comfortably
+     * inside the v7/MEDIUM 122 B single-symbol ceiling
+     * (PIPELINE_QR_MAX_PAYLOAD_BYTES). 138 B is format v3's own worst case
+     * (TAG_LEN=10, NAME_LEN=15) and does NOT fit this ceiling -- see
+     * qr_adapter.h's own comment on why that's expected, not a bug, under
+     * ADR-0006's multi-frame transport. */
+    check(PIPELINE_BUILT_PAYLOAD_SIZE == 121u,
+          "build_event's packed_payload size is 121 B (113 + 4-byte \"sm64\" tag + 4-byte \"TEST\" name), "
+          "within the v7/MEDIUM ceiling");
 
     /* (a) the host decodes qr_bitmap back to the exact packed_payload. */
     decodeOk = qr_host_decode(event.qr_bitmap, decoded, (int)sizeof(decoded), &decodedLen);
@@ -257,7 +300,8 @@ static void test_build_event_end_to_end(void)
      * createdAt, pubkey, and the per-game tag -- with no access to (or use
      * of) event_profile.h's baked macros below this point. */
     unpackRc = pipeline_unpack((const pipeline_u8 *)decoded, (pipeline_u32)decodedLen,
-                                &rebuilt, &createdAtOut, pubkeyOut, tagOut, &tagLenOut, sigOut);
+                                &rebuilt, &createdAtOut, pubkeyOut, tagOut, &tagLenOut,
+                                nameOut, &nameLenOut, sigOut);
     check(unpackRc == PIPELINE_UNPACK_OK, "host pipeline_unpack accepts build_event's packed_payload");
     check(rebuilt.course == capture.course && rebuilt.act == capture.act &&
           rebuilt.coins == capture.coins && rebuilt.frames == capture.frames &&
@@ -270,6 +314,10 @@ static void test_build_event_end_to_end(void)
     check(tagLenOut == (pipeline_u8)PIPELINE_EVENT_TAG_1_LEN &&
           memcmp(tagOut, gameTag, tagLenOut) == 0,
           "unpacked per-game tag matches this build's baked tag exactly (self-contained: it came off the wire)");
+    check(nameLenOut == (pipeline_u8)PIPELINE_EVENT_NAME_LEN &&
+          memcmp(nameOut, PIPELINE_EVENT_NAME, nameLenOut) == 0,
+          "unpacked event name matches this build's baked event name exactly (self-contained: it came off "
+          "the wire -- spec #109, sub-issue #111)");
 
     /* (c) SELF-CONTAINED RECONSTRUCTION, with ZERO out-of-band constants:
      * recompute the id purely from the values pipeline_unpack() just
@@ -282,7 +330,7 @@ static void test_build_event_end_to_end(void)
      * exposes -- a real companion app (a different language, out of this
      * repo's scope) does the equivalent using docs/qr-handoff-spec.md. */
     pipeline_event_compute_id_from_fields(pubkeyOut, createdAtOut, (const char *)tagOut, tagLenOut,
-                                           &rebuilt, recomputedId);
+                                           (const char *)nameOut, nameLenOut, &rebuilt, recomputedId);
     check(memcmp(recomputedId, kBuildEventExpectedIdA, PIPELINE_EVENT_ID_SIZE) == 0,
           "id recomputed from ONLY the unpacked wire fields matches the nostr-tools reference id (vector A)");
 
@@ -309,9 +357,13 @@ static void test_build_event_end_to_end(void)
      * different signature). KEY_ID (the star index) is signed content: a
      * flipped KEY_ID byte changes the recomputed id, so the signature check
      * fails, closing the earlier tamper hole for stars where `act` alone
-     * doesn't identify which star was grabbed. It does NOT hold for
-     * FORMAT_TAG, which pipeline_unpack() checks structurally (see the second
-     * check below), not cryptographically. */
+     * doesn't identify which star was grabbed. It also holds for NAME
+     * (format v3, spec #109 sub-issue #111): the event name is now signed
+     * content too, folded into the ["n",...] tag, so a flipped NAME byte
+     * changes the recomputed id exactly like COURSE/KEY_ID -- see the
+     * dedicated NAME check below. It does NOT hold for FORMAT_TAG, which
+     * pipeline_unpack() checks structurally (see the second check below),
+     * not cryptographically. */
     {
         pipeline_u8 corrupted[PIPELINE_BUILT_PAYLOAD_SIZE];
         StarCapture corruptCapture;
@@ -319,6 +371,8 @@ static void test_build_event_end_to_end(void)
         pipeline_u8 corruptPubkey[PIPELINE_FMT_SIZE_PUBKEY];
         pipeline_u8 corruptTag[PIPELINE_PACK_MAX_TAG_LEN];
         pipeline_u8 corruptTagLen;
+        pipeline_u8 corruptName[PIPELINE_PACK_MAX_NAME_LEN];
+        pipeline_u8 corruptNameLen;
         pipeline_u8 corruptSig[PIPELINE_FMT_SIZE_SIG];
         pipeline_u8 corruptId[PIPELINE_EVENT_ID_SIZE];
         int corruptVerify;
@@ -328,9 +382,11 @@ static void test_build_event_end_to_end(void)
         corrupted[PIPELINE_FMT_OFF_COURSE] ^= 0x01;
 
         pipeline_unpack(corrupted, (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE, &corruptCapture,
-                         &corruptCreatedAt, corruptPubkey, corruptTag, &corruptTagLen, corruptSig);
+                         &corruptCreatedAt, corruptPubkey, corruptTag, &corruptTagLen,
+                         corruptName, &corruptNameLen, corruptSig);
         pipeline_event_compute_id_from_fields(corruptPubkey, corruptCreatedAt, (const char *)corruptTag,
-                                               corruptTagLen, &corruptCapture, corruptId);
+                                               corruptTagLen, (const char *)corruptName, corruptNameLen,
+                                               &corruptCapture, corruptId);
         corruptVerify = pipeline_schnorr_verify(corruptId, corruptPubkey, corruptSig);
         check(corruptVerify == 0,
               "flipping one packed_payload byte (a signed content field) makes signature verification fail");
@@ -341,7 +397,8 @@ static void test_build_event_end_to_end(void)
         memcpy(corrupted, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE);
         corrupted[PIPELINE_FMT_OFF_FORMAT_TAG] ^= 0x01;
         corruptUnpackRc = pipeline_unpack(corrupted, (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE, &corruptCapture,
-                                           &corruptCreatedAt, corruptPubkey, corruptTag, &corruptTagLen, corruptSig);
+                                           &corruptCreatedAt, corruptPubkey, corruptTag, &corruptTagLen,
+                                           corruptName, &corruptNameLen, corruptSig);
         check(corruptUnpackRc == PIPELINE_UNPACK_ERR_BAD_FORMAT_TAG,
               "flipping the FORMAT_TAG byte is rejected structurally by pipeline_unpack");
 
@@ -352,25 +409,50 @@ static void test_build_event_end_to_end(void)
         memcpy(corrupted, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE);
         corrupted[PIPELINE_FMT_OFF_KEY_ID] ^= 0x01;
         pipeline_unpack(corrupted, (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE, &corruptCapture,
-                         &corruptCreatedAt, corruptPubkey, corruptTag, &corruptTagLen, corruptSig);
+                         &corruptCreatedAt, corruptPubkey, corruptTag, &corruptTagLen,
+                         corruptName, &corruptNameLen, corruptSig);
         pipeline_event_compute_id_from_fields(corruptPubkey, corruptCreatedAt, (const char *)corruptTag,
-                                               corruptTagLen, &corruptCapture, corruptId);
+                                               corruptTagLen, (const char *)corruptName, corruptNameLen,
+                                               &corruptCapture, corruptId);
         corruptVerify = pipeline_schnorr_verify(corruptId, corruptPubkey, corruptSig);
         check(corruptVerify == 0,
               "flipping the KEY_ID byte (signed star index) makes signature verification fail");
+
+        /* A flipped NAME byte must also fail verification -- the direct
+         * regression guard for spec #109 sub-issue #111's own acceptance
+         * criterion (the signed `id` commits to the event name): the name
+         * is now signed content (folded into the ["n",...] tag by
+         * event_id.c's pipeline_event_serialize()), so tampering with it
+         * post-signing must break verification exactly like COURSE/KEY_ID
+         * above, not just structurally round-trip through pipeline_unpack. */
+        memcpy(corrupted, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE);
+        corrupted[PIPELINE_FMT_OFF_NAME((pipeline_u32)PIPELINE_EVENT_TAG_1_LEN)] ^= 0x01;
+        pipeline_unpack(corrupted, (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE, &corruptCapture,
+                         &corruptCreatedAt, corruptPubkey, corruptTag, &corruptTagLen,
+                         corruptName, &corruptNameLen, corruptSig);
+        pipeline_event_compute_id_from_fields(corruptPubkey, corruptCreatedAt, (const char *)corruptTag,
+                                               corruptTagLen, (const char *)corruptName, corruptNameLen,
+                                               &corruptCapture, corruptId);
+        corruptVerify = pipeline_schnorr_verify(corruptId, corruptPubkey, corruptSig);
+        check(corruptVerify == 0,
+              "flipping a NAME byte (the signed event name) makes signature verification fail");
     }
 }
 
 /*
  * pipeline_unpack() boundary/rejection tests (spec #52, sub-issue #54's
- * explicit acceptance criteria): FORMAT_TAG != 0x02 rejected; TAG_LEN > 10
- * rejected; wrong total length rejected; TAG_LEN 0 and 10 (the legal
- * boundary values) accepted, 11 rejected. Exercises pipeline_pack()/
- * pipeline_unpack() directly (the internal seam both build_event() and a
- * real companion decoder are built on), not build_event() itself, since
- * these are almost all payloads build_event() itself could never produce
- * (a real ROM build's own tag length is fixed) -- proving pipeline_unpack()
- * is a genuinely defensive decoder for ARBITRARY (but wire-legal) incoming
+ * original explicit acceptance criteria for TAG_LEN, extended by spec #109
+ * sub-issue #110's own acceptance criteria for NAME_LEN and the v2->v3
+ * FORMAT_TAG cutover): FORMAT_TAG != 0x03 rejected (in particular the old
+ * v2 value 0x02, sub-issue #110's own explicit acceptance criterion);
+ * TAG_LEN > 10 rejected; NAME_LEN > 15 rejected; wrong total length
+ * rejected; TAG_LEN/NAME_LEN at their 0 and max legal boundaries accepted,
+ * one past each max rejected. Exercises pipeline_pack()/pipeline_unpack()
+ * directly (the internal seam both build_event() and a real companion
+ * decoder are built on), not build_event() itself, since these are almost
+ * all payloads build_event() itself could never produce (a real ROM
+ * build's own tag/name lengths are fixed) -- proving pipeline_unpack() is a
+ * genuinely defensive decoder for ARBITRARY (but wire-legal) incoming
  * payloads, not just self-consistent with this build's own pack side.
  */
 static void test_pipeline_unpack_boundary_and_rejections(void)
@@ -385,6 +467,8 @@ static void test_pipeline_unpack_boundary_and_rejections(void)
     pipeline_u8 unpackedPubkey[PIPELINE_FMT_SIZE_PUBKEY];
     pipeline_u8 unpackedTag[PIPELINE_PACK_MAX_TAG_LEN];
     pipeline_u8 unpackedTagLen;
+    pipeline_u8 unpackedName[PIPELINE_PACK_MAX_NAME_LEN];
+    pipeline_u8 unpackedNameLen;
     pipeline_u8 unpackedSig[PIPELINE_FMT_SIZE_SIG];
     int rc;
     int i;
@@ -393,30 +477,37 @@ static void test_pipeline_unpack_boundary_and_rejections(void)
     for (i = 0; i < (int)PIPELINE_FMT_SIZE_SIG; i++) sig[i] = (pipeline_u8)(i + 1);
     for (i = 0; i < (int)PIPELINE_FMT_SIZE_PUBKEY; i++) pubkey[i] = (pipeline_u8)(i * 2 + 1);
 
-    /* TAG_LEN == 0 (minimum legal boundary): accepted. */
-    packedLen = pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"", 0, sig, packed);
-    check(packedLen == PIPELINE_FMT_FIXED_SIZE, "pipeline_pack with TAG_LEN=0 writes exactly PIPELINE_FMT_FIXED_SIZE bytes");
+    /* TAG_LEN == 0, NAME_LEN == 0 (minimum legal boundary for both):
+     * accepted. */
+    packedLen = pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"", 0,
+                               (const pipeline_u8 *)"", 0, sig, packed);
+    check(packedLen == PIPELINE_FMT_FIXED_SIZE, "pipeline_pack with TAG_LEN=NAME_LEN=0 writes exactly PIPELINE_FMT_FIXED_SIZE bytes");
     rc = pipeline_unpack(packed, packedLen, &unpackedCapture, &unpackedCreatedAt, unpackedPubkey,
-                          unpackedTag, &unpackedTagLen, unpackedSig);
-    check(rc == PIPELINE_UNPACK_OK && unpackedTagLen == 0,
-          "pipeline_unpack accepts the TAG_LEN=0 boundary payload");
+                          unpackedTag, &unpackedTagLen, unpackedName, &unpackedNameLen, unpackedSig);
+    check(rc == PIPELINE_UNPACK_OK && unpackedTagLen == 0 && unpackedNameLen == 0,
+          "pipeline_unpack accepts the TAG_LEN=NAME_LEN=0 boundary payload");
     check(unpackedCapture.course == capture.course && unpackedCreatedAt == 1700000000u &&
           memcmp(unpackedPubkey, pubkey, PIPELINE_FMT_SIZE_PUBKEY) == 0 && memcmp(unpackedSig, sig, PIPELINE_FMT_SIZE_SIG) == 0,
-          "TAG_LEN=0 payload round-trips every other field exactly");
+          "TAG_LEN=NAME_LEN=0 payload round-trips every other field exactly");
 
-    /* TAG_LEN == 10 (maximum legal boundary): accepted. */
-    packedLen = pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"0123456789", 10, sig, packed);
-    check(packedLen == PIPELINE_FMT_FIXED_SIZE + 10u, "pipeline_pack with TAG_LEN=10 writes exactly PIPELINE_FMT_FIXED_SIZE+10 bytes");
+    /* TAG_LEN == 10, NAME_LEN == 15 (maximum legal boundary for both): accepted. */
+    packedLen = pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"0123456789", 10,
+                               (const pipeline_u8 *)"FIFTEEN CHAR!!!", 15, sig, packed);
+    check(packedLen == PIPELINE_FMT_FIXED_SIZE + 10u + 15u,
+          "pipeline_pack with TAG_LEN=10, NAME_LEN=15 writes exactly PIPELINE_FMT_FIXED_SIZE+10+15 bytes");
     rc = pipeline_unpack(packed, packedLen, &unpackedCapture, &unpackedCreatedAt, unpackedPubkey,
-                          unpackedTag, &unpackedTagLen, unpackedSig);
+                          unpackedTag, &unpackedTagLen, unpackedName, &unpackedNameLen, unpackedSig);
     check(rc == PIPELINE_UNPACK_OK && unpackedTagLen == 10 &&
           memcmp(unpackedTag, "0123456789", 10) == 0,
           "pipeline_unpack accepts the TAG_LEN=10 boundary payload and round-trips the tag bytes exactly");
+    check(unpackedNameLen == 15 && memcmp(unpackedName, "FIFTEEN CHAR!!!", 15) == 0,
+          "pipeline_unpack accepts the NAME_LEN=15 boundary payload and round-trips the name bytes exactly");
 
     /* TAG_LEN == 11: pipeline_pack() itself refuses (defensive, since no
      * real build ever asks for this); hand-craft the wire bytes directly to
      * prove pipeline_unpack() independently rejects an 11-byte tag. */
-    check(pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"01234567890", 11, sig, packed) == 0,
+    check(pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"01234567890", 11,
+                         (const pipeline_u8 *)"", 0, sig, packed) == 0,
           "pipeline_pack itself refuses tagLen=11 (over PIPELINE_PACK_MAX_TAG_LEN)");
     {
         pipeline_u8 handCrafted[PIPELINE_PACK_MAX_SIZE];
@@ -425,34 +516,146 @@ static void test_pipeline_unpack_boundary_and_rejections(void)
         handCrafted[PIPELINE_FMT_OFF_FORMAT_TAG] = (pipeline_u8)PIPELINE_FMT_TAG_VALUE;
         handCrafted[PIPELINE_FMT_OFF_TAG_LEN] = 11;
         rc = pipeline_unpack(handCrafted, handLen, &unpackedCapture, &unpackedCreatedAt, unpackedPubkey,
-                              unpackedTag, &unpackedTagLen, unpackedSig);
+                              unpackedTag, &unpackedTagLen, unpackedName, &unpackedNameLen, unpackedSig);
         check(rc == PIPELINE_UNPACK_ERR_TAG_TOO_LONG,
               "pipeline_unpack rejects TAG_LEN=11 (one past the v7-MEDIUM boundary) even with a length-matched buffer");
     }
 
-    /* FORMAT_TAG != 0x02 (e.g. the old format v1 tag, 0x01): rejected. */
-    packedLen = pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"sm64", 4, sig, packed);
+    /* NAME_LEN == 16: pipeline_pack() itself refuses (defensive, mirroring
+     * TAG_LEN's own over-budget refusal); hand-craft the wire bytes
+     * directly to prove pipeline_unpack() independently rejects a
+     * 16-byte name (PIPELINE_PACK_MAX_NAME_LEN is 15). */
+    check(pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"", 0,
+                         (const pipeline_u8 *)"SIXTEEN CHARS!!!", 16, sig, packed) == 0,
+          "pipeline_pack itself refuses nameLen=16 (over PIPELINE_PACK_MAX_NAME_LEN)");
+    {
+        pipeline_u8 handCrafted[PIPELINE_PACK_MAX_SIZE];
+        pipeline_u32 handLen = PIPELINE_FMT_FIXED_SIZE + 16u;
+        memset(handCrafted, 0, sizeof(handCrafted));
+        handCrafted[PIPELINE_FMT_OFF_FORMAT_TAG] = (pipeline_u8)PIPELINE_FMT_TAG_VALUE;
+        handCrafted[PIPELINE_FMT_OFF_TAG_LEN] = 0;
+        handCrafted[PIPELINE_FMT_OFF_NAME_LEN(0)] = 16;
+        rc = pipeline_unpack(handCrafted, handLen, &unpackedCapture, &unpackedCreatedAt, unpackedPubkey,
+                              unpackedTag, &unpackedTagLen, unpackedName, &unpackedNameLen, unpackedSig);
+        check(rc == PIPELINE_UNPACK_ERR_NAME_TOO_LONG,
+              "pipeline_unpack rejects NAME_LEN=16 (one past the max) even with a length-matched buffer");
+    }
+
+    /* FORMAT_TAG != 0x03 is rejected -- in particular the old format v2
+     * value (0x02), sub-issue #110's own explicit acceptance criterion:
+     * "a 0x02 payload is rejected". */
+    packedLen = pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"sm64", 4,
+                               (const pipeline_u8 *)"ARCADE NIGHT", 12, sig, packed);
+    packed[PIPELINE_FMT_OFF_FORMAT_TAG] = 0x02;
+    rc = pipeline_unpack(packed, packedLen, &unpackedCapture, &unpackedCreatedAt, unpackedPubkey,
+                          unpackedTag, &unpackedTagLen, unpackedName, &unpackedNameLen, unpackedSig);
+    check(rc == PIPELINE_UNPACK_ERR_BAD_FORMAT_TAG,
+          "pipeline_unpack rejects FORMAT_TAG 0x02 (the old format v2 tag) -- not silently misread as v3");
     packed[PIPELINE_FMT_OFF_FORMAT_TAG] = 0x01;
     rc = pipeline_unpack(packed, packedLen, &unpackedCapture, &unpackedCreatedAt, unpackedPubkey,
-                          unpackedTag, &unpackedTagLen, unpackedSig);
+                          unpackedTag, &unpackedTagLen, unpackedName, &unpackedNameLen, unpackedSig);
     check(rc == PIPELINE_UNPACK_ERR_BAD_FORMAT_TAG,
           "pipeline_unpack rejects FORMAT_TAG 0x01 (the old format v1 tag)");
 
-    /* Wrong total length: a v2-tagged, otherwise well-formed payload whose
-     * actual byte count doesn't match PIPELINE_FMT_TOTAL_SIZE(TAG_LEN). */
-    packedLen = pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"sm64", 4, sig, packed);
+    /* Wrong total length: a v3-tagged, otherwise well-formed payload whose
+     * actual byte count doesn't match PIPELINE_FMT_TOTAL_SIZE(TAG_LEN, NAME_LEN). */
+    packedLen = pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"sm64", 4,
+                               (const pipeline_u8 *)"ARCADE NIGHT", 12, sig, packed);
     rc = pipeline_unpack(packed, packedLen - 1, &unpackedCapture, &unpackedCreatedAt, unpackedPubkey,
-                          unpackedTag, &unpackedTagLen, unpackedSig);
+                          unpackedTag, &unpackedTagLen, unpackedName, &unpackedNameLen, unpackedSig);
     check(rc == PIPELINE_UNPACK_ERR_WRONG_LENGTH,
-          "pipeline_unpack rejects a payload one byte SHORTER than TAG_LEN implies");
+          "pipeline_unpack rejects a payload one byte SHORTER than TAG_LEN/NAME_LEN implies");
     rc = pipeline_unpack(packed, packedLen + 1, &unpackedCapture, &unpackedCreatedAt, unpackedPubkey,
-                          unpackedTag, &unpackedTagLen, unpackedSig);
+                          unpackedTag, &unpackedTagLen, unpackedName, &unpackedNameLen, unpackedSig);
     check(rc == PIPELINE_UNPACK_ERR_WRONG_LENGTH,
-          "pipeline_unpack rejects a payload one byte LONGER than TAG_LEN implies");
+          "pipeline_unpack rejects a payload one byte LONGER than TAG_LEN/NAME_LEN implies");
     rc = pipeline_unpack(packed, PIPELINE_FMT_FIXED_SIZE - 1u, &unpackedCapture, &unpackedCreatedAt, unpackedPubkey,
-                          unpackedTag, &unpackedTagLen, unpackedSig);
+                          unpackedTag, &unpackedTagLen, unpackedName, &unpackedNameLen, unpackedSig);
     check(rc == PIPELINE_UNPACK_ERR_WRONG_LENGTH,
-          "pipeline_unpack rejects a payload shorter than the minimum legal v2 length (TAG_LEN=0 case)");
+          "pipeline_unpack rejects a payload shorter than the minimum legal v3 length (TAG_LEN=NAME_LEN=0 case)");
+}
+
+/*
+ * pipeline_pack()/pipeline_unpack() event-name round-trip (spec #109,
+ * sub-issue #110's own primary acceptance criterion): a StarCapture packed
+ * with a baked event name unpacks back to the identical name, at the host
+ * pack/unpack seam -- proving the ROM pack side and the host unpack side
+ * genuinely agree on where NAME_LEN/NAME live, mirroring
+ * test_format_descriptor_round_trip()'s existing TAG coverage.
+ */
+static void test_pipeline_pack_unpack_name_round_trip(void)
+{
+    StarCapture capture;
+    StarCapture roundTripped;
+    pipeline_u8 sig[PIPELINE_FMT_SIZE_SIG];
+    pipeline_u8 sigRoundTripped[PIPELINE_FMT_SIZE_SIG];
+    pipeline_u8 pubkey[PIPELINE_FMT_SIZE_PUBKEY];
+    pipeline_u8 pubkeyRoundTripped[PIPELINE_FMT_SIZE_PUBKEY];
+    static const pipeline_u8 kTag[] = "sm64";
+    const pipeline_u8 kTagLen = 4;
+    static const pipeline_u8 kName[] = "SUMMER JAM 2026";
+    const pipeline_u8 kNameLen = 15;
+    pipeline_u8 tagRoundTripped[PIPELINE_PACK_MAX_TAG_LEN];
+    pipeline_u8 tagLenRoundTripped;
+    pipeline_u8 nameRoundTripped[PIPELINE_PACK_MAX_NAME_LEN];
+    pipeline_u8 nameLenRoundTripped;
+    pipeline_u32 createdAt = 1700000000u;
+    pipeline_u32 createdAtRoundTripped;
+    pipeline_u8 packed[PIPELINE_PACK_MAX_SIZE];
+    pipeline_u32 packedLen;
+    int i;
+    int rc;
+
+    capture.course  = 9;
+    capture.act     = 3;
+    capture.coins   = 55;
+    capture.frames  = 0x0BADF00Du;
+    capture.nonce16 = 0xBEEF;
+    capture.keyId   = 1;
+
+    for (i = 0; i < (int)PIPELINE_FMT_SIZE_SIG; i++) {
+        sig[i] = (pipeline_u8)(i * 7 + 3);
+    }
+    for (i = 0; i < (int)PIPELINE_FMT_SIZE_PUBKEY; i++) {
+        pubkey[i] = (pipeline_u8)(i * 11 + 5);
+    }
+
+    memset(packed, 0xAA, sizeof(packed));
+    packedLen = pipeline_pack(&capture, createdAt, pubkey, kTag, kTagLen, kName, kNameLen, sig, packed);
+
+    check(packed[0] == (pipeline_u8)0x03u, "packed v3 payload's first byte is FORMAT_TAG 0x03");
+    check(packed[0] == PIPELINE_FMT_TAG_VALUE, "packed payload leads with the format tag");
+    check(packedLen == PIPELINE_FMT_FIXED_SIZE + kTagLen + kNameLen,
+          "pipeline_pack's actual output length includes both the tag and the name bytes");
+
+    rc = pipeline_unpack(packed, packedLen, &roundTripped, &createdAtRoundTripped, pubkeyRoundTripped,
+                          tagRoundTripped, &tagLenRoundTripped, nameRoundTripped, &nameLenRoundTripped,
+                          sigRoundTripped);
+    check(rc == PIPELINE_UNPACK_OK, "unpack accepts a v3 payload carrying an event name");
+    check(roundTripped.course == capture.course &&
+          roundTripped.act == capture.act &&
+          roundTripped.coins == capture.coins &&
+          roundTripped.frames == capture.frames &&
+          roundTripped.nonce16 == capture.nonce16 &&
+          roundTripped.keyId == capture.keyId,
+          "unpack round-trips all StarCapture fields exactly alongside the event name");
+    check(createdAtRoundTripped == createdAt, "unpack round-trips createdAt exactly alongside the event name");
+    check(memcmp(pubkeyRoundTripped, pubkey, PIPELINE_FMT_SIZE_PUBKEY) == 0,
+          "unpack round-trips the pubkey bytes exactly alongside the event name");
+    check(tagLenRoundTripped == kTagLen && memcmp(tagRoundTripped, kTag, kTagLen) == 0,
+          "unpack round-trips the per-game tag bytes exactly alongside the event name");
+    check(nameLenRoundTripped == kNameLen && memcmp(nameRoundTripped, kName, kNameLen) == 0,
+          "unpack round-trips the event name bytes exactly");
+    check(memcmp(sig, sigRoundTripped, PIPELINE_FMT_SIZE_SIG) == 0,
+          "unpack round-trips the signature bytes exactly alongside the event name");
+
+    /* A v2-tagged payload (the old FORMAT_TAG value 0x02) is rejected --
+     * #110's own explicit acceptance criterion. */
+    packed[0] = 0x02;
+    rc = pipeline_unpack(packed, packedLen, &roundTripped, &createdAtRoundTripped, pubkeyRoundTripped,
+                          tagRoundTripped, &tagLenRoundTripped, nameRoundTripped, &nameLenRoundTripped,
+                          sigRoundTripped);
+    check(rc == PIPELINE_UNPACK_ERR_BAD_FORMAT_TAG, "unpack rejects a 0x02 (format v2) payload");
 }
 
 #define QR_RENDER_TEST_FB_WIDTH  320
@@ -960,6 +1163,11 @@ static void test_format_descriptor_round_trip(void)
     const pipeline_u8 kTagLen = 4;
     pipeline_u8 tagRoundTripped[PIPELINE_PACK_MAX_TAG_LEN];
     pipeline_u8 tagLenRoundTripped;
+    /* No event name in THIS test (a zero-length NAME) -- see
+     * test_pipeline_pack_unpack_name_round_trip() for the dedicated NAME
+     * coverage (spec #109, sub-issue #110). */
+    pipeline_u8 nameRoundTripped[PIPELINE_PACK_MAX_NAME_LEN];
+    pipeline_u8 nameLenRoundTripped;
     pipeline_u32 createdAt = 1700000000u;
     pipeline_u32 createdAtRoundTripped;
     pipeline_u8 packed[PIPELINE_PACK_MAX_SIZE];
@@ -982,19 +1190,22 @@ static void test_format_descriptor_round_trip(void)
     }
 
     memset(packed, 0xFF, sizeof(packed));
-    packedLen = pipeline_pack(&capture, createdAt, pubkey, kTag, kTagLen, sig, packed);
+    packedLen = pipeline_pack(&capture, createdAt, pubkey, kTag, kTagLen,
+                               (const pipeline_u8 *)"", 0, sig, packed);
 
     check(packed[0] == PIPELINE_FMT_TAG_VALUE, "packed payload leads with the format tag");
-    /* Literal 112, not PIPELINE_FMT_FIXED_SIZE: this pins the descriptor's
+    /* Literal 113, not PIPELINE_FMT_FIXED_SIZE: this pins the descriptor's
      * own fixed-size accounting to an independently-computed value (1 + 1 +
-     * 1 + 1 + 4 + 2 + 1 + 4 + 32 + 1 + 64), rather than comparing the macro
-     * to itself. Total for THIS 4-byte tag is 112 + 4 = 116. */
-    check(PIPELINE_FMT_FIXED_SIZE == 112u,
-          "format descriptor's fixed size matches the expected field layout (format v2)");
-    check(packedLen == 116u, "pipeline_pack's actual output length is 112 + this test's 4-byte tag");
+     * 1 + 1 + 4 + 2 + 1 + 4 + 32 + 1 + 1 + 64, format v3's spine plus the
+     * new NAME_LEN byte), rather than comparing the macro to itself. Total
+     * for THIS 4-byte tag and zero-length name is 113 + 4 = 117. */
+    check(PIPELINE_FMT_FIXED_SIZE == 113u,
+          "format descriptor's fixed size matches the expected field layout (format v3)");
+    check(packedLen == 117u, "pipeline_pack's actual output length is 113 + this test's 4-byte tag");
 
     rc = pipeline_unpack(packed, packedLen, &roundTripped, &createdAtRoundTripped, pubkeyRoundTripped,
-                          tagRoundTripped, &tagLenRoundTripped, sigRoundTripped);
+                          tagRoundTripped, &tagLenRoundTripped, nameRoundTripped, &nameLenRoundTripped,
+                          sigRoundTripped);
     check(rc == PIPELINE_UNPACK_OK, "unpack accepts a correctly-tagged payload");
     check(roundTripped.course == capture.course &&
           roundTripped.act == capture.act &&
@@ -1007,13 +1218,15 @@ static void test_format_descriptor_round_trip(void)
     check(memcmp(pubkeyRoundTripped, pubkey, PIPELINE_FMT_SIZE_PUBKEY) == 0, "unpack round-trips the pubkey bytes exactly");
     check(tagLenRoundTripped == kTagLen && memcmp(tagRoundTripped, kTag, kTagLen) == 0,
           "unpack round-trips the per-game tag bytes exactly");
+    check(nameLenRoundTripped == 0, "unpack round-trips the (zero-length) event name exactly");
     check(memcmp(sig, sigRoundTripped, PIPELINE_FMT_SIZE_SIG) == 0,
           "unpack round-trips the signature bytes exactly");
 
     /* Corrupt the format tag and confirm unpack rejects it. */
     packed[0] = (pipeline_u8)(PIPELINE_FMT_TAG_VALUE + 1);
     rc = pipeline_unpack(packed, packedLen, &roundTripped, &createdAtRoundTripped, pubkeyRoundTripped,
-                          tagRoundTripped, &tagLenRoundTripped, sigRoundTripped);
+                          tagRoundTripped, &tagLenRoundTripped, nameRoundTripped, &nameLenRoundTripped,
+                          sigRoundTripped);
     check(rc == PIPELINE_UNPACK_ERR_BAD_FORMAT_TAG, "unpack rejects a payload with the wrong format tag");
 }
 
@@ -1066,7 +1279,7 @@ static void test_qr_round_trip_representative_sizes(void)
     check_round_trip(4, "sub-issue #25 stub payload size");
     check_round_trip(24, "spec #24's ~24 B variable content estimate");
     check_round_trip(75, "the old format v1 total size (pre-#54 history)");
-    check_round_trip(PIPELINE_BUILT_PAYLOAD_SIZE, "this build's format v2 packed payload size (112 + TAG_LEN)");
+    check_round_trip(PIPELINE_BUILT_PAYLOAD_SIZE, "this build's format v3 packed payload size (113 + TAG_LEN + NAME_LEN)");
     check_round_trip(88, "spec #24's ~88 B payload budget");
     check_round_trip(PIPELINE_QR_MAX_PAYLOAD_BYTES, "exact version 7 / ECC MEDIUM usable payload capacity (122 B)");
 }
@@ -1202,18 +1415,23 @@ static void test_event_id_matches_reference(void)
      * exact command/output and the header comment above for why it's a
      * faithful independent oracle. Format v2 (spec #52, sub-issue #54):
      * these changed from their pre-v2 values because TAG_0 changed from
-     * "cabinet-leaderboard" to the spec-pinned "ag-lb". */
+     * "cabinet-leaderboard" to the spec-pinned "ag-lb". Format v3 (spec
+     * #109, sub-issue #111): these changed AGAIN because pipeline_event_
+     * compute_id() (the baked-profile wrapper these vectors exercise) now
+     * folds PIPELINE_EVENT_NAME into a third signed tag, ["n","TEST"] --
+     * "TEST" is this host tool's own baked event name (Makefile's
+     * --event-name, shortened from "HOST TEST" -- see its own comment). */
     static const pipeline_u8 kExpectedIdA[32] = {
-        0xda, 0x41, 0xe3, 0x23, 0x1c, 0xbb, 0x22, 0x8d, 0xd6, 0xa6, 0x8d, 0xdd, 0x57, 0xfb, 0x54, 0xdc,
-        0x00, 0x52, 0x8d, 0x62, 0xa3, 0x59, 0x90, 0xd2, 0xef, 0x58, 0x70, 0xbc, 0x83, 0x2a, 0xa4, 0xee,
+        0x91, 0xff, 0x8d, 0xf5, 0x9c, 0x33, 0x9b, 0xf5, 0xc6, 0x43, 0x75, 0x0c, 0xdb, 0x1c, 0x7e, 0xdf,
+        0x99, 0xc4, 0x8a, 0xa9, 0xce, 0x78, 0x79, 0xa2, 0x2c, 0x9a, 0x52, 0xda, 0x7b, 0x84, 0x36, 0x2f,
     };
     static const pipeline_u8 kExpectedIdB[32] = {
-        0xef, 0x60, 0x2d, 0x3e, 0xa4, 0x85, 0xde, 0x2d, 0x1b, 0x5d, 0xa4, 0x86, 0x34, 0xc8, 0x65, 0x7d,
-        0x4f, 0x57, 0xa8, 0x37, 0x50, 0x33, 0x2d, 0x08, 0xe0, 0x27, 0xb9, 0xb1, 0x99, 0xa6, 0xe4, 0x82,
+        0xe8, 0x03, 0x85, 0xaf, 0x51, 0x8c, 0xb2, 0xa2, 0x99, 0xc9, 0x7b, 0x94, 0x73, 0xa0, 0x8b, 0x44,
+        0xc6, 0x74, 0x19, 0xab, 0x37, 0x19, 0x12, 0x65, 0x81, 0x0f, 0x9d, 0x68, 0x2d, 0xbe, 0x4c, 0x86,
     };
     static const pipeline_u8 kExpectedIdC[32] = {
-        0x10, 0xf8, 0xe9, 0x77, 0x55, 0x34, 0xca, 0x8e, 0xfd, 0xbf, 0x4c, 0x75, 0x2c, 0xda, 0xf8, 0xbe,
-        0x2f, 0x75, 0x28, 0x93, 0xc8, 0x98, 0x7d, 0x49, 0xbc, 0x0e, 0x4b, 0xb9, 0x3e, 0xb7, 0xec, 0x13,
+        0x33, 0xe6, 0x40, 0xf7, 0xc6, 0xf0, 0x20, 0x09, 0x0d, 0xaf, 0xe0, 0x5f, 0x21, 0x02, 0x34, 0x59,
+        0xdc, 0x9d, 0xbd, 0xc9, 0xf2, 0xf1, 0xd1, 0xff, 0x72, 0xed, 0x5b, 0x31, 0x7d, 0x67, 0xa8, 0x93,
     };
 
     captureA.course = 15; captureA.act = 6; captureA.coins = 100; captureA.frames = 0x01020304u; captureA.nonce16 = 0xCAFE; captureA.keyId = 0;
@@ -1223,6 +1441,45 @@ static void test_event_id_matches_reference(void)
     check_event_id(&captureA, kExpectedIdA, "event id matches nostr-tools reference (vector A)");
     check_event_id(&captureB, kExpectedIdB, "event id matches nostr-tools reference (vector B)");
     check_event_id(&captureC, kExpectedIdC, "event id matches nostr-tools reference (all-zero vector C)");
+}
+
+/*
+ * Event name is signed content: changing ONLY the name changes `id` (spec
+ * #109, sub-issue #111's own acceptance criterion, stated directly rather
+ * than only proven transitively through the re-pinned oracle vectors above).
+ * Uses pipeline_event_serialize_from_fields()/pipeline_event_compute_id_
+ * from_fields() (the generic, non-baked-profile forms) so pubkey/createdAt/
+ * tag1/capture can be held IDENTICAL across two calls while only name
+ * varies -- isolating the one field under test the way check_event_id()
+ * above (which always uses this build's single baked PIPELINE_EVENT_NAME)
+ * cannot.
+ */
+static void test_event_name_change_changes_id(void)
+{
+    static const pipeline_u8 pubkey[PIPELINE_FMT_SIZE_PUBKEY] = PIPELINE_EVENT_PUBKEY_BYTES;
+    static const char tag1[] = "sm64";
+    static const char nameA[] = "ALPHA";
+    static const char nameB[] = "BETA";
+    StarCapture capture;
+    pipeline_u8 idA[PIPELINE_EVENT_ID_SIZE];
+    pipeline_u8 idB[PIPELINE_EVENT_ID_SIZE];
+    pipeline_u8 idARepeat[PIPELINE_EVENT_ID_SIZE];
+
+    capture.course = 15; capture.act = 6; capture.coins = 100; capture.frames = 0x01020304u;
+    capture.nonce16 = 0xCAFE; capture.keyId = 0;
+
+    pipeline_event_compute_id_from_fields(pubkey, 1700000000u, tag1, (pipeline_u32)(sizeof(tag1) - 1),
+                                           nameA, (pipeline_u32)(sizeof(nameA) - 1), &capture, idA);
+    pipeline_event_compute_id_from_fields(pubkey, 1700000000u, tag1, (pipeline_u32)(sizeof(tag1) - 1),
+                                           nameB, (pipeline_u32)(sizeof(nameB) - 1), &capture, idB);
+    pipeline_event_compute_id_from_fields(pubkey, 1700000000u, tag1, (pipeline_u32)(sizeof(tag1) - 1),
+                                           nameA, (pipeline_u32)(sizeof(nameA) - 1), &capture, idARepeat);
+
+    check(memcmp(idA, idB, PIPELINE_EVENT_ID_SIZE) != 0,
+          "changing ONLY the event name (pubkey/createdAt/tag/capture held fixed) changes the signed id");
+    check(memcmp(idA, idARepeat, PIPELINE_EVENT_ID_SIZE) == 0,
+          "recomputing the id with the SAME name (and everything else fixed) reproduces the same id "
+          "(sanity check on the differential comparison above)");
 }
 
 /*
@@ -1251,14 +1508,17 @@ static void test_content_escaping_path(void)
      * 8064/the two t tags) -- cross-checked byte-for-byte against
      * JSON.stringify([0,pubkey,created_at,kind,tags,content]) via Node, the
      * same expression nostr-tools' getEventHash() evaluates (see
-     * tools/reference_event_id.js). Pinning the whole 205-byte buffer, not
-     * just a substring, proves the prefix/field ordering/escaping directly
-     * rather than only through the opaque id in the test above. Format v2
-     * (spec #52, sub-issue #54): TAG_0 changed from "cabinet-leaderboard"
-     * to the spec-pinned "ag-lb" (205 B, was 219 B pre-v2). */
+     * tools/reference_event_id.js). Pinning the whole buffer, not just a
+     * substring, proves the prefix/field ordering/escaping directly rather
+     * than only through the opaque id in the test above. Format v2 (spec
+     * #52, sub-issue #54): TAG_0 changed from "cabinet-leaderboard" to the
+     * spec-pinned "ag-lb" (205 B, was 219 B pre-v2). Format v3 (spec #109,
+     * sub-issue #111): a third tag, ["n","TEST"], is now appended after the
+     * two "t" tags -- "TEST" is this host tool's own baked event name (218 B,
+     * was 205 B pre-#111). */
     const char *expectedSerialized =
         "[0,\"f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9\","
-        "1700000000,8064,[[\"t\",\"ag-lb\"],[\"t\",\"sm64\"]],"
+        "1700000000,8064,[[\"t\",\"ag-lb\"],[\"t\",\"sm64\"],[\"n\",\"TEST\"]],"
         "\"{\\\"course\\\":15,\\\"act\\\":6,\\\"coins\\\":100,\\\"frames\\\":16909060,\\\"nonce\\\":51966,\\\"keyId\\\":0}\"]";
 
     capture.course = 15; capture.act = 6; capture.coins = 100; capture.frames = 0x01020304u; capture.nonce16 = 0xCAFE; capture.keyId = 0;
@@ -1543,6 +1803,82 @@ static void test_capture_build_known_answer(void)
 
     check(capture.nonce16 == PIPELINE_TEST_CAPTURE_EXPECTED_NONCE16,
           "pipeline_capture_build's nonce16 matches the independent Python-hashlib known-answer vector (0xDB3B)");
+}
+
+static void test_select_frames_real_course_elapsed(void)
+{
+    /* Real course (courseNum != PIPELINE_COURSE_NONE): elapsed-since-entry,
+     * globalTimer - courseStartFrame. starIndex is irrelevant for this
+     * case (unused by #112's two cases; #113 branches on it only when
+     * courseNum == PIPELINE_COURSE_NONE). */
+    pipeline_u32 frames = pipeline_select_frames((pipeline_u8) 9 /* some real course */,
+                                                  (pipeline_u8) 0,
+                                                  (pipeline_u32) 5000,
+                                                  (pipeline_u32) 4700);
+
+    check(frames == 300, "pipeline_select_frames: real course reports elapsed-since-control-gain frames (300)");
+}
+
+static void test_select_frames_real_course_at_entry_is_zero(void)
+{
+    /* Grabbed on the very frame control was gained: elapsed is legitimately
+     * 0 here (a grab a frame later is > 0, per the spec's sentinel-safety
+     * argument -- this case alone doesn't collide with the "no in-course
+     * time" sentinel because it can never occur for a real grab). */
+    pipeline_u32 frames = pipeline_select_frames((pipeline_u8) 1, (pipeline_u8) 0,
+                                                  (pipeline_u32) 1000, (pipeline_u32) 1000);
+
+    check(frames == 0, "pipeline_select_frames: real course at globalTimer == courseStartFrame reports 0");
+}
+
+static void test_select_frames_non_course_sentinel(void)
+{
+    /* courseNum == PIPELINE_COURSE_NONE and NOT a MIPS star index (3/4):
+     * the 0 sentinel, regardless of globalTimer/courseStartFrame. */
+    pipeline_u32 frames = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 0,
+                                                  (pipeline_u32) 99999, (pipeline_u32) 100);
+
+    check(frames == 0, "pipeline_select_frames: non-course grab (starIndex not 3/4) reports the 0 sentinel");
+}
+
+static void test_select_frames_mips_star_index_elapsed(void)
+{
+    /* #113: courseNum == PIPELINE_COURSE_NONE with starIndex 3 or 4 (MIPS
+     * stars 1 & 2, STAR_INDEX_ACT_4/5) reports elapsed-since-basement-entry
+     * -- globalTimer - courseStartFrame, reading the SAME courseStartFrame
+     * parameter the real-course branch uses (level_update.c's warp_area()
+     * re-snapshots sCourseStartFrame on the guarded LEVEL_CASTLE-area-3
+     * transition; this helper doesn't care which entry it's timing from). */
+    pipeline_u32 framesIdx3 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE,
+                                                      (pipeline_u8) PIPELINE_STAR_INDEX_ACT_4,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 4600);
+    pipeline_u32 framesIdx4 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE,
+                                                      (pipeline_u8) PIPELINE_STAR_INDEX_ACT_5,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 4600);
+
+    check(framesIdx3 == 400 && framesIdx4 == 400,
+          "pipeline_select_frames: MIPS star indices (3/4) report elapsed-since-basement-entry frames (400)");
+}
+
+static void test_select_frames_non_mips_course_less_star_index_still_sentinel(void)
+{
+    /* Guard against over-broadening the new MIPS branch: a course-less grab
+     * with a star index that is NOT 3 or 4 (e.g. a regular 1-8 act star
+     * somehow grabbed outside a course, or the 100-coin/grand-star indices)
+     * must still fall through to the 0 sentinel -- only starIndex 3/4
+     * qualifies. Includes the immediate boundary neighbors (2 and 5) of the
+     * new branch, where an off-by-one would most likely hide. */
+    pipeline_u32 framesIdx0 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 0,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 4600);
+    pipeline_u32 framesIdx2 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 2,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 4600);
+    pipeline_u32 framesIdx5 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 5,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 4600);
+    pipeline_u32 framesIdx6 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 6,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 4600);
+
+    check(framesIdx0 == 0 && framesIdx2 == 0 && framesIdx5 == 0 && framesIdx6 == 0,
+          "pipeline_select_frames: course-less non-MIPS star indices (incl. boundary 2/5) still report the 0 sentinel");
 }
 
 static void test_capture_matches_host_build_event(void)
@@ -2629,14 +2965,19 @@ static void test_field_op_count_proxy(void)
  * Live wire-vector regression (spec #52 / PR #56). The vectors in
  * fixtures/live_vectors.h are REAL format-v2 QR payloads captured off a
  * device screen (generated, sig-verified, and frozen by
- * fixtures/gen_live_vectors.mjs) -- not synthesized in this tool. This pins
- * the ROM encoder AND the wire-only reconstruction seam against actual
- * on-device output, closing the "we only inferred what the decoded data
- * looks like" gap. For each vector: unpack the wire bytes exactly as the
- * read-only companion would, recompute the id from ONLY those fields, assert
- * it equals the captured event's id, and assert the wire signature verifies
- * against that recomputed id + the wire pubkey -- the whole decode-and-
- * broadcast story, proven from the QR bytes alone.
+ * fixtures/gen_live_vectors.mjs) -- not synthesized in this tool.
+ *
+ * Format v3 (spec #109, sub-issue #110) bumps FORMAT_TAG to 0x03 and
+ * pipeline_unpack() now rejects anything else, INCLUDING these frozen v2
+ * captures (0x02) -- exactly sub-issue #110's own explicit acceptance
+ * criterion ("a 0x02 payload is rejected"). These vectors can no longer be
+ * decode-and-broadcast round-tripped (their FORMAT_TAG byte is permanently
+ * 0x02), so this regression now pins the OTHER half of the same real-device
+ * story: that a genuine on-device v2 payload is cleanly and structurally
+ * rejected by the v3 decoder, never silently misread. When format v3 ships
+ * its own live captures, a companion "accepted" fixture set should replace
+ * this one; until then, this is still real on-device bytes, still a real
+ * regression guard, just pinning rejection instead of acceptance.
  */
 static void test_live_wire_vectors_round_trip(void)
 {
@@ -2648,25 +2989,16 @@ static void test_live_wire_vectors_round_trip(void)
         pipeline_u8 pubkey[PIPELINE_FMT_SIZE_PUBKEY];
         pipeline_u8 tag[PIPELINE_PACK_MAX_TAG_LEN];
         pipeline_u8 tagLen;
+        pipeline_u8 name[PIPELINE_PACK_MAX_NAME_LEN];
+        pipeline_u8 nameLen;
         pipeline_u8 sig[PIPELINE_FMT_SIZE_SIG];
-        pipeline_u8 id[PIPELINE_EVENT_ID_SIZE];
-        int rc, verifyOk;
+        int rc;
 
         rc = pipeline_unpack(vec->wire, vec->wire_len, &capture, &createdAt,
-                             pubkey, tag, &tagLen, sig);
-        check(rc == PIPELINE_UNPACK_OK,
-              "live vector: pipeline_unpack accepts the on-device wire bytes");
-
-        pipeline_event_compute_id_from_fields(pubkey, createdAt, (const char *)tag, tagLen,
-                                              &capture, id);
-        check(memcmp(id, vec->expected_id, PIPELINE_EVENT_ID_SIZE) == 0,
-              "live vector: id recomputed from ONLY the unpacked wire fields matches the "
-              "captured event's id (ROM encoder pinned to real device output)");
-
-        verifyOk = pipeline_schnorr_verify(id, pubkey, sig);
-        check(verifyOk != 0,
-              "live vector: the wire signature verifies against the wire-recomputed id and "
-              "wire pubkey (decode-and-broadcast, proven from the QR alone)");
+                             pubkey, tag, &tagLen, name, &nameLen, sig);
+        check(rc == PIPELINE_UNPACK_ERR_BAD_FORMAT_TAG,
+              "live vector: pipeline_unpack rejects the real on-device format-v2 wire bytes "
+              "(FORMAT_TAG 0x02) under the v3-only decoder -- never silently misread as v3");
     }
 }
 
@@ -2678,6 +3010,7 @@ int main(void)
     test_qr_rejects_over_budget_cleanly();
     test_sha256_known_answer_vectors();
     test_event_id_matches_reference();
+    test_event_name_change_changes_id();
     test_content_escaping_path();
     test_schnorr_signing_known_answer();
     test_schnorr_verify_internal_self_consistency();
@@ -2686,8 +3019,14 @@ int main(void)
     test_odd_y_parity_negation_branch();
     test_build_event_end_to_end();
     test_pipeline_unpack_boundary_and_rejections();
+    test_pipeline_pack_unpack_name_round_trip();
     test_live_wire_vectors_round_trip();
     test_capture_build_known_answer();
+    test_select_frames_real_course_elapsed();
+    test_select_frames_real_course_at_entry_is_zero();
+    test_select_frames_non_course_sentinel();
+    test_select_frames_mips_star_index_elapsed();
+    test_select_frames_non_mips_course_less_star_index_still_sentinel();
     test_capture_matches_host_build_event();
     test_qr_render_ascii_encoding();
     test_qr_render_layout_geometry();

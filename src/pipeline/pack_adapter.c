@@ -3,10 +3,11 @@
  * at descriptor-derived offsets, never via memcpy/struct-layout, mirroring
  * the same explicit-serialization discipline build_event.h documents for
  * the eventual real serialize stage. Format v2 (spec #52, sub-issue #54)
- * adds CREATED_AT/PUBKEY/TAG_LEN+TAG, all still one byte at a time; SIG's
- * offset now depends on the (runtime) tag length, via the
- * PIPELINE_FMT_OFF_SIG(tagLen) function-like macro format_descriptor.h
- * generates.
+ * added CREATED_AT/PUBKEY/TAG_LEN+TAG, all still one byte at a time. Format
+ * v3 (spec #109, sub-issue #110) adds a second length-prefixed field,
+ * NAME_LEN+NAME, mirroring TAG_LEN+TAG exactly; SIG's offset now depends on
+ * BOTH runtime lengths, via the PIPELINE_FMT_OFF_SIG(tagLen, nameLen)
+ * function-like macro format_descriptor.h generates.
  */
 
 #include "pack_adapter.h"
@@ -46,13 +47,20 @@ pipeline_u32 pipeline_pack(const StarCapture *capture,
                             const pipeline_u8 pubkey[PIPELINE_FMT_SIZE_PUBKEY],
                             const pipeline_u8 *tag,
                             pipeline_u8 tagLen,
+                            const pipeline_u8 *name,
+                            pipeline_u8 nameLen,
                             const pipeline_u8 sig[PIPELINE_FMT_SIZE_SIG],
                             pipeline_u8 *out)
 {
     pipeline_u32 i;
+    pipeline_u32 nameLenOff;
+    pipeline_u32 nameOff;
     pipeline_u32 sigOff;
 
     if (tagLen > PIPELINE_PACK_MAX_TAG_LEN) {
+        return 0;
+    }
+    if (nameLen > PIPELINE_PACK_MAX_NAME_LEN) {
         return 0;
     }
 
@@ -74,12 +82,19 @@ pipeline_u32 pipeline_pack(const StarCapture *capture,
         out[PIPELINE_FMT_OFF_TAG + i] = tag[i];
     }
 
-    sigOff = PIPELINE_FMT_OFF_SIG(tagLen);
+    nameLenOff = PIPELINE_FMT_OFF_NAME_LEN(tagLen);
+    write_u8(out, nameLenOff, nameLen);
+    nameOff = PIPELINE_FMT_OFF_NAME(tagLen);
+    for (i = 0; i < nameLen; i++) {
+        out[nameOff + i] = name[i];
+    }
+
+    sigOff = PIPELINE_FMT_OFF_SIG(tagLen, nameLen);
     for (i = 0; i < PIPELINE_FMT_SIZE_SIG; i++) {
         out[sigOff + i] = sig[i];
     }
 
-    return PIPELINE_FMT_TOTAL_SIZE(tagLen);
+    return PIPELINE_FMT_TOTAL_SIZE(tagLen, nameLen);
 }
 
 int pipeline_unpack(const pipeline_u8 *in,
@@ -89,21 +104,29 @@ int pipeline_unpack(const pipeline_u8 *in,
                      pipeline_u8 pubkey_out[PIPELINE_FMT_SIZE_PUBKEY],
                      pipeline_u8 tag_out[PIPELINE_PACK_MAX_TAG_LEN],
                      pipeline_u8 *tagLen_out,
+                     pipeline_u8 name_out[PIPELINE_PACK_MAX_NAME_LEN],
+                     pipeline_u8 *nameLen_out,
                      pipeline_u8 sig_out[PIPELINE_FMT_SIZE_SIG])
 {
     pipeline_u8 tagLen;
+    pipeline_u8 nameLen;
+    pipeline_u32 nameLenOff;
+    pipeline_u32 nameOff;
     pipeline_u32 expectedLen;
     pipeline_u32 sigOff;
     pipeline_u32 i;
 
-    /* At least one byte is needed to even inspect FORMAT_TAG. */
+    /* At least one byte is needed to even inspect FORMAT_TAG. A payload
+     * tagged with the old format v2 value (0x02) is rejected right here --
+     * never silently misread as v3. */
     if (inLen < 1 || in[PIPELINE_FMT_OFF_FORMAT_TAG] != (pipeline_u8)PIPELINE_FMT_TAG_VALUE) {
         return PIPELINE_UNPACK_ERR_BAD_FORMAT_TAG;
     }
 
-    /* PIPELINE_FMT_FIXED_SIZE is the minimum possible v2 payload (TAG_LEN
-     * == 0); anything shorter can't even hold a valid TAG_LEN/SIG, so it's
-     * safe to read in[PIPELINE_FMT_OFF_TAG_LEN] once past this check. */
+    /* PIPELINE_FMT_FIXED_SIZE is the minimum possible v3 payload (TAG_LEN ==
+     * NAME_LEN == 0); anything shorter can't even hold a valid TAG_LEN,
+     * NAME_LEN, and SIG, so it's safe to read in[PIPELINE_FMT_OFF_TAG_LEN]
+     * once past this check. */
     if (inLen < PIPELINE_FMT_FIXED_SIZE) {
         return PIPELINE_UNPACK_ERR_WRONG_LENGTH;
     }
@@ -113,7 +136,21 @@ int pipeline_unpack(const pipeline_u8 *in,
         return PIPELINE_UNPACK_ERR_TAG_TOO_LONG;
     }
 
-    expectedLen = PIPELINE_FMT_TOTAL_SIZE(tagLen);
+    /* NAME_LEN's own offset depends on tagLen (it comes right after TAG).
+     * Reading it here is still safe even though inLen has only been checked
+     * against PIPELINE_FMT_FIXED_SIZE (the zero-tagLen/zero-nameLen
+     * minimum): PIPELINE_FMT_FIXED_SIZE already includes NAME_LEN's own
+     * fixed byte plus the whole fixed SIG field after it, and SIG (64 B)
+     * alone comfortably exceeds PIPELINE_PACK_MAX_TAG_LEN, so the wire
+     * offset of NAME_LEN (OFF_TAG + tagLen, tagLen <= PIPELINE_PACK_MAX_TAG_LEN)
+     * can never run past inLen once inLen >= PIPELINE_FMT_FIXED_SIZE. */
+    nameLenOff = PIPELINE_FMT_OFF_NAME_LEN(tagLen);
+    nameLen = in[nameLenOff];
+    if (nameLen > PIPELINE_PACK_MAX_NAME_LEN) {
+        return PIPELINE_UNPACK_ERR_NAME_TOO_LONG;
+    }
+
+    expectedLen = PIPELINE_FMT_TOTAL_SIZE(tagLen, nameLen);
     if (inLen != expectedLen) {
         return PIPELINE_UNPACK_ERR_WRONG_LENGTH;
     }
@@ -136,7 +173,13 @@ int pipeline_unpack(const pipeline_u8 *in,
     }
     *tagLen_out = tagLen;
 
-    sigOff = PIPELINE_FMT_OFF_SIG(tagLen);
+    nameOff = PIPELINE_FMT_OFF_NAME(tagLen);
+    for (i = 0; i < nameLen; i++) {
+        name_out[i] = in[nameOff + i];
+    }
+    *nameLen_out = nameLen;
+
+    sigOff = PIPELINE_FMT_OFF_SIG(tagLen, nameLen);
     for (i = 0; i < PIPELINE_FMT_SIZE_SIG; i++) {
         sig_out[i] = in[sigOff + i];
     }

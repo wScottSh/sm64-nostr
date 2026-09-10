@@ -34,15 +34,22 @@
  * #24's "live-deterministic k=f(d,m)" decision); this is not a precomputed
  * signature, just the key material.
  *
- * Also carries PIPELINE_EVENT_NAME (spec #75, sub-issue #76): a required,
- * DISPLAY-ONLY event name for the castle HUD corner. Unlike every field
- * above, this one is deliberately OFF the wire -- see PIPELINE_EVENT_NAME's
- * own comment below for the airgapped honesty invariant this must preserve.
+ * Also carries PIPELINE_EVENT_NAME (spec #75, sub-issue #76; promoted to a
+ * signed on-wire tag by format v3, spec #109 sub-issue #111): a required
+ * event name, rendered locally by the castle HUD corner AND, as of v3,
+ * folded into the signed NIP-01 tags array (["n",<name>], event_id.c's
+ * pipeline_event_serialize()) and packed onto the wire (format_descriptor.h's
+ * NAME_LEN+NAME field, build_event.c's pack call) -- see PIPELINE_EVENT_
+ * NAME's own comment below.
  */
 
 #define PIPELINE_EVENT_CREATED_AT @CREATED_AT@u
 
-#define PIPELINE_EVENT_TAG_COUNT 2
+/* Format v3 (spec #109, sub-issue #111): three signed tags --
+ * [["t","ag-lb"],["t",TAG_1_VALUE],["n",EVENT_NAME]]. event_id.c's own
+ * compile-time tag-count guard checks this constant against its hardcoded
+ * three-tag serialization. */
+#define PIPELINE_EVENT_TAG_COUNT 3
 /* TAG_1 is the per-game tag: baked per build (from --tag, gen_event_profile.py;
  * defaults to "sm64") AND packed onto the wire (format_descriptor.h's TAG
  * field), so a companion can tell games apart without shared config. The
@@ -57,7 +64,8 @@
  * PIPELINE_EVENT_TAG_1_VALUE's actual text. */
 #define PIPELINE_EVENT_TAG_1_LEN (sizeof(PIPELINE_EVENT_TAG_1_VALUE) - 1)
 
-/* Event name (spec #75, sub-issue #76): a REQUIRED, human-readable identity
+/* Event name (spec #75, sub-issue #76; promoted to a signed on-wire tag by
+ * format v3, spec #109 sub-issue #111): a REQUIRED, human-readable identity
  * for the event this ROM was built for -- baked per build from --event-name
  * (gen_event_profile.py; no default, the Makefile's PIPELINE_EVENT_NAME
  * fails closed with a $(error) before this script ever runs, mirroring the
@@ -65,12 +73,13 @@
  * A-Z/0-9/space, and capped at 15 chars (over-length is a build FATAL, never
  * a silent truncation) -- see gen_event_profile.py's normalize_event_name().
  *
- * AIRGAPPED HONESTY INVARIANT: this value is DISPLAY-ONLY. It is rendered
- * locally by the castle HUD corner (render_hud) and is NOT, and must never
- * be, sourced by build_event()'s pack stage -- it never appears in the
- * packed QR payload or the signed NIP-01 event. Unlike PIPELINE_EVENT_TAG_1_
- * VALUE above (which IS on the wire), do not add this macro to any
- * src/pipeline/* pack/unpack path.
+ * ON-WIRE, SIGNED (format v3): this value is rendered locally by the castle
+ * HUD corner (render_hud) AND sourced by build_event() -- event_id.c's
+ * pipeline_event_serialize() folds it into the signed NIP-01 tags array as
+ * ["n",<name>] (so `id` commits to it), and build_event.c's pack call packs
+ * it onto the wire (format_descriptor.h's NAME_LEN+NAME field), mirroring
+ * PIPELINE_EVENT_TAG_1_VALUE above. Format v2's "display-only, never on the
+ * wire" contract (sub-issue #76) is retired by this promotion.
  */
 #define PIPELINE_EVENT_NAME "@EVENT_NAME@"
 /* Compile-time length of the event name (excludes the NUL terminator),

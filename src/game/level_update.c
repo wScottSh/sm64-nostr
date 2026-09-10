@@ -171,6 +171,60 @@ FORCE_BSS s16 sUnusedLevelUpdateBss;
 FORCE_BSS s8 sTimerRunning;
 s8 gNeverEnteredCastle;
 
+/* Nostr pipeline in-course frame timer (spec #109 sub-issue #112, format-v3
+ * spec.md §3.1/§3.2). Snapshotted to gGlobalTimer at the course-entry
+ * choke point in init_mario_after_warp() below, gated to
+ * WARP_TYPE_CHANGE_LEVEL. gGlobalTimer is monotonic and never resets
+ * (game_init.c), so this is simply "the frame index at course entry" --
+ * specifically the spawn frame (before set_mario_initial_action() runs),
+ * not the later frame the player actually regains control; every spawn
+ * type pays the same fade-from-star/spawn-animation delay uniformly, so
+ * this doesn't affect cross-run comparability.
+ *
+ * format-v3-spec.md's own citation of init_level()'s ACT_IDLE
+ * set_mario_action() calls (:1183/:1190 at authoring time) as THE
+ * choke point is stale -- the spec doc itself warns citations must be
+ * re-verified against the tree before editing. Ordinary course entry never
+ * reaches init_level()'s non-warping branch: touching a star/door/pipe
+ * calls initiate_warp() (level_update.c), which sets sWarpDest.type =
+ * WARP_TYPE_CHANGE_LEVEL whenever destLevel != gCurrLevelNum (i.e.
+ * entering a different LEVEL_* -- true for every real course's initial
+ * entry, main or secret/bonus incl. PSS, each living in its own LEVEL_*;
+ * note LEVEL_BOWSER_1/2/3 share COURSE_BITDW/BITFS/BITS with their lobby
+ * level, so that level->boss-arena transition resets the snapshot too --
+ * unchanged from the old init_level()-based approach, and harmless: the
+ * grand star's frames end up timed from Bowser-arena entry rather than
+ * BITDW entry, which is still an honest, non-zero in-course time). The
+ * next level's script then runs init_level(), which -- since
+ * sWarpDest.type is still WARP_TYPE_CHANGE_LEVEL, not yet cleared -- takes
+ * the *warping* branch (warp_level() -> init_mario_after_warp()), never
+ * the ACT_IDLE branch. init_level()'s non-warping ACT_IDLE branch is
+ * reachable only for the very first boot-to-menu load and demo/attract
+ * playback's initial level, both of which land in COURSE_NONE (castle
+ * grounds), never a real course -- so no snapshot is needed there.
+ *
+ * init_mario_after_warp() is ALSO the shared spawn point for intra-level
+ * warps (WARP_TYPE_CHANGE_AREA / WARP_TYPE_SAME_AREA, reached via
+ * warp_area() rather than warp_level()) -- e.g. a multi-area course's own
+ * internal area transitions. The gate on WARP_TYPE_CHANGE_LEVEL
+ * specifically (not just "any warp reaches init_mario_after_warp") is what
+ * keeps a multi-area course's intra-course area changes from resetting
+ * this snapshot, satisfying that requirement without needing a separate
+ * warp_area() hook -- except for one strictly-guarded case: the
+ * LEVEL_CASTLE-area-3 (basement/MIPS-room) re-snapshot added in warp_area()
+ * itself (spec #109 sub-issue #113), which intentionally reuses this SAME
+ * storage for the MIPS-star timing case. */
+static u32 sCourseStartFrame;
+
+/* Read-only accessor for the game glue at interact_star_or_key
+ * (src/game/interaction.c, spec #109 sub-issue #112) -- sCourseStartFrame
+ * stays file-static (matching sTimerRunning/sWarpDest's own
+ * discipline in this file); interaction.c must not reach into this TU's
+ * BSS directly. */
+u32 pipeline_get_course_start_frame(void) {
+    return sCourseStartFrame;
+}
+
 struct MarioState *gMarioState = &gMarioStates[0];
 u8 unused1[2] = { 0 };
 s8 sWarpCheckpointActive = FALSE;
@@ -387,6 +441,18 @@ void init_mario_after_warp(void) {
         }
 
         init_mario();
+
+        if (sWarpDest.type == WARP_TYPE_CHANGE_LEVEL) {
+            /* Nostr pipeline in-course frame timer's real course-entry
+             * choke point (see sCourseStartFrame's own declaration comment
+             * above for the full call-chain justification): a genuine
+             * course entry, gated to WARP_TYPE_CHANGE_LEVEL so this
+             * function's OTHER callers (warp_area(), for
+             * WARP_TYPE_CHANGE_AREA/SAME_AREA intra-level warps) never
+             * reset it mid-course. */
+            sCourseStartFrame = gGlobalTimer;
+        }
+
         set_mario_initial_action(gMarioState, marioSpawnType, sWarpDest.arg);
 
         gMarioState->interactObj = spawnNode->object;
@@ -463,6 +529,30 @@ void init_mario_after_warp(void) {
 void warp_area(void) {
     if (sWarpDest.type != WARP_TYPE_NOT_WARPING) {
         if (sWarpDest.type == WARP_TYPE_CHANGE_AREA) {
+            /* Nostr pipeline MIPS/basement-room frame timer (spec #109
+             * sub-issue #113, format-v3-spec.md §3.4). Basement entry
+             * (LEVEL_CASTLE area 3, levels/castle_inside/script.c's
+             * AREA(3, ...)) is an intra-castle area change -- gCurrLevelNum
+             * doesn't change, so initiate_warp() sets WARP_TYPE_CHANGE_AREA,
+             * not WARP_TYPE_CHANGE_LEVEL, and init_mario_after_warp()'s own
+             * sCourseStartFrame snapshot (gated to WARP_TYPE_CHANGE_LEVEL,
+             * see that snapshot's declaration comment above) never fires
+             * for it. This is the ONLY place this file snapshots on a
+             * WARP_TYPE_CHANGE_AREA transition, and it is strictly guarded
+             * to gCurrLevelNum == LEVEL_CASTLE && sWarpDest.areaIdx == 3 (the
+             * destination area, read before load_area()/init_mario_after_warp()
+             * clear sWarpDest) so no other intra-level area change -- e.g. a
+             * multi-area main course's own internal transitions -- ever
+             * resets an in-course timer mid-run. sCourseStartFrame is
+             * deliberately reused (not a second static) per the spec's own
+             * pseudo-code: the MIPS branch in pipeline_select_frames()
+             * (src/pipeline/capture.c) reads it through the SAME
+             * pipeline_get_course_start_frame() accessor the real-course
+             * branch uses. */
+            if (gCurrLevelNum == LEVEL_CASTLE && sWarpDest.areaIdx == 3) {
+                sCourseStartFrame = gGlobalTimer;
+            }
+
             level_control_timer(TIMER_CONTROL_HIDE);
             unload_mario_area();
             load_area(sWarpDest.areaIdx);

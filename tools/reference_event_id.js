@@ -45,13 +45,19 @@
  * constant "ag-lb" (was "cabinet-leaderboard" pre-v2) -- see
  * src/pipeline/event_id.h's PIPELINE_EVENT_TAG0_VALUE (its single source)
  * and docs/adr/0001. TAG_1 ("sm64", the per-game tag) is unchanged.
+ *
+ * Format v3 (spec #109, sub-issue #111): a third tag, ["n","TEST"], is now
+ * appended -- "TEST" is the exact --event-name tools/pipeline_test/Makefile
+ * bakes into this host tool's generated event_profile.h (PIPELINE_EVENT_NAME),
+ * shortened from the pre-#111 "HOST TEST" to fit the per-game tag + event
+ * name inside the single-QR-symbol budget (see the Makefile's own comment).
  */
 const { getEventHash } = require('nostr-tools');
 
 const PUBKEY_HEX = 'f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9';
 const CREATED_AT = 1700000000;
 const KIND = 8064;
-const TAGS = [['t', 'ag-lb'], ['t', 'sm64']];
+const TAGS = [['t', 'ag-lb'], ['t', 'sm64'], ['n', 'TEST']];
 
 function makeEvent(course, act, coins, frames, nonce, keyId) {
   const content = JSON.stringify({ course, act, coins, frames, nonce, keyId });

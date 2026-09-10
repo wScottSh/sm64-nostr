@@ -1,6 +1,6 @@
 {
-  "_comment": "Machine-readable format descriptor for the packed QR payload (spec #52, sub-issue #54, format v2). Single source of truth: tools/gen_format_descriptor.py renders this into a C header consumed identically by the ROM pack adapter (src/pipeline/pack_adapter.c) and the host unpack adapter (tools/pipeline_test), so the two can never disagree on the wire layout. Format v2 (FORMAT_TAG 0x02) makes the payload self-contained (ADR-0001/ADR-0002): it adds CREATED_AT (u32 BE), PUBKEY (32 B x-only), and a length-prefixed per-game TAG (TAG_LEN 0..10, ASCII) ahead of the existing SIG. `id` is never packed -- the companion recomputes it. Total size is fixed at 112 B plus TAG_LEN (112-122 B), which is why TAG is the one variable-length field this descriptor (and its generator) supports: TAG's actual length is only known at runtime from TAG_LEN, so fields after it (SIG) are addressed relative to TAG_LEN rather than at a fixed compile-time offset.",
-  "format_tag": 2,
+  "_comment": "Machine-readable format descriptor for the packed QR payload (spec #109, sub-issue #110, format v3; supersedes format v2 from spec #52, sub-issue #54). Single source of truth: tools/gen_format_descriptor.py renders this into a C header consumed identically by the ROM pack adapter (src/pipeline/pack_adapter.c) and the host unpack adapter (tools/pipeline_test), so the two can never disagree on the wire layout. Format v3 (FORMAT_TAG 0x03) adds a second length-prefixed variable-length field, NAME_LEN/NAME (mirroring TAG_LEN/TAG), carrying the signed event-name tag value, ahead of the existing SIG. No other field widths change from v2, and `id` is still never packed -- the companion recomputes it. gen_format_descriptor.py now supports N variable-length fields in sequence (removing v2's at-most-one hard-fail): TAG's start offset is fixed, but NAME's start offset depends on TAG's runtime length (TAG_LEN), and SIG's start offset depends on both TAG_LEN and NAME_LEN -- see PIPELINE_FMT_OFF_SIG(tagLen, nameLen) in the generated header.",
+  "format_tag": 3,
   "fields": [
     { "name": "FORMAT_TAG", "size": 1 },
     { "name": "COURSE",     "size": 1 },
@@ -13,6 +13,8 @@
     { "name": "PUBKEY",     "size": 32 },
     { "name": "TAG_LEN",    "size": 1 },
     { "name": "TAG",        "var_len": true, "len_field": "TAG_LEN", "max_size": 10 },
+    { "name": "NAME_LEN",   "size": 1 },
+    { "name": "NAME",       "var_len": true, "len_field": "NAME_LEN", "max_size": 15 },
     { "name": "SIG",        "size": 64 }
   ]
 }

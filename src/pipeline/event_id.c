@@ -20,12 +20,15 @@
 #include "event_profile.h"
 #include "sha256.h"
 
-/* Compile-time check that the two-tag shape hardcoded into
+/* Compile-time check that the three-tag shape hardcoded into
  * pipeline_event_serialize() below still matches the generated event
  * profile's own tag count. If event_profile.h.in ever grows/shrinks the
  * tag list, this line fails to compile (negative array size) instead of
- * silently serializing a mismatched event. */
-typedef char pipeline_event_id_tag_count_check[(PIPELINE_EVENT_TAG_COUNT == 2) ? 1 : -1];
+ * silently serializing a mismatched event. Format v3 (spec #109, sub-issue
+ * #111) adds the third tag, ["n","<EVENT NAME>"], carrying the promoted
+ * PIPELINE_EVENT_NAME onto the signed serialization -- see
+ * pipeline_event_serialize_from_fields()'s own comment below. */
+typedef char pipeline_event_id_tag_count_check[(PIPELINE_EVENT_TAG_COUNT == 3) ? 1 : -1];
 
 static pipeline_u32 append_str(pipeline_u8 *out, pipeline_u32 offset, pipeline_u32 cap, const char *s)
 {
@@ -142,6 +145,8 @@ pipeline_u32 pipeline_event_serialize_from_fields(const pipeline_u8 pubkey[PIPEL
                                                    pipeline_u32 createdAt,
                                                    const char *tag1,
                                                    pipeline_u32 tag1Len,
+                                                   const char *name,
+                                                   pipeline_u32 nameLen,
                                                    const StarCapture *capture,
                                                    pipeline_u8 out[PIPELINE_EVENT_SERIALIZED_MAX])
 {
@@ -170,6 +175,21 @@ pipeline_u32 pipeline_event_serialize_from_fields(const pipeline_u8 pubkey[PIPEL
             out[offset++] = (pipeline_u8)tag1[i];
         }
     }
+    /* Third tag, ["n","<EVENT NAME>"] (format v3, spec #109 sub-issue #111):
+     * the promoted PIPELINE_EVENT_NAME, appended in canonical position right
+     * after the two "t" tags, so it rides the hashed serialization -- the
+     * signed `id` now commits to the event name, retiring the old
+     * display-only contract. name is written raw, not JSON-escaped: its
+     * charset is fixed to A-Z/0-9/space (gen_event_profile.py's
+     * normalize_event_name(), unchanged by this sub-issue), which contains
+     * no byte that needs JSON string escaping -- the same reasoning tag1
+     * above already relies on for its own charset. */
+    offset = append_str(out, offset, cap, "\"],[\"" PIPELINE_EVENT_NAME_TAG_KEY "\",\"");
+    for (i = 0; i < nameLen; i++) {
+        if (offset < cap) {
+            out[offset++] = (pipeline_u8)name[i];
+        }
+    }
     offset = append_str(out, offset, cap, "\"]],\"");
     offset = append_json_escaped(out, offset, cap, content);
     offset = append_str(out, offset, cap, "\"]");
@@ -181,11 +201,14 @@ void pipeline_event_compute_id_from_fields(const pipeline_u8 pubkey[PIPELINE_FMT
                                             pipeline_u32 createdAt,
                                             const char *tag1,
                                             pipeline_u32 tag1Len,
+                                            const char *name,
+                                            pipeline_u32 nameLen,
                                             const StarCapture *capture,
                                             pipeline_u8 id_out[PIPELINE_EVENT_ID_SIZE])
 {
     pipeline_u8 buf[PIPELINE_EVENT_SERIALIZED_MAX];
-    pipeline_u32 len = pipeline_event_serialize_from_fields(pubkey, createdAt, tag1, tag1Len, capture, buf);
+    pipeline_u32 len = pipeline_event_serialize_from_fields(pubkey, createdAt, tag1, tag1Len, name, nameLen,
+                                                             capture, buf);
 
     pipeline_sha256(buf, len, id_out);
 }
@@ -197,6 +220,8 @@ pipeline_u32 pipeline_event_serialize(const StarCapture *capture, pipeline_u8 ou
     return pipeline_event_serialize_from_fields(kPubkeyBytes, (pipeline_u32)PIPELINE_EVENT_CREATED_AT,
                                                  PIPELINE_EVENT_TAG_1_VALUE,
                                                  (pipeline_u32)PIPELINE_EVENT_TAG_1_LEN,
+                                                 PIPELINE_EVENT_NAME,
+                                                 (pipeline_u32)PIPELINE_EVENT_NAME_LEN,
                                                  capture, out);
 }
 

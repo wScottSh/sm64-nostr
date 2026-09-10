@@ -23,9 +23,13 @@
  * v2's self-contained payload (pubkey + created_at + tag, ~112-122 B,
  * docs/adr/0002). Sub-issue #53 landed this geometry/mask change first,
  * against the OLD v1 payload (75 B), to isolate it from the wire-format
- * change; sub-issue #54 has since landed format v2 itself, so this symbol
- * now carries the 112-122 B self-contained payload (docs/qr-handoff-spec.md,
- * docs/research/qr-density-tradeoffs.md).
+ * change; sub-issue #54 then landed format v2 itself (112-122 B), and
+ * spec #109/sub-issue #110 has since landed format v3's NAME_LEN/NAME
+ * field on top (113-138 B; a near-max-length tag+name build exceeds this
+ * single-symbol ceiling, see PIPELINE_QR_MAX_PAYLOAD_BYTES's own comment
+ * below), so this symbol's geometry/mask choice is now shared by all three
+ * (docs/qr-handoff-spec.md, docs/research/qr-density-tradeoffs.md,
+ * docs/format-v3-spec.md).
  *
  * getNumDataCodewords(7, MEDIUM) = getNumRawDataModules(7)/8 -
  * ECC_CODEWORDS_PER_BLOCK[MEDIUM][7] * NUM_ERROR_CORRECTION_BLOCKS[MEDIUM][7]
@@ -77,11 +81,18 @@
 /* Usable BYTE-mode payload capacity after the mandatory 4-bit mode
  * indicator + 8-bit character count header: 122 bytes. See the derivation
  * in the file header comment above. This is the real over-budget boundary
- * payloads are rejected against. This build's own format v2 payload (116 B
- * for "sm64") sits comfortably under it; the v2 maximum (122 B at
- * TAG_LEN=10, docs/adr/0002) is the exact ceiling -- a max-length tag fills
- * the symbol with zero spare capacity, which the compile-time fits-QR guard
- * (build_event.c, `<=`) enforces. */
+ * payloads are rejected against. This build's own format v3 payload
+ * (113 B fixed spine + TAG_LEN + NAME_LEN -- e.g. 121 B for the 4-byte
+ * "sm64" tag and a 4-byte event name; the name is a required, signed,
+ * on-wire field as of sub-issue #111, never zero-length -- see
+ * build_event.h's PIPELINE_BUILT_PAYLOAD_SIZE comment) sits comfortably
+ * under it; format v3's own worst case (TAG_LEN=10, NAME_LEN=15,
+ * PIPELINE_FMT_MAX_TOTAL_SIZE = 138 B) exceeds this single-symbol ceiling
+ * -- capacity is no longer meant to bound field widths (docs/format-v3-spec.md
+ * §2, ADR-0006's multi-frame transport is the intended answer for a
+ * near-max-length tag+name build), so any ONE build's actual packed size
+ * must stay <= this ceiling, which the compile-time fits-QR guard
+ * (build_event.c, `<=`) enforces per-build. */
 #define PIPELINE_QR_MAX_PAYLOAD_BYTES 122
 
 /*

@@ -73,3 +73,36 @@ void pipeline_capture_build(pipeline_u8 course,
     out->keyId   = starIndex;
     out->nonce16 = pipeline_capture_hash_nonce(osCount, globalTimer, rawStickX, rawStickY, buttonMask);
 }
+
+pipeline_u32 pipeline_select_frames(pipeline_u8 courseNum,
+                                     pipeline_u8 starIndex,
+                                     pipeline_u32 globalTimer,
+                                     pipeline_u32 courseStartFrame)
+{
+    if (courseNum != PIPELINE_COURSE_NONE) {
+        /* Any real course (main + secret/bonus, incl. PSS). */
+        return globalTimer - courseStartFrame;
+    }
+
+    if (starIndex == (pipeline_u8) PIPELINE_STAR_INDEX_ACT_4
+        || starIndex == (pipeline_u8) PIPELINE_STAR_INDEX_ACT_5) {
+        /* MIPS stars 1 & 2 (STAR_INDEX_ACT_4/5), grabbed course-less
+         * (gCurrCourseNum == COURSE_NONE) in the castle basement: elapsed
+         * since the guarded LEVEL_CASTLE-area-3 entry snapshot (#113),
+         * read through the SAME courseStartFrame parameter the real-course
+         * branch above uses. Which entry the caller's single
+         * pipeline_get_course_start_frame() read actually reflects (course
+         * start vs. basement entry) is decided upstream, by whichever
+         * snapshot site in src/game/level_update.c most recently fired
+         * (init_mario_after_warp()'s WARP_TYPE_CHANGE_LEVEL snapshot or
+         * warp_area()'s guarded LEVEL_CASTLE-area-3 one) -- this helper
+         * itself makes no such choice; it only selects which case applies
+         * given courseNum/starIndex. */
+        return globalTimer - courseStartFrame;
+    }
+
+    /* Sentinel: no in-course time. A legitimate grab always costs > 0
+     * frames (control-gain precedes the grab), so 0 never collides with a
+     * real time. */
+    return 0;
+}
