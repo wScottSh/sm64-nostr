@@ -45,12 +45,14 @@
  * #111): gen_event_profile.py's own EVENT_NAME_MAX_LEN cap (15) already
  * keeps PIPELINE_EVENT_NAME_LEN within PIPELINE_PACK_MAX_NAME_LEN, but this
  * compile-time check catches a future drift between the two loud, not
- * silent. Both caps are independent, per-field budgets (v7-MEDIUM's own
- * pack-format limits) -- as of ADR-0006's multi-frame transport (spec
- * #115, sub-issue #117), neither has to also fit some COMBINED single-QR-
- * frame total-payload ceiling: a tag+name combination that used to overflow
- * one frame now simply produces more frames (see the base32/fragment/URL
- * section below), never a compile error. */
+ * silent. Both caps are independent, per-field budgets of the WIRE pack
+ * format itself (format_descriptor.json's own TAG/NAME max_size, PIPELINE_
+ * PACK_MAX_TAG_LEN/PIPELINE_PACK_MAX_NAME_LEN) -- as of ADR-0006's
+ * multi-frame transport (spec #115, sub-issue #117), neither also has to
+ * fit some COMBINED single-QR-frame total-payload ceiling: a tag+name
+ * combination that used to overflow one frame now simply produces more
+ * frames (see the base32/fragment/URL section below), never a compile
+ * error. */
 typedef char pipeline_build_event_tag_len_check[
     (PIPELINE_EVENT_TAG_1_LEN <= PIPELINE_PACK_MAX_TAG_LEN) ? 1 : -1];
 typedef char pipeline_build_event_name_len_check[

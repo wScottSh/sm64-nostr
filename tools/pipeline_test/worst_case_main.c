@@ -77,9 +77,14 @@ int main(void)
           "build_event compiles AND succeeds for format v3's worst-case tag+name lengths "
           "(this is the exact combination that used to fail the ROM build at compile time "
           "with 'size of array ... is negative', per spec #115 sub-issue #117)");
+    if (!buildOk) {
+        /* Don't read event.frame_count below: on failure build_event() makes
+         * no promise about out's contents (see build_event.h's own return-
+         * value contract), so event is not guaranteed initialized here. */
+        printf("1 worst-case check(s) FAILED\n");
+        return 1;
+    }
 
-    check(event.frame_count >= 1u,
-          "worst-case build reports a nonzero frame_count (a multi-frame transmission, never a compile error)");
     check(event.frame_count >= 2u,
           "worst-case build's 138 B payload, once base32-encoded/URL-wrapped, genuinely overflows a single "
           "QR frame (frame_count > 1) -- the multi-frame path is actually exercised, not accidentally N=1");

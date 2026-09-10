@@ -194,20 +194,22 @@ SECP256K1_BAKED_H      := $(INC_DIR)/secp256k1_baked.h
 # that used to overflow the now-removed single-QR-frame total-payload
 # ceiling. A SEPARATE build dir/binary from the main pipeline_test above
 # (see worst_case_main.c's own header comment for why).
-WORSTCASE_TAG          := 0123456789
-WORSTCASE_EVENT_NAME   := ABCDEFGHIJKLMNO
-WORSTCASE_BUILD_DIR    := build-worstcase
-WORSTCASE_INC_DIR      := $(WORSTCASE_BUILD_DIR)/include
-WORSTCASE_EVENT_PROFILE_H := $(WORSTCASE_INC_DIR)/event_profile.h
-WORSTCASE_FORMAT_DESCRIPTOR_H := $(WORSTCASE_INC_DIR)/format_descriptor.h
-WORSTCASE_SECP256K1_BAKED_H := $(WORSTCASE_INC_DIR)/secp256k1_baked.h
-WORSTCASE_MANIFEST     := $(WORSTCASE_BUILD_DIR)/event_profile.manifest.json
+WORSTCASE_TAG                  := 0123456789
+WORSTCASE_EVENT_NAME           := ABCDEFGHIJKLMNO
+WORSTCASE_BUILD_DIR            := build-worstcase
+WORSTCASE_INC_DIR              := $(WORSTCASE_BUILD_DIR)/include
+WORSTCASE_EVENT_PROFILE_H      := $(WORSTCASE_INC_DIR)/event_profile.h
+WORSTCASE_FORMAT_DESCRIPTOR_H  := $(WORSTCASE_INC_DIR)/format_descriptor.h
+WORSTCASE_SECP256K1_BAKED_H    := $(WORSTCASE_INC_DIR)/secp256k1_baked.h
+WORSTCASE_MANIFEST             := $(WORSTCASE_BUILD_DIR)/event_profile.manifest.json
 WORSTCASE_SRCS := worst_case_main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c \
         $(PIPELINE_DIR)/pack_adapter.c $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c \
         $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c \
         $(PIPELINE_DIR)/secp256k1.c $(PIPELINE_DIR)/schnorr_adapter.c \
         $(PIPELINE_DIR)/base32.c $(PIPELINE_DIR)/fragment.c $(PIPELINE_DIR)/url.c
-WORSTCASE_CFLAGS := -std=gnu99 -Wall -Wextra -DPIPELINE_SECP256K1_OP_COUNT -I $(SRC_DIR) -I $(PIPELINE_DIR) -I $(WORSTCASE_INC_DIR)
+# No -DPIPELINE_SECP256K1_OP_COUNT here (unlike CFLAGS above): worst_case_main.c
+# never reads the op-count proxy counters, so this binary has no use for them.
+WORSTCASE_CFLAGS := -std=gnu99 -Wall -Wextra -I $(SRC_DIR) -I $(PIPELINE_DIR) -I $(WORSTCASE_INC_DIR)
 WORSTCASE_BIN := pipeline_test_worstcase
 
 .PHONY: all test worstcase-test clean
