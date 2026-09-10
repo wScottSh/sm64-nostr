@@ -3,12 +3,18 @@
 
 /*
  * The renderer glue's PURE core (spec #24 sub-issue #32; redesigned for
- * issue #84). Consumes a finished qr_bitmap (build_event.h's
- * BuiltEvent::qr_bitmap, produced by the pipeline's qr_adapter.h -- see that
- * header for the fixed version 7 / ECC MEDIUM / fixed-mask choice, 45x45
- * modules, spec #52 sub-issue #53) and composites the on-star OVERLAY into a
- * caller-supplied plain RGBA16 pixel array: the QR flush-left, and an
- * authentic SM64 dialog box to its right (ADR-0004, "Variant A").
+ * issue #84). Consumes ONE finished qr_bitmap (build_event.h's
+ * BuiltEvent::qr_bitmaps[i], produced by the pipeline's qr_adapter.h -- see
+ * that header for the fixed version 7 / ECC MEDIUM / fixed-mask choice,
+ * 45x45 modules, spec #52 sub-issue #53). Format v3's ADR-0006 multi-frame
+ * transport (spec #115, sub-issue #116) made BuiltEvent carry frame_count +
+ * N qr_bitmaps instead of one; this renderer core is unchanged -- it still
+ * blits/composites exactly one bitmap per call, oblivious to which frame
+ * index it was handed (callers currently pass qr_bitmaps[0] only; sibling
+ * sub-issue #118 adds the real on-device cycling through all N). It
+ * composites the on-star OVERLAY into a caller-supplied plain RGBA16 pixel
+ * array: the QR flush-left, and an authentic SM64 dialog box to its right
+ * (ADR-0004, "Variant A").
  *
  * This file is deliberately pure, mirroring src/pipeline/'s own pure-core
  * convention: no MarioState, no globals, no N64 headers (no ultra64.h, no

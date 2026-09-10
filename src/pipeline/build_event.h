@@ -149,21 +149,21 @@ typedef struct StarCapture {
 #define PIPELINE_BUILT_QR_ALNUM_MAX_CHARS 178
 
 /*
- * The build-time base URL every frame's URL wraps a fragment around
- * (spec #115, sub-issue #116; mirrors PIPELINE_EVENT_NAME's own build-time
- * provisioning, event_profile.h.in's own comment): normally baked into
- * event_profile.h by gen_event_profile.py's --url-base (Makefile's
- * PIPELINE_URL_BASE, defaulted, never fail-closed like PIPELINE_EVENT_NAME --
- * a dev placeholder is always a legal build). This #ifndef default only
- * guards against a stale/hand-written event_profile.h that predates this
- * ticket; a real generated header always defines it.
+ * The build-time base URL every frame's URL wraps a fragment around (spec
+ * #115, sub-issue #116; mirrors PIPELINE_EVENT_NAME's own build-time
+ * provisioning, event_profile.h.in's own comment): baked into the
+ * generated event_profile.h by gen_event_profile.py's --url-base
+ * (Makefile's PIPELINE_URL_BASE, defaulted -- unlike PIPELINE_EVENT_NAME,
+ * PIPELINE_URL_BASE is never fail-closed; a dev placeholder host is always
+ * a legal build). Deliberately NOT given a second, hand-duplicated
+ * #ifndef fallback here: this header already #includes event_profile.h
+ * above, so PIPELINE_URL_BASE/PIPELINE_URL_BASE_LEN are always defined by
+ * the time this line is reached (the generator template always emits
+ * them, unconditionally, exactly like PIPELINE_EVENT_NAME_LEN) -- a
+ * fallback would silently paper over a stale/hand-edited generated
+ * header instead of failing loudly, the opposite of this pipeline's own
+ * "loud, not silent" convention.
  */
-#ifndef PIPELINE_URL_BASE
-#define PIPELINE_URL_BASE "SM64NOSTR.PAGES.DEV"
-#endif
-#ifndef PIPELINE_URL_BASE_LEN
-#define PIPELINE_URL_BASE_LEN (sizeof(PIPELINE_URL_BASE) - 1)
-#endif
 
 /* The fixed per-fragment character budget (header + chunk) once the fixed
  * URL prefix -- scheme + this build's own PIPELINE_URL_BASE + the path

@@ -39,7 +39,18 @@ int qr_display_n64_present(const BuiltEvent *event) {
     if (!qr_display_is_active(&sQrDisplay)) {
         qr_display_init(&sQrDisplay);
     }
-    return qr_display_present(&sQrDisplay, event->qr_bitmap);
+    /*
+     * ADR-0006 multi-frame transport (spec #115, sub-issue #116) replaced
+     * BuiltEvent's single qr_bitmap with frame_count + qr_bitmaps[N].
+     * Presenting frame 0 only, unconditionally, is a deliberate STOPGAP:
+     * on-device cycling through all N frames on a fixed cadence (the pure
+     * (frameCount, tick) -> frameIndex selector ADR-0006/spec #115 itself
+     * calls for) is sibling sub-issue #118's scope, not this one's. This
+     * keeps the ROM building and keeps today's N=1 behavior exactly
+     * unchanged (a single static frame); an N>1 build displays only its
+     * first fragment's QR until #118 lands the real cycling shell.
+     */
+    return qr_display_present(&sQrDisplay, event->qr_bitmaps[0]);
 }
 
 int qr_display_n64_is_active(void) {

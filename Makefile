@@ -622,6 +622,15 @@ $(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
 # but, like schnorr_adapter.c, only calls its one-shot pipeline_sha256()
 # wrapper and contains no C99-only constructs, so it stays in this "pure"
 # list too.
+#
+# base32.o/fragment.o/url.o (spec #115, sub-issue #116) are ADR-0006's
+# airgap transport envelope -- the base32 codec, the fragmenter, and the
+# URL wrapper build_event.c's new frame-emission loop calls, sitting behind
+# qr_adapter.c's pipeline_qr_encode_alphanumeric() exactly like pack_
+# adapter.c/qr_adapter.c already sit in front of the C99 ports above. Each
+# is hand-written C89 (no block-scoped for-loop declarations, no _Bool,
+# no <stdint.h>/<string.h>) and needs no C99, so all three stay in this
+# "pure" list rather than the PIPELINE_C99_PORT_O carve-out.
 PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/base32.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/fragment.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/url.o $(PIPELINE_C99_PORT_O)
 
 # NOTE: the generated pipeline headers (format_descriptor.h, event_profile.h,

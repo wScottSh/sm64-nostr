@@ -327,6 +327,7 @@ int qr_host_decode(const unsigned char *qrcode, unsigned char *out, int outCap, 
  * project's encoder.
  */
 static const char ALPHANUMERIC_CHARSET[45] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+#define ALPHANUMERIC_CHARSET_LEN 45
 
 // Returns the bit width of the ALPHANUMERIC character-count field at the
 // given version (9/11/13 for versions 1-9/10-26/27-40 -- mirrors
@@ -379,8 +380,8 @@ int qr_host_decode_alphanumeric(const unsigned char *qrcode, unsigned char *outT
             v = (v << 1) | bit;
             bitPos++;
         }
-        outText[i]     = (unsigned char)ALPHANUMERIC_CHARSET[v / 45];
-        outText[i + 1] = (unsigned char)ALPHANUMERIC_CHARSET[v % 45];
+        outText[i]     = (unsigned char)ALPHANUMERIC_CHARSET[v / ALPHANUMERIC_CHARSET_LEN];
+        outText[i + 1] = (unsigned char)ALPHANUMERIC_CHARSET[v % ALPHANUMERIC_CHARSET_LEN];
     }
     if (numChars % 2 != 0) {
         int b, v = 0;

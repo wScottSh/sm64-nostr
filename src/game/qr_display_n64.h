@@ -48,7 +48,11 @@
  */
 
 /*
- * qr_display_n64_present: presents event->qr_bitmap on the shared state.
+ * qr_display_n64_present: presents event->qr_bitmaps[0] on the shared
+ * state (spec #115, sub-issue #116: BuiltEvent is now frame_count + N
+ * qr_bitmaps, but this call is a deliberate frame-0-only stopgap until
+ * sibling sub-issue #118 lands the real on-device cycling shell -- see
+ * qr_display_n64.c's own comment on qr_display_n64_present()).
  * Returns nonzero on success, 0 if rejected -- see qr_display_present()
  * (already shown once this session, or already active). Callers (both
  * save-flow sites) must check the return value: on rejection there is

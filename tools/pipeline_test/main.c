@@ -193,6 +193,33 @@ static void check(int ok, const char *what)
 }
 
 /*
+ * compute_built_event_frame_url: recomputes the EXACT URL text
+ * build_event() itself encoded into event->qr_bitmaps[frameIndex], via the
+ * SAME production base32/fragment/url functions build_event() calls --
+ * never a hand-duplicated literal. Shared by every test below that needs
+ * to assert a decoded/reconstructed QR bitmap matches a specific frame's
+ * expected URL exactly (rather than re-deriving it inline at each call
+ * site). Returns the URL length; urlOut must be at least
+ * PIPELINE_BUILT_URL_MAX_LEN bytes.
+ */
+static pipeline_u32 compute_built_event_frame_url(const BuiltEvent *event, pipeline_u32 frameIndex,
+                                                    pipeline_u8 *urlOut)
+{
+    static const pipeline_u8 kUrlBase[] = PIPELINE_URL_BASE;
+    pipeline_u8 base32Text[PIPELINE_BUILT_BASE32_LEN];
+    pipeline_u32 base32Len;
+    pipeline_u8 fragment[PIPELINE_BUILT_FRAGMENT_BUDGET];
+    pipeline_u32 fragmentLen;
+
+    base32Len = pipeline_base32_encode(event->packed_payload, (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE,
+                                        base32Text, (pipeline_u32)PIPELINE_BUILT_BASE32_LEN);
+    pipeline_fragment_build(base32Text, base32Len, (pipeline_u32)PIPELINE_BUILT_FRAGMENT_BUDGET,
+                             frameIndex, (pipeline_u32)PIPELINE_BUILT_FRAME_COUNT, fragment, &fragmentLen);
+    return pipeline_url_wrap(kUrlBase, (pipeline_u32)PIPELINE_URL_BASE_LEN, fragment, fragmentLen,
+                              urlOut, (pipeline_u32)PIPELINE_BUILT_URL_MAX_LEN);
+}
+
+/*
  * reassemble_built_event: the "opened webpage" half of ADR-0006's transport
  * (spec #115, sub-issue #116), exercised at the HOST level for this host
  * tool's own baked BuiltEvent shape (PIPELINE_BUILT_FRAME_COUNT frames,
@@ -947,23 +974,12 @@ static void test_qr_render_blit_round_trips_through_decode(void)
 
     /* Frame 0 now carries a URL-wrapped fragment (ADR-0006, spec #115
      * sub-issue #116), not raw payload bytes -- recompute the expected
-     * text via the SAME production base32/fragment/url functions
-     * build_event() itself calls, never a hand-duplicated literal. */
+     * text via compute_built_event_frame_url() (the SAME production
+     * base32/fragment/url functions build_event() itself calls), never a
+     * hand-duplicated literal. */
     {
-        pipeline_u8 base32Text[PIPELINE_BUILT_BASE32_LEN];
-        pipeline_u32 base32Len;
-        pipeline_u8 fragment[PIPELINE_BUILT_FRAGMENT_BUDGET];
-        pipeline_u32 fragmentLen;
         pipeline_u8 expectedUrl[PIPELINE_BUILT_URL_MAX_LEN];
-        pipeline_u32 expectedUrlLen;
-        static const pipeline_u8 kUrlBase[] = PIPELINE_URL_BASE;
-
-        base32Len = pipeline_base32_encode(event.packed_payload, (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE,
-                                            base32Text, (pipeline_u32)PIPELINE_BUILT_BASE32_LEN);
-        pipeline_fragment_build(base32Text, base32Len, (pipeline_u32)PIPELINE_BUILT_FRAGMENT_BUDGET,
-                                 0u, (pipeline_u32)PIPELINE_BUILT_FRAME_COUNT, fragment, &fragmentLen);
-        expectedUrlLen = pipeline_url_wrap(kUrlBase, (pipeline_u32)PIPELINE_URL_BASE_LEN, fragment, fragmentLen,
-                                            expectedUrl, (pipeline_u32)PIPELINE_BUILT_URL_MAX_LEN);
+        pipeline_u32 expectedUrlLen = compute_built_event_frame_url(&event, 0u, expectedUrl);
 
         check(decodeOk != 0 && (pipeline_u32)decodedLen == expectedUrlLen &&
               memcmp(decoded, expectedUrl, (size_t)expectedUrlLen) == 0,
@@ -1128,13 +1144,8 @@ static void test_qr_render_overlay_paint(void) {
         int gridSize = pipeline_qr_get_size(event.qr_bitmaps[0]);
         int row, col;
         int decodeOk;
-        pipeline_u8 base32Text[PIPELINE_BUILT_BASE32_LEN];
-        pipeline_u32 base32Len;
-        pipeline_u8 fragment[PIPELINE_BUILT_FRAGMENT_BUDGET];
-        pipeline_u32 fragmentLen;
         pipeline_u8 expectedUrl[PIPELINE_BUILT_URL_MAX_LEN];
         pipeline_u32 expectedUrlLen;
-        static const pipeline_u8 kUrlBase[] = PIPELINE_URL_BASE;
 
         memset(reconstructed, 0, sizeof(reconstructed));
         reconstructed[0] = (pipeline_u8) gridSize;
@@ -1152,13 +1163,7 @@ static void test_qr_render_overlay_paint(void) {
             }
         }
         decodeOk = qr_host_decode_alphanumeric(reconstructed, decoded, (int) sizeof(decoded), &decodedLen);
-
-        base32Len = pipeline_base32_encode(event.packed_payload, (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE,
-                                            base32Text, (pipeline_u32)PIPELINE_BUILT_BASE32_LEN);
-        pipeline_fragment_build(base32Text, base32Len, (pipeline_u32)PIPELINE_BUILT_FRAGMENT_BUDGET,
-                                 0u, (pipeline_u32)PIPELINE_BUILT_FRAME_COUNT, fragment, &fragmentLen);
-        expectedUrlLen = pipeline_url_wrap(kUrlBase, (pipeline_u32)PIPELINE_URL_BASE_LEN, fragment, fragmentLen,
-                                            expectedUrl, (pipeline_u32)PIPELINE_BUILT_URL_MAX_LEN);
+        expectedUrlLen = compute_built_event_frame_url(&event, 0u, expectedUrl);
 
         check(decodeOk != 0 && (pipeline_u32)decodedLen == expectedUrlLen
               && memcmp(decoded, expectedUrl, (size_t)expectedUrlLen) == 0,
@@ -1612,43 +1617,50 @@ static void test_fragment_boundaries_and_header_round_trip(void)
     pipeline_u32 fragmentLen = 0;
     pipeline_u32 idx, cnt;
     int i;
+    /* Chosen so budget/header-width changes can't silently desync this
+     * test's own hand-picked boundary numbers from PIPELINE_FRAGMENT_
+     * HEADER_LEN's real value -- everything below is derived from it,
+     * never a bare literal standing in for the header width. */
+    const pipeline_u32 chunkCap = 6u;
+    const pipeline_u32 budget = (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN + chunkCap;
 
     for (i = 0; i < 16; i++) {
         base32Text[i] = (pipeline_u8)('A' + (i % 26));
     }
 
     /* N=1 boundary: a payload that exactly fills one frame's chunk budget
-     * (perFrameBudget=10 -> 4-byte header + 6-byte chunk cap) still
-     * reports N=1, not N=2. */
-    count = pipeline_fragment_count(6u, 10u);
+     * still reports N=1, not N=2. */
+    count = pipeline_fragment_count(chunkCap, budget);
     check(count == 1u, "pipeline_fragment_count: base32Len == chunkCap reports N=1 (fits exactly)");
 
     /* Just-over-one-frame boundary: one character more than the chunk
      * budget forces a second frame. */
-    count = pipeline_fragment_count(7u, 10u);
+    count = pipeline_fragment_count(chunkCap + 1u, budget);
     check(count == 2u, "pipeline_fragment_count: base32Len == chunkCap+1 reports N=2 (just over one frame)");
 
     /* The degenerate empty-payload case is still N=1. */
-    count = pipeline_fragment_count(0u, 10u);
+    count = pipeline_fragment_count(0u, budget);
     check(count == 1u, "pipeline_fragment_count: an empty payload still reports N=1 (degenerate case)");
 
     /* An invalid budget (no room for even one chunk byte after the fixed
      * header) is reported as invalid (0), not silently miscounted. */
-    count = pipeline_fragment_count(6u, 4u);
+    count = pipeline_fragment_count(chunkCap, (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN);
     check(count == 0u, "pipeline_fragment_count: a budget with no room for a chunk byte is invalid (0)");
 
     /* Build+parse round-trip at the N=2 boundary: fragment 0 gets exactly
-     * chunkCap (6) chars, fragment 1 gets the 1 leftover char; both
-     * headers parse back to their own index/count. */
-    check(pipeline_fragment_build(base32Text, 7u, 10u, 0u, 2u, fragment, &fragmentLen) != 0 &&
-          fragmentLen == 10u && memcmp(fragment + 4, base32Text, 6) == 0,
-          "pipeline_fragment_build: fragment 0 of 2 carries the first 6-char chunk after its 4-char header");
+     * chunkCap chars, fragment 1 gets the 1 leftover char; both headers
+     * parse back to their own index/count. */
+    check(pipeline_fragment_build(base32Text, chunkCap + 1u, budget, 0u, 2u, fragment, &fragmentLen) != 0 &&
+          fragmentLen == budget &&
+          memcmp(fragment + PIPELINE_FRAGMENT_HEADER_LEN, base32Text, chunkCap) == 0,
+          "pipeline_fragment_build: fragment 0 of 2 carries the first chunkCap-char chunk after its header");
     check(pipeline_fragment_parse_header(fragment, fragmentLen, &idx, &cnt) != 0 && idx == 0u && cnt == 2u,
           "pipeline_fragment_parse_header: fragment 0's header round-trips to index 0 of 2");
 
-    check(pipeline_fragment_build(base32Text, 7u, 10u, 1u, 2u, fragment, &fragmentLen) != 0 &&
-          fragmentLen == 5u && fragment[4] == base32Text[6],
-          "pipeline_fragment_build: fragment 1 of 2 carries the trailing 1-char chunk after its 4-char header");
+    check(pipeline_fragment_build(base32Text, chunkCap + 1u, budget, 1u, 2u, fragment, &fragmentLen) != 0 &&
+          fragmentLen == (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN + 1u &&
+          fragment[PIPELINE_FRAGMENT_HEADER_LEN] == base32Text[chunkCap],
+          "pipeline_fragment_build: fragment 1 of 2 carries the trailing 1-char chunk after its header");
     check(pipeline_fragment_parse_header(fragment, fragmentLen, &idx, &cnt) != 0 && idx == 1u && cnt == 2u,
           "pipeline_fragment_parse_header: fragment 1's header round-trips to index 1 of 2");
 
@@ -1661,7 +1673,7 @@ static void test_fragment_boundaries_and_header_round_trip(void)
     }
 
     /* Rejects a bad request: frameIndex >= frameCount. */
-    check(pipeline_fragment_build(base32Text, 7u, 10u, 2u, 2u, fragment, &fragmentLen) == 0,
+    check(pipeline_fragment_build(base32Text, chunkCap + 1u, budget, 2u, 2u, fragment, &fragmentLen) == 0,
           "pipeline_fragment_build rejects frameIndex >= frameCount");
 }
 

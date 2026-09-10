@@ -5,7 +5,7 @@
 
 #include "fragment.h"
 
-static void encodeBase36Field(pipeline_u32 value, pipeline_u32 fieldLen, pipeline_u8 *out)
+static void encode_base36_field(pipeline_u32 value, pipeline_u32 fieldLen, pipeline_u8 *out)
 {
     static const char alphabet[] = PIPELINE_FRAGMENT_BASE36_ALPHABET;
     pipeline_u32 i;
@@ -16,7 +16,7 @@ static void encodeBase36Field(pipeline_u32 value, pipeline_u32 fieldLen, pipelin
     }
 }
 
-static int base36Value(pipeline_u8 c)
+static int base36_value(pipeline_u8 c)
 {
     if (c >= (pipeline_u8)'0' && c <= (pipeline_u8)'9') {
         return (int)(c - (pipeline_u8)'0');
@@ -27,7 +27,7 @@ static int base36Value(pipeline_u8 c)
     return -1;
 }
 
-static int decodeBase36Field(const pipeline_u8 *in, pipeline_u32 fieldLen, pipeline_u32 *out)
+static int decode_base36_field(const pipeline_u8 *in, pipeline_u32 fieldLen, pipeline_u32 *out)
 {
     pipeline_u32 value;
     pipeline_u32 i;
@@ -35,7 +35,7 @@ static int decodeBase36Field(const pipeline_u8 *in, pipeline_u32 fieldLen, pipel
 
     value = 0;
     for (i = 0; i < fieldLen; i++) {
-        digit = base36Value(in[i]);
+        digit = base36_value(in[i]);
         if (digit < 0) {
             return 0;
         }
@@ -94,8 +94,8 @@ int pipeline_fragment_build(const pipeline_u8 *base32Text, pipeline_u32 base32Le
     }
     chunkLen = end - start;
 
-    encodeBase36Field(frameIndex, (pipeline_u32)PIPELINE_FRAGMENT_INDEX_LEN, out);
-    encodeBase36Field(frameCount, (pipeline_u32)PIPELINE_FRAGMENT_COUNT_LEN,
+    encode_base36_field(frameIndex, (pipeline_u32)PIPELINE_FRAGMENT_INDEX_LEN, out);
+    encode_base36_field(frameCount, (pipeline_u32)PIPELINE_FRAGMENT_COUNT_LEN,
                        out + PIPELINE_FRAGMENT_INDEX_LEN);
     for (i = 0; i < chunkLen; i++) {
         out[(pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN + i] = base32Text[start + i];
@@ -113,10 +113,10 @@ int pipeline_fragment_parse_header(const pipeline_u8 *fragment, pipeline_u32 fra
     if (fragmentLen < (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN) {
         return 0;
     }
-    if (!decodeBase36Field(fragment, (pipeline_u32)PIPELINE_FRAGMENT_INDEX_LEN, &idx)) {
+    if (!decode_base36_field(fragment, (pipeline_u32)PIPELINE_FRAGMENT_INDEX_LEN, &idx)) {
         return 0;
     }
-    if (!decodeBase36Field(fragment + PIPELINE_FRAGMENT_INDEX_LEN,
+    if (!decode_base36_field(fragment + PIPELINE_FRAGMENT_INDEX_LEN,
                             (pipeline_u32)PIPELINE_FRAGMENT_COUNT_LEN, &cnt)) {
         return 0;
     }

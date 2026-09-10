@@ -44,10 +44,17 @@ path where it is the best available UX.
 - **Fragments are numeric-mode packed** (path-based, all-uppercase URL), per the
   density decision locked in the capacity work. Each fragment carries enough header
   to identify its index and the total frame count so the page knows when it is done.
+  **Superseded by spec #115 sub-issue #116's own explicit build decision:** the
+  packed payload is base32-encoded (RFC 4648 §6, `A-Z2-7`), which needs the QR
+  **ALPHANUMERIC** segment mode, not numeric (base32's alphabet includes letters
+  a numeric-mode segment cannot carry). This is exactly the "full v3 wire layout"
+  detail the next bullet already scopes out of this ADR and into #102/#115 — noted
+  here, not silently overridden, per this repo's "flag ADR conflicts" convention.
 - The exact URL template and base-URL provisioning are **out of this ADR** (#101);
   the full v3 wire layout — FRAMES semantics, fragment header bits, per-frame ECC
-  under numeric mode — is **out of this ADR** (#102). This ADR fixes the *transport
-  architecture and reader model*, not the byte-level layout.
+  under the actual segment mode chosen at build time — is **out of this ADR**
+  (#102). This ADR fixes the *transport architecture and reader model*, not the
+  byte-level layout.
 
 ## The invariant is unchanged
 

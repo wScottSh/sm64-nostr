@@ -46,7 +46,12 @@
 #define PIPELINE_FRAGMENT_INDEX_LEN 2
 #define PIPELINE_FRAGMENT_COUNT_LEN 2
 #define PIPELINE_FRAGMENT_HEADER_LEN (PIPELINE_FRAGMENT_INDEX_LEN + PIPELINE_FRAGMENT_COUNT_LEN)
-#define PIPELINE_FRAGMENT_MAX_COUNT (PIPELINE_FRAGMENT_BASE36_LEN * PIPELINE_FRAGMENT_BASE36_LEN)
+/* The count field stores the actual (1-based) count value, not count-1, so
+ * the largest count 2 base36 digits can hold is 36*36 - 1 = 1295 (a value
+ * of 1296 would wrap to "00" when base36-encoded -- see fragment.c's
+ * encodeBase36Field()) -- matching this macro's own name (a MAX, not a
+ * digit-count) and this header's own comment above. */
+#define PIPELINE_FRAGMENT_MAX_COUNT (PIPELINE_FRAGMENT_BASE36_LEN * PIPELINE_FRAGMENT_BASE36_LEN - 1)
 
 /*
  * URL template: HTTPS://<base-url>/<fragment> -- a complete, valid,
@@ -60,6 +65,6 @@
 #define PIPELINE_URL_SCHEME "HTTPS://"
 #define PIPELINE_URL_SCHEME_LEN (sizeof(PIPELINE_URL_SCHEME) - 1)
 #define PIPELINE_URL_PATH_SEP "/"
-#define PIPELINE_URL_PATH_SEP_LEN 1
+#define PIPELINE_URL_PATH_SEP_LEN (sizeof(PIPELINE_URL_PATH_SEP) - 1)
 
 #endif /* PIPELINE_TRANSPORT_CONTRACT_H */
