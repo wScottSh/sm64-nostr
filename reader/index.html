@@ -50,6 +50,21 @@
         integrity="sha384-b5Ya4Bq3qCyz39m2ISh+4DxjAIljdeFwK/BsXLuj9gugaNwAcj/ia15fxNZL9Nlx"
         crossorigin="anonymous"></script>
 <script type="module">
+/*
+ * DEPLOY NOTE (spec #115, sub-issue #119): './generated/transport_contract.js'
+ * below does not exist in this directory as checked into git -- like the
+ * ROM build's own generated format_descriptor.h/event_profile.h, it is a
+ * GENERATED, gitignored artifact (reader/.gitignore), never hand-edited or
+ * committed, so it can never drift from the single-source
+ * transport_contract.h/event_id.h/format_descriptor.json it's rendered
+ * from. Before serving this directory from anywhere (a local static
+ * server, Cloudflare Pages, gh-pages, ...), run `npm run build` (or
+ * `npm run generate`) in this directory to produce it -- `npm test`'s own
+ * "pretest" script already does this before running reader/test/, so a
+ * green test run always implies this file exists, but a bare static-file
+ * deploy of reader/ with no build step will 404 on this import and the
+ * page will not function at all.
+ */
 import { reassembleFrames, base32Decode, decodeToBroadcastEvent, buildRelayMessage,
          parseFragmentHeader, stripUrl } from './reader.js';
 import { TRANSPORT_CONTRACT } from './generated/transport_contract.js';
@@ -68,7 +83,12 @@ const RELAY_URL = 'wss://relay.damus.io';
 // uppercase and has no path component, so this reader's own host,
 // uppercased, is exactly the baseUrl every scanned frame's URL was wrapped
 // around). See url.h's own pipeline_url_strip() contract, which stripUrl()
-// in reader.js ports.
+// in reader.js ports. This assumes the deployed host is reached at EXACTLY
+// PIPELINE_URL_BASE (the build-time constant baked into the cabinet's
+// frames) -- a preview/staging subdomain or a "www." prefix would compute
+// a different BASE_URL here and every frame would be silently dropped as
+// "not our prefix" (see FRAME_URL_PREFIX below); production deploys must
+// serve this page at that exact host.
 const BASE_URL = location.host.toUpperCase();
 const FRAME_URL_PREFIX = TRANSPORT_CONTRACT.PIPELINE_URL_SCHEME + BASE_URL
   + TRANSPORT_CONTRACT.PIPELINE_URL_PATH_SEP;
@@ -132,21 +152,36 @@ function renderGrid(count) {
  * identical reassembleFrames()/renderGrid() logic.
  */
 function addScannedUrl(url) {
-  const before = scannedUrls.size;
-  scannedUrls.add(url);
-  if (scannedUrls.size === before) {
+  if (scannedUrls.has(url)) {
     return false;
   }
+  scannedUrls.add(url);
   try {
     const { complete, count } = reassembleFrames([...scannedUrls], BASE_URL);
     renderGrid(count);
     return complete;
   } catch (e) {
-    // A malformed/inconsistent scan (camera misread noise, or two
-    // different broadcasts' frames mixed together) -- drop this URL and
-    // keep looking rather than crash the scan loop.
-    scannedUrls.delete(url);
-    return false;
+    // reassembleFrames() throws when the accumulated set is internally
+    // inconsistent (an interleaved-broadcast collision -- see that
+    // function's own header comment on what it can/can't detect). We
+    // cannot tell whether the JUST-scanned url or something already in
+    // scannedUrls is the stale half of that collision, so keeping the old
+    // set and only dropping the new url risks wedging permanently if the
+    // CRT has moved on to a different star's frames mid-scan. Instead,
+    // reset entirely and start a fresh accumulation seeded with only this
+    // url -- guaranteeing forward progress (a real single scan can never
+    // be internally inconsistent with itself) at the cost of restarting
+    // the grid if this really was just one garbled frame.
+    scannedUrls.clear();
+    scannedUrls.add(url);
+    document.getElementById('grid').innerHTML = ''; // force a fresh grid on the next renderGrid() call
+    try {
+      const fresh = reassembleFrames([...scannedUrls], BASE_URL);
+      renderGrid(fresh.count);
+      return fresh.complete;
+    } catch {
+      return false; // even a single fresh scan somehow doesn't parse -- keep looking
+    }
   }
 }
 

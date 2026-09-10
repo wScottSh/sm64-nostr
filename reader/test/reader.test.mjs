@@ -205,14 +205,20 @@ test('decodeToBroadcastEvent: end-to-end -- every field but `id` is the verbatim
   assert.equal(event.sig, fixture.sigHex, 'sig must be the verbatim wire value -- NEVER recomputed or signed here');
 });
 
-test('zero far-side reconstruction: reader.js imports no signing primitive and takes no key', () => {
-  // Structural guard, not just a behavioral one: assert the module source
-  // itself contains no signing-capable API surface, so a future change
-  // cannot silently reintroduce far-side reconstruction (ADR-0005/ADR-0006).
-  const readerSrc = readFileSync(path.join(__dirname, '..', 'reader.js'), 'utf8');
+test('zero far-side reconstruction: the shipped reader source contains no signing-capable API surface', () => {
+  // Structural guard, not just a behavioral one: assert every file actually
+  // shipped to the browser (reader.js, sha256.js, and index.html's own
+  // inline module script -- the three places capable of constructing or
+  // sending a broadcast) contains no signing-capable API surface, so a
+  // future change cannot silently reintroduce far-side reconstruction
+  // (ADR-0005/ADR-0006).
   const forbidden = [/schnorr\.sign/i, /\bsign\s*\(/i, /privateKey/i, /getPublicKey/i, /\bprivkey\b/i];
-  for (const pattern of forbidden) {
-    assert.ok(!pattern.test(readerSrc), `reader.js must not reference ${pattern} -- it must never be able to sign`);
+  const shippedFiles = ['reader.js', 'sha256.js', 'index.html'];
+  for (const file of shippedFiles) {
+    const src = readFileSync(path.join(__dirname, '..', file), 'utf8');
+    for (const pattern of forbidden) {
+      assert.ok(!pattern.test(src), `${file} must not reference ${pattern} -- it must never be able to sign`);
+    }
   }
 });
 

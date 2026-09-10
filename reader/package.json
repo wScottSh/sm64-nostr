@@ -5,6 +5,7 @@
   "scripts": {
     "generate": "python3 ../tools/gen_transport_contract_js.py --out generated/transport_contract.js",
     "pretest": "npm run generate",
+    "build": "npm run generate",
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {

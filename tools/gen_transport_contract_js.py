@@ -120,13 +120,25 @@ def main():
     lines.append("")
     lines.append("export const TRANSPORT_CONTRACT = Object.freeze(%s);" %
                   json.dumps(contract, indent=2))
+    # src/pipeline/format_descriptor.json's own human-facing "_comment" key
+    # (~1.5 KB of prose) carries no information reader.js's unpackPayload()
+    # needs -- it is metadata for a human reading the JSON source, not part
+    # of the field-layout contract itself (gen_format_descriptor.py's own C
+    # output already never reads it either). Strip every "_"-prefixed key
+    # before embedding, so this file -- shipped to a phone over the
+    # camera-triggered mobile connection that opened it -- carries only the
+    # bytes the reader actually needs.
+    format_descriptor_for_js = {k: v for k, v in format_descriptor.items() if not k.startswith("_")}
+
     lines.append("")
-    lines.append("// src/pipeline/format_descriptor.json, embedded verbatim (single JSON source")
-    lines.append("// shared with tools/gen_format_descriptor.py's C header -- see that generator's")
-    lines.append("// own header comment for the field-offset-derivation rules reader.js's")
-    lines.append("// unpackPayload() re-implements generically over this same field list).")
+    lines.append("// src/pipeline/format_descriptor.json's field layout, embedded verbatim (single")
+    lines.append("// JSON source shared with tools/gen_format_descriptor.py's C header -- see that")
+    lines.append("// generator's own header comment for the field-offset-derivation rules")
+    lines.append("// reader.js's unpackPayload() re-implements generically over this same field")
+    lines.append("// list). \"_\"-prefixed human-facing keys (e.g. \"_comment\") are stripped: they")
+    lines.append("// carry no wire-layout information and this file ships to a phone.")
     lines.append("export const FORMAT_DESCRIPTOR = Object.freeze(%s);" %
-                  json.dumps(format_descriptor, indent=2))
+                  json.dumps(format_descriptor_for_js, indent=2))
     lines.append("")
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

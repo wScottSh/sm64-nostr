@@ -14,15 +14,23 @@
  * derives from -- never a hand-copied literal. See that file's own header
  * comment.
  *
- * Zero far-side reconstruction (ADR-0005/ADR-0006): every value in the
- * broadcast event -- pubkey, created_at, kind, tags, content, sig -- is
- * recovered VERBATIM from the decoded wire bytes. The ONLY derived value
- * anywhere in this file is `id`, a SHA-256 checksum of bytes already fully
- * determined by the wire payload (computeEventId() below) -- never a
- * default, never a guess, never a value this code invents. No function in
- * this file accepts a private key, and no signing primitive is imported
- * anywhere in this module -- there is nothing here CAPABLE of fabricating a
- * signature, by construction.
+ * Zero far-side reconstruction (ADR-0005/ADR-0006): every PER-EVENT value
+ * in the broadcast event -- pubkey, created_at, tags[1] (the per-game tag),
+ * tags[2] (the event name), content, sig -- is recovered VERBATIM from the
+ * decoded wire bytes. `kind` and tags[0] (["t","ag-lb"]) are format-v3-pinned
+ * PUBLIC SPEC CONSTANTS, identical for every build (event_id.h's own
+ * PIPELINE_EVENT_KIND/PIPELINE_EVENT_TAG0_VALUE, ported into
+ * transport_contract.js) -- exactly like every other NIP-01 reader already
+ * has to know `kind`/tag shape out of band from the spec itself, not data
+ * this code invents per event; a build whose actual wire bytes disagree
+ * with these constants is already rejected upstream by FORMAT_TAG (this
+ * repo publishes exactly one wire format per FORMAT_TAG value). The ONLY
+ * value derived FROM this event's own bytes is `id`, a SHA-256 checksum of
+ * bytes already fully determined by the wire payload (computeEventId()
+ * below) -- never a default, never a guess, never a value this code
+ * invents. No function in this file accepts a private key, and no signing
+ * primitive is imported anywhere in this module -- there is nothing here
+ * CAPABLE of fabricating a signature, by construction.
  */
 
 import { TRANSPORT_CONTRACT, FORMAT_DESCRIPTOR } from './generated/transport_contract.js';
@@ -133,15 +141,22 @@ export function stripUrl(url, baseUrl) {
  * incomplete set is reported as incomplete, NEVER as a wrong/partial
  * reassembly (the same invariant the C reassembler enforces).
  *
- * A same-count session/batch discriminator: src/pipeline/fragment.c's
+ * A partial same-count session/batch discriminator: src/pipeline/fragment.c's
  * pipeline_fragment_build() always slices every fragment but the last to
  * the SAME chunkCap length (only the final index may be shorter -- see
- * that function's own `end = start + chunkCap, capped at base32Len`).
- * Two different broadcasts that happen to share the same frame count can
- * therefore never interleave undetected: every non-last chunk length seen
- * here must agree, and every non-last chunk must be at least as long as
- * the last one actually seen -- a mismatch throws rather than silently
- * concatenating fragments from two different events into one payload.
+ * that function's own `end = start + chunkCap, capped at base32Len`), so
+ * every non-last chunk length seen here must agree, and the last chunk can
+ * never be longer than that. This catches two interleaved broadcasts that
+ * share a frame count but differ in packed-payload length (a different
+ * tag/name length, the common case for two different runs); it can NOT
+ * catch two broadcasts that happen to share BOTH frame count AND every
+ * chunk length exactly (identical tag/name lengths, different content) --
+ * that residual case is caught downstream, not here: the reassembled
+ * bytes' signature (checked by decodeToBroadcastEvent()'s caller/the
+ * relay, never by this function) would fail to verify against a payload
+ * spliced from two different signed events. A mismatch this function DOES
+ * catch throws rather than silently concatenating fragments from two
+ * different events into one payload.
  */
 export function reassembleFrames(frameUrls, baseUrl) {
   const chunksByIndex = new Map();
