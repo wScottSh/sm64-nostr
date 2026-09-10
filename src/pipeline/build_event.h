@@ -70,18 +70,22 @@ typedef struct StarCapture {
 
 #define PIPELINE_KEY_SIZE 32
 
-/* This build's own packed payload size: format v2's wire layout supports a
- * variable-length per-game tag (0..10 B), but any ONE ROM build only ever
- * bakes and packs its own single tag (PIPELINE_EVENT_TAG_1_VALUE), whose
- * length is fixed at compile time (PIPELINE_EVENT_TAG_1_LEN) -- so
- * PIPELINE_BUILT_PAYLOAD_SIZE below is itself a fixed compile-time
- * constant for this build, derived from the SAME format_descriptor.h
- * fixed-size accounting (PIPELINE_FMT_FIXED_SIZE) pack_adapter.h's
- * pipeline_pack()/pipeline_unpack() use (via PIPELINE_FMT_TOTAL_SIZE(tagLen)),
- * never a hand-duplicated literal. A decoder handling an ARBITRARY
- * incoming payload (a different build's tag length) must instead use
- * PIPELINE_PACK_MAX_SIZE (pack_adapter.h) and the wire TAG_LEN it reads at
- * runtime -- see pipeline_unpack()'s own contract. */
+/* This build's own packed payload size: format v3's wire layout supports a
+ * variable-length per-game tag (0..10 B) and a variable-length event name
+ * (0..15 B), but any ONE ROM build only ever bakes and packs its own single
+ * tag (PIPELINE_EVENT_TAG_1_VALUE), whose length is fixed at compile time
+ * (PIPELINE_EVENT_TAG_1_LEN) -- so PIPELINE_BUILT_PAYLOAD_SIZE below is
+ * itself a fixed compile-time constant for this build, derived from the
+ * SAME format_descriptor.h fixed-size accounting (PIPELINE_FMT_FIXED_SIZE)
+ * pack_adapter.h's pipeline_pack()/pipeline_unpack() use (via
+ * PIPELINE_FMT_TOTAL_SIZE(tagLen, nameLen)), never a hand-duplicated
+ * literal. This build's own packed name is currently always zero-length
+ * (see build_event.c's own comment -- #111 threads the real baked name in),
+ * so no NAME-length term appears below yet. A decoder handling an
+ * ARBITRARY incoming payload (a different build's tag/name lengths) must
+ * instead use PIPELINE_PACK_MAX_SIZE (pack_adapter.h) and the wire
+ * TAG_LEN/NAME_LEN it reads at runtime -- see pipeline_unpack()'s own
+ * contract. */
 #define PIPELINE_BUILT_PAYLOAD_SIZE (PIPELINE_FMT_FIXED_SIZE + PIPELINE_EVENT_TAG_1_LEN)
 
 /*
@@ -105,12 +109,15 @@ typedef struct StarCapture {
 
 /*
  * The pipeline's real output (spec #24, sub-issue #30; format v2 self-
- * contained payload, spec #52 sub-issue #54): the packed payload (format
- * tag + StarCapture's fields + CREATED_AT + PUBKEY + TAG_LEN/TAG + 64-byte
- * Schnorr signature, per format_descriptor.json -- 112 + this build's own
- * tag length, e.g. 116 B for "sm64") and the QR bitmap it was encoded into
- * (qrcodegen format; read via pipeline_qr_get_size()/pipeline_qr_get_module(),
- * see qr_adapter.h).
+ * contained payload, spec #52 sub-issue #54; format v3 NAME_LEN/NAME field,
+ * spec #109 sub-issue #110): the packed payload (format tag + StarCapture's
+ * fields + CREATED_AT + PUBKEY + TAG_LEN/TAG + NAME_LEN/NAME + 64-byte
+ * Schnorr signature, per format_descriptor.json -- PIPELINE_FMT_FIXED_SIZE
+ * (113 B) + this build's own tag length, e.g. 117 B for "sm64" and a
+ * zero-length placeholder name -- see pack_adapter.c's own comment on why
+ * NAME is still packed zero-length here) and the QR bitmap it was encoded
+ * into (qrcodegen format; read via
+ * pipeline_qr_get_size()/pipeline_qr_get_module(), see qr_adapter.h).
  */
 typedef struct BuiltEvent {
     pipeline_u8 packed_payload[PIPELINE_BUILT_PAYLOAD_SIZE];
@@ -135,9 +142,10 @@ typedef struct BuiltEvent {
  * zero-nonce cases (schnorr_adapter.h) -- in which case out is left
  * entirely untouched -- or pipeline_qr_encode()'s over-budget rejection
  * (qr_adapter.h), which can only happen if PIPELINE_BUILT_PAYLOAD_SIZE ever
- * grows past PIPELINE_QR_MAX_PAYLOAD_BYTES (not with format v2's fixed
- * 112 + TAG_LEN B payload, e.g. 116 B for "sm64"); in that second case
- * out->packed_payload has ALREADY
+ * grows past PIPELINE_QR_MAX_PAYLOAD_BYTES (not with this build's current
+ * fixed 113 + TAG_LEN B payload -- e.g. 117 B for "sm64" and today's
+ * zero-length packed name, see PIPELINE_BUILT_PAYLOAD_SIZE's own comment
+ * above); in that second case out->packed_payload has ALREADY
  * been written (pipeline_pack() ran first) even though the call overall
  * failed, and out->qr_bitmap is left at qr_adapter.h's own documented
  * invalid-size sentinel (qr_bitmap[0] == 0), not a usable bitmap. Either

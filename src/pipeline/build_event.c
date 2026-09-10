@@ -54,6 +54,15 @@ int build_event(const StarCapture *capture, const pipeline_u8 key[PIPELINE_KEY_S
     pipeline_u8 sig[PIPELINE_SCHNORR_SIG_SIZE];
     static const pipeline_u8 kPubkey[PIPELINE_FMT_SIZE_PUBKEY] = PIPELINE_EVENT_PUBKEY_BYTES;
     static const pipeline_u8 kTag[] = PIPELINE_EVENT_TAG_1_VALUE;
+    /* Format v3's NAME_LEN/NAME wire field is not yet threaded through this
+     * build (spec #109, sub-issue #111 wires the real baked event name into
+     * both the signed serialization and this pack call) -- sub-issue #110
+     * only generalizes the descriptor/pack/unpack seam to carry it, so this
+     * build packs a zero-length placeholder name for now. Deliberately not
+     * the baked event-name macro (still off-wire here, per the honesty
+     * invariant sub-issue #76 established; see event_id.c's own two-tag
+     * serialization, unchanged by #110). */
+    static const pipeline_u8 kName[] = "";
     pipeline_u32 packedLen;
 
     pipeline_event_compute_id(capture, id);
@@ -63,7 +72,8 @@ int build_event(const StarCapture *capture, const pipeline_u8 key[PIPELINE_KEY_S
     }
 
     packedLen = pipeline_pack(capture, (pipeline_u32)PIPELINE_EVENT_CREATED_AT, kPubkey,
-                               kTag, (pipeline_u8)PIPELINE_EVENT_TAG_1_LEN, sig, out->packed_payload);
+                               kTag, (pipeline_u8)PIPELINE_EVENT_TAG_1_LEN,
+                               kName, 0, sig, out->packed_payload);
     if (packedLen != (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE) {
         return 0;
     }

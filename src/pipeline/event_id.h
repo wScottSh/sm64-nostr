@@ -64,7 +64,8 @@
  * `kind` and the FIRST tag (`["t","ag-lb"]`) are fixed for every build --
  * part of the published wire-format standard, never baked per-build data
  * and never packed onto the wire (the companion already knows them from
- * the spec, the moment it sees FORMAT_TAG 0x02). The per-game SECOND tag
+ * the spec, the moment it sees FORMAT_TAG -- 0x03 as of format v3, spec
+ * #109/sub-issue #110). The per-game SECOND tag
  * (event_profile.h's PIPELINE_EVENT_TAG_1_VALUE) is the only tag value
  * that varies per build. */
 #define PIPELINE_EVENT_KIND        8064
