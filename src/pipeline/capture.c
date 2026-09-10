@@ -73,3 +73,23 @@ void pipeline_capture_build(pipeline_u8 course,
     out->keyId   = starIndex;
     out->nonce16 = pipeline_capture_hash_nonce(osCount, globalTimer, rawStickX, rawStickY, buttonMask);
 }
+
+pipeline_u32 pipeline_select_frames(pipeline_u8 courseNum,
+                                     pipeline_u8 starIndex,
+                                     pipeline_u32 globalTimer,
+                                     pipeline_u32 courseStartFrame)
+{
+    /* #113 slots the MIPS star-index 3/4 (course-less basement grab)
+     * branch in here; not added by this ticket. */
+    (void)starIndex;
+
+    if (courseNum != PIPELINE_COURSE_NONE) {
+        /* Any real course (main + secret/bonus, incl. PSS). */
+        return globalTimer - courseStartFrame;
+    }
+
+    /* Sentinel: no in-course time. A legitimate grab always costs > 0
+     * frames (control-gain precedes the grab), so 0 never collides with a
+     * real time. */
+    return 0;
+}

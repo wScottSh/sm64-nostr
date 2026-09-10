@@ -64,4 +64,38 @@ void pipeline_capture_build(pipeline_u8 course,
                              pipeline_u16 buttonMask,
                              StarCapture *out);
 
+/*
+ * PIPELINE_COURSE_NONE: the pure pipeline never includes game headers
+ * (course_table.h), so this mirrors COURSE_NONE (levels/course_defines.h,
+ * enum value 0 -- the Castle Grounds course hub, i.e. "not in a real
+ * course") as a plain numeric constant local to the pipeline's own seam.
+ */
+#define PIPELINE_COURSE_NONE 0
+
+/*
+ * pipeline_select_frames: the pure frames-selection helper (format-v3
+ * spec.md §3.4, spec #109 sub-issue #112 -- the ONE new seam that spec
+ * proposes). Takes every input the grab-site branch needs as plain
+ * parameters -- courseNum, starIndex, the live globalTimer read, and the
+ * course/room-entry snapshot -- and returns the `frames` value the wire
+ * payload's FRAMES field carries. The gGlobalTimer snapshot-on-entry itself
+ * (src/game/level_update.c's sCourseStartFrame) is N64 glue and is verified
+ * on-device, not host-tested; this is the pure decision on top of it.
+ *
+ * This ticket (#112) implements exactly two cases:
+ *   - real course (courseNum != PIPELINE_COURSE_NONE): elapsed in-course
+ *     frames, globalTimer - courseStartFrame.
+ *   - everything else: the 0 sentinel ("no in-course time" -- safe, since
+ *     control-gain always precedes a grab, so a real time is always > 0).
+ *
+ * starIndex is accepted now (unused by #112's two cases) so the follow-on
+ * MIPS star-index 3/4 branch (#113, course-less basement grab timed from
+ * its own guarded snapshot) can slot into this SAME function without
+ * changing its signature or call sites.
+ */
+pipeline_u32 pipeline_select_frames(pipeline_u8 courseNum,
+                                     pipeline_u8 starIndex,
+                                     pipeline_u32 globalTimer,
+                                     pipeline_u32 courseStartFrame);
+
 #endif /* PIPELINE_CAPTURE_H */

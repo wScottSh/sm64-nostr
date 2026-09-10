@@ -1805,6 +1805,59 @@ static void test_capture_build_known_answer(void)
           "pipeline_capture_build's nonce16 matches the independent Python-hashlib known-answer vector (0xDB3B)");
 }
 
+static void test_select_frames_real_course_elapsed(void)
+{
+    /* Real course (courseNum != PIPELINE_COURSE_NONE): elapsed-since-entry,
+     * globalTimer - courseStartFrame. starIndex is irrelevant for this
+     * case (unused by #112's two cases; #113 branches on it only when
+     * courseNum == PIPELINE_COURSE_NONE). */
+    pipeline_u32 frames = pipeline_select_frames((pipeline_u8) 9 /* some real course */,
+                                                  (pipeline_u8) 0,
+                                                  (pipeline_u32) 5000,
+                                                  (pipeline_u32) 4700);
+
+    check(frames == 300, "pipeline_select_frames: real course reports elapsed-since-control-gain frames (300)");
+}
+
+static void test_select_frames_real_course_at_entry_is_zero(void)
+{
+    /* Grabbed on the very frame control was gained: elapsed is legitimately
+     * 0 here (a grab a frame later is > 0, per the spec's sentinel-safety
+     * argument -- this case alone doesn't collide with the "no in-course
+     * time" sentinel because it can never occur for a real grab). */
+    pipeline_u32 frames = pipeline_select_frames((pipeline_u8) 1, (pipeline_u8) 0,
+                                                  (pipeline_u32) 1000, (pipeline_u32) 1000);
+
+    check(frames == 0, "pipeline_select_frames: real course at globalTimer == courseStartFrame reports 0");
+}
+
+static void test_select_frames_non_course_sentinel(void)
+{
+    /* courseNum == PIPELINE_COURSE_NONE and NOT a MIPS star index (3/4):
+     * the 0 sentinel, regardless of globalTimer/courseStartFrame. */
+    pipeline_u32 frames = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 0,
+                                                  (pipeline_u32) 99999, (pipeline_u32) 100);
+
+    check(frames == 0, "pipeline_select_frames: non-course grab (starIndex not 3/4) reports the 0 sentinel");
+}
+
+static void test_select_frames_mips_star_index_is_sentinel_until_113(void)
+{
+    /* #112 does not yet implement the MIPS star-index 3/4 branch (#113) --
+     * until then, courseNum == PIPELINE_COURSE_NONE with starIndex 3 or 4
+     * still falls through to the 0 sentinel, exactly like any other
+     * course-less grab. This pins today's (pre-#113) behavior so a future
+     * regression in #113's own tests, not this one, is what should change
+     * it. */
+    pipeline_u32 framesIdx3 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 3,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 100);
+    pipeline_u32 framesIdx4 = pipeline_select_frames((pipeline_u8) PIPELINE_COURSE_NONE, (pipeline_u8) 4,
+                                                      (pipeline_u32) 5000, (pipeline_u32) 100);
+
+    check(framesIdx3 == 0 && framesIdx4 == 0,
+          "pipeline_select_frames: MIPS star indices (3/4) still report the 0 sentinel pre-#113");
+}
+
 static void test_capture_matches_host_build_event(void)
 {
     /* Path A: the SAME two calls the ROM's real capture glue at
@@ -2946,6 +2999,10 @@ int main(void)
     test_pipeline_pack_unpack_name_round_trip();
     test_live_wire_vectors_round_trip();
     test_capture_build_known_answer();
+    test_select_frames_real_course_elapsed();
+    test_select_frames_real_course_at_entry_is_zero();
+    test_select_frames_non_course_sentinel();
+    test_select_frames_mips_star_index_is_sentinel_until_113();
     test_capture_matches_host_build_event();
     test_qr_render_ascii_encoding();
     test_qr_render_layout_geometry();

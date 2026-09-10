@@ -893,22 +893,18 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
          * ROM path's structurally-identical call exactly (byte-identity by
          * construction, not by running the ROM).
          *
-         * `frames` is deliberately gGlobalTimer -- the console's own
-         * monotonic since-boot frame counter, ticking regardless of
-         * course/pause state. No per-attempt/per-course elapsed-frames
-         * counter exists today that runs for every course (the HUD's own
-         * gHudDisplay.timer -- level_update.c's sTimerRunning -- is only
-         * driven for a handful of timed courses, capped at 17999, and reset
-         * on course entry): gGlobalTimer is the best available always-on
-         * frame source for this field without adding new per-run timing
-         * infrastructure, which is outside #31's capture-glue scope. It is
-         * ALSO one of the four values #31's acceptance criteria mandates
-         * hashing into the content nonce below -- reusing the same read
-         * for both is intentional, not an oversight: nonce16 still mixes
-         * in osGetCount() (free-running CPU cycle count, unrelated to
-         * gGlobalTimer) and this frame's raw stick/buttons, so the nonce
-         * doesn't collapse to a value fully recoverable from `frames`
-         * alone even though gGlobalTimer itself is. */
+         * `frames` (format-v3 spec §3.4, spec #109 sub-issue #112) is now
+         * the pure frames-selection helper's result (pipelineFrames, set
+         * just below via pipeline_select_frames()) -- honest in-course
+         * elapsed time for a real course, or the 0 sentinel otherwise --
+         * NOT the raw gGlobalTimer this field used to carry directly under
+         * #31. gGlobalTimer is STILL read directly as the 7th arg below
+         * (nonce entropy): that read is deliberately independent of and
+         * unaffected by the `frames` value's own semantics change, so
+         * nonce16 still mixes in osGetCount() (free-running CPU cycle
+         * count, unrelated to gGlobalTimer), gGlobalTimer, and this frame's
+         * raw stick/buttons exactly as #31 specified -- only the meaning of
+         * the (now separate) `frames` field changed. */
         /* Reset the pending-event hand-off (see its declaration above)
          * unconditionally on every grab -- including a key grab, which
          * falls through the `if` below untouched -- so a key grab can never
@@ -918,6 +914,20 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
 
         if (o->behavior != segmented_to_virtual(bhvBowserKey)) {
             int pipelineBuildOk;
+            pipeline_u32 pipelineFrames;
+
+            /* format-v3 spec §3.4 (spec #109 sub-issue #112): `frames` is no
+             * longer the raw since-boot gGlobalTimer -- it is the pure
+             * frames-selection helper (src/pipeline/capture.h) applied to
+             * this grab's course/starIndex plus the in-course snapshot
+             * (src/game/level_update.c's sCourseStartFrame, read via its
+             * accessor). This ticket's two cases: a real course reports
+             * elapsed-since-course-entry; everything else (including a
+             * course-less MIPS grab, until #113 adds its basement-snapshot
+             * branch inside the SAME helper) reports the 0 sentinel. */
+            pipelineFrames = pipeline_select_frames((pipeline_u8) gCurrCourseNum, (pipeline_u8) starIndex,
+                                                      (pipeline_u32) gGlobalTimer,
+                                                      (pipeline_u32) pipeline_get_course_start_frame());
 
             /* m->numCoins is s16; StarCapture.coins is a pipeline_u8 (the
              * packed wire field is one byte). This truncates mod 256 with
@@ -928,7 +938,7 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
              * accepted quirk in this codebase for this exact field, not a
              * new one introduced here. */
             pipeline_capture_build((pipeline_u8) gCurrCourseNum, (pipeline_u8) gCurrActNum,
-                                    (pipeline_u8) m->numCoins, (pipeline_u32) gGlobalTimer,
+                                    (pipeline_u8) m->numCoins, pipelineFrames,
                                     (pipeline_u8) starIndex, (pipeline_u32) osGetCount(),
                                     (pipeline_u32) gGlobalTimer,
                                     (pipeline_u8) gPlayer1Controller->rawStickX,
