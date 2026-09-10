@@ -82,7 +82,9 @@
  * indicator + 8-bit character count header: 122 bytes. See the derivation
  * in the file header comment above. This is the real over-budget boundary
  * payloads are rejected against. This build's own format v3 payload
- * (117 B for "sm64" plus today's zero-length packed name, see
+ * (113 B fixed spine + TAG_LEN + NAME_LEN -- e.g. 121 B for the 4-byte
+ * "sm64" tag and a 4-byte event name; the name is a required, signed,
+ * on-wire field as of sub-issue #111, never zero-length -- see
  * build_event.h's PIPELINE_BUILT_PAYLOAD_SIZE comment) sits comfortably
  * under it; format v3's own worst case (TAG_LEN=10, NAME_LEN=15,
  * PIPELINE_FMT_MAX_TOTAL_SIZE = 138 B) exceeds this single-symbol ceiling
