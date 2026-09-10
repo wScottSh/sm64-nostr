@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Airgap multi-frame QR feasibility spike</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font:16px/1.4 system-ui, sans-serif; background:#111; color:#eee; }
+  header { padding:12px 16px; background:#1b1b1b; border-bottom:1px solid #333; }
+  header h1 { font-size:16px; margin:0 0 4px; }
+  header p { margin:0; color:#aaa; font-size:13px; }
+  main { padding:16px; max-width:720px; margin:0 auto; }
+  .card { background:#1b1b1b; border:1px solid #333; border-radius:10px; padding:16px; margin:0 0 16px; }
+  button { font:inherit; padding:12px 18px; border-radius:8px; border:0; background:#3b82f6; color:#fff; cursor:pointer; }
+  button.secondary { background:#374151; }
+  a { color:#60a5fa; }
+  #video { width:100%; border-radius:8px; background:#000; }
+  canvas { max-width:100%; }
+  .stat { font-variant-numeric:tabular-nums; }
+  .ok { color:#34d399; } .bad { color:#f87171; } .warn { color:#fbbf24; }
+  .frames { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .frames span { width:26px; height:26px; display:grid; place-items:center; border-radius:6px; background:#374151; font-size:12px; }
+  .frames span.got { background:#059669; }
+  pre { white-space:pre-wrap; word-break:break-all; background:#0d0d0d; padding:10px; border-radius:6px; font-size:12px; }
+  .modes a { display:inline-block; margin-right:12px; }
+  #emitCanvas { background:#fff; padding:12px; border-radius:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Airgap multi-frame QR — feasibility spike</h1>
+  <p>Tests the one make-or-break: native camera &rarr; browser &rarr; <code>getUserMedia</code> &rarr; scan an animated QR &rarr; reassemble.</p>
+</header>
+<main>
+  <div class="card modes">
+    <strong>Modes:</strong>
+    <a href="?">Scanner (open this on the PHONE)</a>
+    <a href="?emit=1">Emitter (open on a SECOND screen)</a>
+    <a href="?bootstrap=1">Bootstrap QR (make a static QR of the scanner)</a>
+  </div>
+  <div id="app"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script>
+const app = document.getElementById('app');
+const params = new URLSearchParams(location.search);
+const BASE = location.origin + location.pathname;
+
+// Frame wire format (mimics the animated-hook: every frame is a full URL).
+//   <BASE>#<seq>/<total>/<chunk>
+// A stock camera that snaps ONE frame opens <BASE> (the scanner). The scanner
+// then re-grabs the camera and collects the #<seq>/<total>/<chunk> fragments.
+function buildFrames(payload, chunkLen) {
+  const chunks = [];
+  for (let i = 0; i < payload.length; i += chunkLen) chunks.push(payload.slice(i, i + chunkLen));
+  const total = chunks.length;
+  return chunks.map((c, i) => `${BASE}#${i}/${total}/${encodeURIComponent(c)}`);
+}
+
+/* ---------------- EMITTER: animate a payload as multi-frame QR ---------------- */
+function emitter() {
+  const samplePayload =
+    "SPIKE-PAYLOAD~"+ "0123456789ABCDEF".repeat(11) + "~END"; // ~190 chars, ~4 frames
+  app.innerHTML = `
+    <div class="card">
+      <h2>Emitter (the "cabinet")</h2>
+      <label>Payload length: <span id="plen" class="stat"></span> chars &nbsp;
+        Frame size: <input id="csz" type="number" value="60" min="20" max="180" style="width:64px"> chars &nbsp;
+        Speed: <input id="spd" type="number" value="350" min="120" max="1200" style="width:72px"> ms</label>
+      <div style="margin:12px 0"><button id="restart">Apply</button></div>
+      <div style="text-align:center"><canvas id="emitCanvas"></canvas></div>
+      <p class="stat">Frame <span id="fnum">-</span> / <span id="ftot">-</span></p>
+      <details><summary>Payload</summary><pre id="pl"></pre></details>
+    </div>`;
+  const cv = document.getElementById('emitCanvas');
+  let timer = null;
+  function start() {
+    if (timer) clearInterval(timer);
+    const csz = +document.getElementById('csz').value;
+    const spd = +document.getElementById('spd').value;
+    const frames = buildFrames(samplePayload, csz);
+    document.getElementById('plen').textContent = samplePayload.length;
+    document.getElementById('ftot').textContent = frames.length;
+    document.getElementById('pl').textContent = samplePayload;
+    let i = 0;
+    const show = () => {
+      QRCode.toCanvas(cv, frames[i], { width: 320, margin: 2, errorCorrectionLevel: 'M' });
+      document.getElementById('fnum').textContent = i;
+      i = (i + 1) % frames.length;
+    };
+    show();
+    timer = setInterval(show, spd);
+  }
+  document.getElementById('restart').onclick = start;
+  start();
+}
+
+/* ---------------- BOOTSTRAP: static QR of the scanner URL ---------------- */
+function bootstrap() {
+  app.innerHTML = `
+    <div class="card">
+      <h2>Bootstrap QR</h2>
+      <p>Scan this with the <b>phone's native camera app</b>. It should open the scanner
+         (<code>${BASE}</code>) in your default browser.</p>
+      <div style="text-align:center"><canvas id="bqr"></canvas></div>
+    </div>`;
+  QRCode.toCanvas(document.getElementById('bqr'), BASE, { width: 300, margin: 2 });
+}
+
+/* ---------------- SCANNER: getUserMedia + jsQR + reassembly ---------------- */
+function scanner() {
+  app.innerHTML = `
+    <div class="card">
+      <h2>Scanner (the phone)</h2>
+      <p id="status" class="warn">Tap Start to request the camera (a user gesture is required).</p>
+      <button id="start">Start camera</button>
+      <video id="video" playsinline muted style="display:none"></video>
+      <div id="progress" style="display:none">
+        <p class="stat">Frames captured: <span id="got" class="ok">0</span> / <span id="tot">?</span>
+           &nbsp; elapsed <span id="ela">0.0</span>s</p>
+        <div class="frames" id="grid"></div>
+      </div>
+      <div id="done" style="display:none">
+        <p class="ok"><b>&#10003; Reassembled.</b> The full airgap chain worked on this device.</p>
+        <pre id="result"></pre>
+      </div>
+    </div>
+    <div class="card">
+      <p style="color:#aaa;font-size:13px">Verdict this proves on <em>your</em> phone: whether the native-camera &rarr;
+      browser handoff yields a <code>getUserMedia</code>-capable context, and whether an animated QR off a screen
+      reassembles in practice. HTTPS is required for the camera to start.</p>
+    </div>`;
+
+  const statusEl = document.getElementById('status');
+  const video = document.getElementById('video');
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const chunks = new Map();
+  let total = null, t0 = null, raf = null;
+
+  document.getElementById('start').onclick = async () => {
+    try {
+      if (!location.protocol.startsWith('https') && location.hostname !== 'localhost') {
+        statusEl.className = 'bad';
+        statusEl.textContent = 'Not HTTPS — getUserMedia will be blocked. Serve this over HTTPS (e.g. GitHub Pages).';
+        return;
+      }
+      statusEl.textContent = 'Requesting camera…';
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      video.srcObject = stream;
+      await video.play();
+      video.style.display = 'block';
+      document.getElementById('start').style.display = 'none';
+      document.getElementById('progress').style.display = 'block';
+      statusEl.className = 'ok';
+      statusEl.textContent = 'Camera live. Point it at the animated QR on the other screen.';
+      t0 = performance.now();
+      tick();
+    } catch (e) {
+      statusEl.className = 'bad';
+      statusEl.textContent = 'getUserMedia FAILED: ' + e.name + ' — ' + e.message +
+        '  (this is exactly the failure mode the spike is looking for; note the browser/OS.)';
+    }
+  };
+
+  function renderGrid() {
+    if (total == null) return;
+    const grid = document.getElementById('grid');
+    if (grid.children.length !== total) {
+      grid.innerHTML = '';
+      for (let i = 0; i < total; i++) { const s = document.createElement('span'); s.textContent = i; grid.appendChild(s); }
+      document.getElementById('tot').textContent = total;
+    }
+    for (let i = 0; i < total; i++) grid.children[i].classList.toggle('got', chunks.has(i));
+    document.getElementById('got').textContent = chunks.size;
+    document.getElementById('ela').textContent = ((performance.now() - t0) / 1000).toFixed(1);
+  }
+
+  function finish() {
+    cancelAnimationFrame(raf);
+    let out = '';
+    for (let i = 0; i < total; i++) out += decodeURIComponent(chunks.get(i));
+    document.getElementById('progress').style.display = 'none';
+    document.getElementById('done').style.display = 'block';
+    document.getElementById('result').textContent =
+      `frames: ${total}\nseconds: ${((performance.now()-t0)/1000).toFixed(1)}\n\npayload:\n` + out;
+    (video.srcObject.getTracks() || []).forEach(t => t.stop());
+  }
+
+  function tick() {
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+      if (code && code.data) {
+        const m = code.data.match(/#(\d+)\/(\d+)\/(.*)$/);
+        if (m) {
+          const seq = +m[1]; total = +m[2];
+          if (!chunks.has(seq)) chunks.set(seq, m[3]);
+          renderGrid();
+          if (chunks.size === total) return finish();
+        }
+      }
+    }
+    raf = requestAnimationFrame(tick);
+  }
+}
+
+if (params.has('emit')) emitter();
+else if (params.has('bootstrap')) bootstrap();
+else scanner();
+</script>
+</body>
+</html>
