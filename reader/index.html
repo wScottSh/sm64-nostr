@@ -46,20 +46,22 @@
   </div>
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"
+        integrity="sha384-b5Ya4Bq3qCyz39m2ISh+4DxjAIljdeFwK/BsXLuj9gugaNwAcj/ia15fxNZL9Nlx"
+        crossorigin="anonymous"></script>
 <script type="module">
-import { reassembleFrames, base32Decode, decodeToBroadcastEvent, buildRelayMessage } from './reader.js';
-import { bytesToHex } from './sha256.js';
+import { reassembleFrames, base32Decode, decodeToBroadcastEvent, buildRelayMessage,
+         parseFragmentHeader, stripUrl } from './reader.js';
+import { TRANSPORT_CONTRACT } from './generated/transport_contract.js';
 
 /*
  * Relay this reader broadcasts to (spec #115, sub-issue #119: "broadcasts
  * to a configured relay"; relay selection/verification is downstream,
- * ADR-0005, out of this ticket's scope). Overridable via ?relay= for
- * testing against a local/alternate relay without editing this file.
+ * ADR-0005, out of this ticket's scope, so this is a plain build-time
+ * constant, not user-overridable -- an overridable relay would let a
+ * crafted link redirect the broadcast).
  */
-const DEFAULT_RELAY_URL = 'wss://relay.damus.io';
-const params = new URLSearchParams(location.search);
-const relayUrl = params.get('relay') || DEFAULT_RELAY_URL;
+const RELAY_URL = 'wss://relay.damus.io';
 
 // This reader's own base URL (transport_contract.h's URL template is
 // HTTPS://<PIPELINE_URL_BASE>/<fragment> -- PIPELINE_URL_BASE is always
@@ -68,6 +70,8 @@ const relayUrl = params.get('relay') || DEFAULT_RELAY_URL;
 // around). See url.h's own pipeline_url_strip() contract, which stripUrl()
 // in reader.js ports.
 const BASE_URL = location.host.toUpperCase();
+const FRAME_URL_PREFIX = TRANSPORT_CONTRACT.PIPELINE_URL_SCHEME + BASE_URL
+  + TRANSPORT_CONTRACT.PIPELINE_URL_PATH_SEP;
 
 const statusEl = document.getElementById('status');
 const video = document.getElementById('video');
@@ -76,7 +80,142 @@ const ctx = canvas.getContext('2d', { willReadFrequently: true });
 const scannedUrls = new Set();
 let raf = null;
 
-document.getElementById('start').onclick = async () => {
+function setError(msg) {
+  statusEl.className = 'bad';
+  statusEl.textContent = msg;
+  document.getElementById('err').style.display = 'block';
+  document.getElementById('errText').textContent = msg;
+}
+
+/*
+ * scanIndex: this URL's own fragment-header index, via the SAME
+ * stripUrl()/parseFragmentHeader() the real reassembler uses -- never a
+ * hand-inlined re-parse of the wire format. Returns null for a URL that
+ * doesn't parse (camera noise, or a bootstrap open with no fragment at
+ * all), so callers can ignore it rather than crash the scan loop.
+ */
+function scanIndex(url) {
+  try {
+    return parseFragmentHeader(stripUrl(url, BASE_URL)).index;
+  } catch {
+    return null;
+  }
+}
+
+function renderGrid(count) {
+  if (!count) return;
+  const grid = document.getElementById('grid');
+  if (grid.children.length !== count) {
+    grid.innerHTML = '';
+    for (let i = 0; i < count; i++) {
+      const s = document.createElement('span');
+      s.textContent = i;
+      grid.appendChild(s);
+    }
+    document.getElementById('tot').textContent = count;
+  }
+  let got = 0;
+  for (const url of scannedUrls) {
+    const idx = scanIndex(url);
+    if (idx !== null && grid.children[idx]) {
+      grid.children[idx].classList.add('got');
+      got++;
+    }
+  }
+  document.getElementById('got').textContent = got;
+}
+
+/*
+ * addScannedUrl: records url (if it's a well-formed frame for THIS base
+ * URL) and checks for completion. Shared by the N=1 bootstrap-from-location
+ * path below and the camera scan loop's tick(), so both go through the
+ * identical reassembleFrames()/renderGrid() logic.
+ */
+function addScannedUrl(url) {
+  const before = scannedUrls.size;
+  scannedUrls.add(url);
+  if (scannedUrls.size === before) {
+    return false;
+  }
+  try {
+    const { complete, count } = reassembleFrames([...scannedUrls], BASE_URL);
+    renderGrid(count);
+    return complete;
+  } catch (e) {
+    // A malformed/inconsistent scan (camera misread noise, or two
+    // different broadcasts' frames mixed together) -- drop this URL and
+    // keep looking rather than crash the scan loop.
+    scannedUrls.delete(url);
+    return false;
+  }
+}
+
+async function broadcast(event) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(RELAY_URL);
+    const timeout = setTimeout(() => { ws.close(); reject(new Error('relay publish timed out')); }, 10000);
+    ws.onopen = () => ws.send(buildRelayMessage(event));
+    ws.onmessage = (msg) => {
+      try {
+        const parsed = JSON.parse(msg.data);
+        // NIP-01: ["OK", <event id>, <true|false>, <message>] -- a
+        // relay-assigned id match with a FALSE accepted flag is a
+        // rejection (e.g. "invalid: bad sig"), never success.
+        if (parsed[0] === 'OK' && parsed[1] === event.id) {
+          clearTimeout(timeout);
+          ws.close();
+          if (parsed[2] === true) {
+            resolve(parsed);
+          } else {
+            reject(new Error(`relay rejected the event: ${parsed[3] ?? '(no message)'}`));
+          }
+        }
+      } catch { /* not our OK frame; keep waiting */ }
+    };
+    ws.onerror = (e) => { clearTimeout(timeout); reject(e); };
+  });
+}
+
+async function finish() {
+  cancelAnimationFrame(raf);
+  (video.srcObject?.getTracks() || []).forEach((t) => t.stop());
+  document.getElementById('start').style.display = 'none';
+
+  const { complete, base32Text } = reassembleFrames([...scannedUrls], BASE_URL);
+  if (!complete) return; // shouldn't happen: callers only reach finish() once complete
+
+  const packedBytes = base32Decode(base32Text);
+  const event = decodeToBroadcastEvent(packedBytes);
+
+  document.getElementById('progress').style.display = 'none';
+  document.getElementById('done').style.display = 'block';
+  document.getElementById('result').textContent = `id: ${event.id}\n\n` + JSON.stringify(event, null, 2);
+
+  try {
+    await broadcast(event);
+    document.getElementById('result').textContent += '\n\nbroadcast OK to ' + RELAY_URL;
+  } catch (e) {
+    document.getElementById('result').textContent += '\n\nbroadcast FAILED: ' + e;
+  }
+}
+
+function tick() {
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+    if (code && code.data && code.data.startsWith(FRAME_URL_PREFIX)) {
+      if (addScannedUrl(code.data)) {
+        return finish();
+      }
+    }
+  }
+  raf = requestAnimationFrame(tick);
+}
+
+async function startCamera() {
   try {
     if (!location.protocol.startsWith('https') && location.hostname !== 'localhost') {
       setError('Not HTTPS -- getUserMedia will be blocked. Serve this over HTTPS.');
@@ -95,103 +234,35 @@ document.getElementById('start').onclick = async () => {
   } catch (e) {
     setError(`getUserMedia FAILED: ${e.name} -- ${e.message}`);
   }
-};
-
-function setError(msg) {
-  statusEl.className = 'bad';
-  statusEl.textContent = msg;
-  document.getElementById('err').style.display = 'block';
-  document.getElementById('errText').textContent = msg;
 }
 
-function renderGrid(count) {
-  if (!count) return;
-  const grid = document.getElementById('grid');
-  if (grid.children.length !== count) {
-    grid.innerHTML = '';
-    for (let i = 0; i < count; i++) {
-      const s = document.createElement('span');
-      s.textContent = i;
-      grid.appendChild(s);
-    }
-    document.getElementById('tot').textContent = count;
+document.getElementById('start').onclick = startCamera;
+
+/*
+ * ADR-0006's N=1 path: "no camera-permission prompt or active hold" --
+ * whichever single frame's URL a stock camera opened THIS page from
+ * (location.pathname) is itself the first (and, for N=1, only) fragment.
+ * Reconstruct that URL and feed it through the exact same addScannedUrl()
+ * path a camera scan would, BEFORE ever touching getUserMedia: if it
+ * alone completes the set (the common N=1 case), finish immediately with
+ * zero camera grant. For N>1 it seeds one fragment for free and the Start
+ * button (a real camera scan) is still needed for the rest. A bootstrap
+ * open with no fragment in the path (e.g. someone navigating to the bare
+ * site root) fails to parse and is silently ignored here -- the ordinary
+ * Start-camera flow still works.
+ */
+(function bootstrapFromLocation() {
+  const openedUrl = TRANSPORT_CONTRACT.PIPELINE_URL_SCHEME + BASE_URL + location.pathname;
+  if (!openedUrl.startsWith(FRAME_URL_PREFIX)) return;
+  if (addScannedUrl(openedUrl)) {
+    statusEl.className = 'ok';
+    statusEl.textContent = 'Single-frame payload -- broadcasting with no camera needed.';
+    finish();
+  } else if (scannedUrls.size > 0) {
+    statusEl.textContent = 'Captured 1 frame from this link. Tap Start to scan the rest.';
+    document.getElementById('progress').style.display = 'block';
   }
-  let got = 0;
-  for (const url of scannedUrls) {
-    try {
-      const fragment = url.slice(('HTTPS://' + BASE_URL + '/').length);
-      const idx = parseInt(fragment.slice(0, 2), 36);
-      if (grid.children[idx]) {
-        grid.children[idx].classList.add('got');
-        got++;
-      }
-    } catch { /* ignore an unparsable scan; the camera will just keep looking */ }
-  }
-  document.getElementById('got').textContent = got;
-}
-
-async function broadcast(event) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(relayUrl);
-    const timeout = setTimeout(() => { ws.close(); reject(new Error('relay publish timed out')); }, 10000);
-    ws.onopen = () => ws.send(buildRelayMessage(event));
-    ws.onmessage = (msg) => {
-      try {
-        const parsed = JSON.parse(msg.data);
-        if (parsed[0] === 'OK' && parsed[1] === event.id) {
-          clearTimeout(timeout);
-          ws.close();
-          resolve(parsed);
-        }
-      } catch { /* not our OK frame; keep waiting */ }
-    };
-    ws.onerror = (e) => { clearTimeout(timeout); reject(e); };
-  });
-}
-
-async function finish() {
-  cancelAnimationFrame(raf);
-  (video.srcObject?.getTracks() || []).forEach((t) => t.stop());
-
-  const { complete, base32Text } = reassembleFrames([...scannedUrls], BASE_URL);
-  if (!complete) return; // shouldn't happen: tick() only calls finish() once complete
-
-  const packedBytes = base32Decode(base32Text);
-  const event = decodeToBroadcastEvent(packedBytes);
-
-  document.getElementById('progress').style.display = 'none';
-  document.getElementById('done').style.display = 'block';
-  document.getElementById('result').textContent = `id: ${event.id}\n\n` + JSON.stringify(event, null, 2);
-
-  try {
-    await broadcast(event);
-    document.getElementById('result').textContent += '\n\nbroadcast OK to ' + relayUrl;
-  } catch (e) {
-    document.getElementById('result').textContent += '\n\nbroadcast FAILED: ' + e;
-  }
-}
-
-function tick() {
-  if (video.readyState === video.HAVE_ENOUGH_DATA) {
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
-    if (code && code.data && code.data.startsWith('HTTPS://' + BASE_URL + '/')) {
-      const before = scannedUrls.size;
-      scannedUrls.add(code.data);
-      if (scannedUrls.size !== before) {
-        const { complete, count } = reassembleFrames([...scannedUrls], BASE_URL);
-        renderGrid(count);
-        if (complete) {
-          return finish();
-        }
-      }
-    }
-  }
-  raf = requestAnimationFrame(tick);
-}
+})();
 </script>
 </body>
 </html>

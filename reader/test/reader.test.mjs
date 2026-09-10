@@ -120,6 +120,24 @@ test('reassembleFrames: a missing fragment reports incomplete, never a wrong/par
   assert.equal(result.complete, false);
 });
 
+test('reassembleFrames: rejects fragments from two different broadcasts with mismatched chunk lengths', () => {
+  // Same frame count (3), same base URL -- but frame 0's chunk is 5 chars
+  // and frame 1's (also non-last) chunk is 6, which src/pipeline/fragment.c's
+  // pipeline_fragment_build() can never produce for a single build_event()
+  // call (every non-last fragment shares the same chunkCap length). This is
+  // the "two different broadcasts happened to share a frame count" case
+  // reassembleFrames must refuse to silently splice together.
+  const prefix = `HTTPS://${fixture.urlBase}/`;
+  const frames = [`${prefix}0003AAAAA`, `${prefix}0103BBBBBB`, `${prefix}0203C`];
+  assert.throws(() => reassembleFrames(frames, fixture.urlBase), /inconsistent non-last chunk length/);
+});
+
+test('reassembleFrames: rejects a last fragment longer than the shared non-last chunk length', () => {
+  const prefix = `HTTPS://${fixture.urlBase}/`;
+  const frames = [`${prefix}0002AAAAA`, `${prefix}0102BBBBBBBBBB`]; // last (index 1) longer than index 0
+  assert.throws(() => reassembleFrames(frames, fixture.urlBase), /last fragment is longer/);
+});
+
 test('reassembleFrames: a duplicated frame is harmless (idempotent by index)', () => {
   const withDup = [...fixture.frames, fixture.frames[0]];
   const { complete, base32Text } = reassembleFrames(withDup, fixture.urlBase);
@@ -129,10 +147,16 @@ test('reassembleFrames: a duplicated frame is harmless (idempotent by index)', (
 
 // --- Decode the reassembled bytes via the shared descriptor. ---
 
-let unpacked;
-test('unpackPayload: recovers every wire field verbatim, matching the fixture exactly', () => {
+// Reassembly is already covered above; every test past this point that
+// needs the reassembled+unpacked payload recomputes it fresh (no shared
+// mutable state / hidden test-order dependency).
+function reassembleAndUnpack() {
   const bytes = base32Decode(reassembleFrames(fixture.frames, fixture.urlBase).base32Text);
-  unpacked = unpackPayload(bytes);
+  return unpackPayload(bytes);
+}
+
+test('unpackPayload: recovers every wire field verbatim, matching the fixture exactly', () => {
+  const unpacked = reassembleAndUnpack();
   assert.equal(unpacked.COURSE, fixture.capture.course);
   assert.equal(unpacked.ACT, fixture.capture.act);
   assert.equal(unpacked.COINS, fixture.capture.coins);
@@ -156,6 +180,7 @@ test('unpackPayload: rejects a payload with a corrupted FORMAT_TAG byte', () => 
 // --- Recompute ONLY `id`; every other field is the verbatim wire value. ---
 
 test('computeEventId: recomputes the exact id build_event itself signed', () => {
+  const unpacked = reassembleAndUnpack();
   const fields = buildCanonicalEventFields(unpacked);
   assert.equal(fields.pubkey, fixture.pubkeyHex, 'pubkey must be the verbatim wire value, never recomputed');
   assert.equal(fields.created_at, fixture.createdAt, 'created_at must be the verbatim wire value, never recomputed');
@@ -208,7 +233,7 @@ test('buildRelayMessage: builds the exact NIP-01 ["EVENT", event] publish frame'
 
 test('independent oracle: nostr-tools getEventHash agrees with computeEventId', async () => {
   const { getEventHash } = await import('nostr-tools');
-  const fields = buildCanonicalEventFields(unpacked);
+  const fields = buildCanonicalEventFields(reassembleAndUnpack());
   const oracleId = getEventHash({
     pubkey: fields.pubkey, created_at: fields.created_at, kind: fields.kind,
     tags: fields.tags, content: fields.content,

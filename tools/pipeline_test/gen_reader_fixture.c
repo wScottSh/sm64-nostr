@@ -3,8 +3,8 @@
  * frames (spec #115, sub-issue #119) to a JSON fixture the reader page's
  * (reader/) host-side tests decode/reassemble/id-recompute against.
  *
- * NOT part of any ROM build path (mirrors gen_reader_fixture.c's sibling
- * host-only conventions: tools/reference_event_id.js,
+ * NOT part of any ROM build path (mirrors the same host-only conventions
+ * already established by tools/reference_event_id.js and
  * tools/pipeline_test/fixtures/gen_live_vectors.mjs). Links the SAME pure
  * pipeline sources as pipeline_test (this Makefile's own $(SRCS)) against
  * the SAME generated event_profile.h/format_descriptor.h (privkey=3 KAT,

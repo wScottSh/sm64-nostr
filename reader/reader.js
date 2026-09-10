@@ -132,10 +132,21 @@ export function stripUrl(url, baseUrl) {
  * at least once; returns { complete: false, seen, count } otherwise -- an
  * incomplete set is reported as incomplete, NEVER as a wrong/partial
  * reassembly (the same invariant the C reassembler enforces).
+ *
+ * A same-count session/batch discriminator: src/pipeline/fragment.c's
+ * pipeline_fragment_build() always slices every fragment but the last to
+ * the SAME chunkCap length (only the final index may be shorter -- see
+ * that function's own `end = start + chunkCap, capped at base32Len`).
+ * Two different broadcasts that happen to share the same frame count can
+ * therefore never interleave undetected: every non-last chunk length seen
+ * here must agree, and every non-last chunk must be at least as long as
+ * the last one actually seen -- a mismatch throws rather than silently
+ * concatenating fragments from two different events into one payload.
  */
 export function reassembleFrames(frameUrls, baseUrl) {
   const chunksByIndex = new Map();
   let count = null;
+  let nonLastChunkLen = null;
 
   for (const url of frameUrls) {
     const fragment = stripUrl(url, baseUrl);
@@ -144,6 +155,14 @@ export function reassembleFrames(frameUrls, baseUrl) {
       count = frameCount;
     } else if (count !== frameCount) {
       throw new Error(`reassembleFrames: inconsistent frame count across frames (${count} vs ${frameCount})`);
+    }
+    if (index < frameCount - 1) {
+      if (nonLastChunkLen === null) {
+        nonLastChunkLen = chunk.length;
+      } else if (nonLastChunkLen !== chunk.length) {
+        throw new Error('reassembleFrames: inconsistent non-last chunk length across frames -- '
+          + 'refusing to mix fragments from two different broadcasts');
+      }
     }
     if (!chunksByIndex.has(index)) {
       chunksByIndex.set(index, chunk);
@@ -155,6 +174,10 @@ export function reassembleFrames(frameUrls, baseUrl) {
   }
   if (chunksByIndex.size !== count) {
     return { complete: false, seen: chunksByIndex.size, count };
+  }
+  if (nonLastChunkLen !== null && chunksByIndex.get(count - 1).length > nonLastChunkLen) {
+    throw new Error('reassembleFrames: last fragment is longer than a non-last fragment -- '
+      + 'refusing to mix fragments from two different broadcasts');
   }
 
   let base32Text = '';
@@ -204,7 +227,7 @@ export function unpackPayload(bytes) {
     if (offset + size > bytes.length) {
       throw new Error(`unpackPayload: payload too short for field ${field.name}`);
     }
-    out[field.name] = readField(field.name, bytes, offset, size);
+    out[field.name] = readField(field, bytes, offset, size);
     offset += size;
   }
 
@@ -218,22 +241,21 @@ export function unpackPayload(bytes) {
   return out;
 }
 
-const HEX_FIELDS = new Set(['PUBKEY', 'SIG']);
-const ASCII_FIELDS = new Set(['TAG', 'NAME']);
-
-function readField(name, bytes, offset, size) {
+function readField(field, bytes, offset, size) {
   const slice = bytes.subarray(offset, offset + size);
-  if (HEX_FIELDS.has(name)) {
+  // field.encoding is format_descriptor.json's own metadata (see that
+  // file's header comment) -- driven by the SAME shared descriptor the C
+  // pack/unpack adapters read, never a second, hand-copied field-name
+  // allowlist in this file.
+  if (field.encoding === 'hex') {
     return bytesToHex(slice);
   }
-  if (ASCII_FIELDS.has(name)) {
+  if (field.encoding === 'ascii') {
     return new TextDecoder('ascii').decode(slice);
   }
-  // Big-endian unsigned integer of `size` bytes (FORMAT_TAG/COURSE/ACT/
-  // COINS/FRAMES/NONCE16/KEY_ID/CREATED_AT/TAG_LEN/NAME_LEN -- every
-  // remaining fixed-size field in format_descriptor.json today is one of
-  // these). size <= 4 for every such field, so plain JS number math (safe
-  // up to 2^53) never loses precision.
+  // Default: a big-endian unsigned integer of `size` bytes. size <= 4 for
+  // every such field today, so plain JS number math (safe up to 2^53)
+  // never loses precision.
   let value = 0;
   for (let i = 0; i < size; i++) {
     value = value * 256 + slice[i];
