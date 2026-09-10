@@ -1,5 +1,15 @@
 # The airgap reader is a generic phone camera → URL QR → website; the far side reconstructs nothing
 
+> **AMENDED by ADR-0006 (adaptive multi-frame transport).** The reader model below
+> is unchanged for the **N=1** case (a stock camera passively snaps one static
+> URL QR and the event broadcasts on URL-open). It is **extended** for payloads
+> that exceed one frame: the cabinet emits **N>1** URL-wrapped fragments and the
+> opened website re-grabs the camera (`getUserMedia`) and **reassembles** them —
+> still installing nothing, still decode-and-broadcast only. Single frame is now
+> the boundary case, not the ceiling. The **zero far-side reconstruction**
+> invariant below is untouched: reassembly is a lossless decode of already-signed
+> bytes, not the rebuilding of any value. See **ADR-0006**.
+
 The airgap reader is a **generic phone camera**, not a dedicated app. The camera
 reads a **plaintext-URL QR**, opens that URL, and the **website** behind it does
 the decode-and-broadcast. The QR's content is a URL whose payload segment carries
