@@ -11,10 +11,11 @@ literal:
     string/integer literals it needs by name (a small, explicit allowlist
     below -- not a general C preprocessor), so a future edit to one of
     those macros' VALUES here is regenerated, not silently stale.
-  - src/pipeline/event_id.h -- the format-v3-pinned NIP-01 serialization
-    spec constants (`kind`, the first tag's key/value, the name tag's key)
-    that every build shares, never baked per-build data (see that header's
-    own comment on why these live there and not in event_profile.h.in).
+  - src/pipeline/event_id.h -- the wire-format-pinned NIP-01 serialization
+    spec constants (`kind` and the first tag's key/value, identical across
+    format v2 and v3; plus the format-v3 name tag's key) that every build
+    shares, never baked per-build data (see that header's own comment on why
+    these live there and not in event_profile.h.in).
   - src/pipeline/format_descriptor.json -- the packed-payload wire layout
     (same JSON tools/gen_format_descriptor.py renders into the C side's
     format_descriptor.h), embedded here verbatim so the reader's own

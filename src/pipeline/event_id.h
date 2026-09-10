@@ -130,8 +130,9 @@ void pipeline_event_compute_id(const StarCapture *capture, pipeline_u8 id_out[PI
  * sub-issue #111) are plain arguments instead of event_profile.h's baked
  * macros, so a caller with only unpacked wire fields (no access to -- or
  * need of -- this build's own event_profile.h) can still produce the exact
- * canonical serialization. TAG_0 is always the format-v2-pinned literal
- * "ag-lb" (see this file's header comment); it is not a parameter. The tags
+ * canonical serialization. TAG_0 is always the wire-format-pinned literal
+ * "ag-lb" (identical across v2 and v3; see this file's header comment); it
+ * is not a parameter. The tags
  * array is `[["t",TAG_0],["t",tag1],["n",name]]` -- name is appended in
  * canonical position after both "t" tags, so the signed `id` commits to it.
  * out must be at least PIPELINE_EVENT_SERIALIZED_MAX bytes. Returns the
@@ -150,7 +151,7 @@ pipeline_u32 pipeline_event_serialize_from_fields(const pipeline_u8 pubkey[PIPEL
  * pipeline_event_compute_id_from_fields: id_out =
  * SHA256(pipeline_event_serialize_from_fields(...)). See that function's
  * comment -- this is the "reconstruct purely from unpacked wire fields"
- * entry point a companion decoder's equivalent logic mirrors.
+ * entry point the reader's equivalent logic mirrors.
  */
 void pipeline_event_compute_id_from_fields(const pipeline_u8 pubkey[PIPELINE_FMT_SIZE_PUBKEY],
                                             pipeline_u32 createdAt,
