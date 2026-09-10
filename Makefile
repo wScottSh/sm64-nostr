@@ -281,6 +281,18 @@ PIPELINE_KEYS_DIR             := keys
 PIPELINE_PRIVKEY_FILE         := $(PIPELINE_KEYS_DIR)/event_privkey.hex
 PIPELINE_REGISTRY_FILE        := $(PIPELINE_KEYS_DIR)/registry.md
 PIPELINE_KEY_LABEL            ?= dev-event
+
+# ADR-0006's airgap transport base URL (spec #115, sub-issue #116): a
+# build-time constant every emitted QR frame's URL wraps a fragment around
+# (mirrors PIPELINE_EVENT_NAME's own provisioning immediately below, but
+# with a dev default rather than a fail-closed check -- a build with no
+# real short domain purchased yet (#101) still produces a scannable,
+# structurally valid URL, just one pointed at this placeholder host until
+# the real domain is swapped in with `make PIPELINE_URL_BASE="..."`, no
+# pipeline code change needed). Validated and normalized by
+# gen_event_profile.py's normalize_url_base() (uppercase-folded, restricted
+# to A-Z/0-9/./-).
+PIPELINE_URL_BASE             ?= SM64NOSTR.PAGES.DEV
 PIPELINE_EVENT_PROFILE_H_IN   := include/event_profile.h.in
 PIPELINE_EVENT_PROFILE_H      := $(BUILD_DIR)/include/event_profile.h
 PIPELINE_EVENT_MANIFEST       := $(BUILD_DIR)/include/event_profile.manifest.json
@@ -610,7 +622,7 @@ $(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
 # but, like schnorr_adapter.c, only calls its one-shot pipeline_sha256()
 # wrapper and contains no C99-only constructs, so it stays in this "pure"
 # list too.
-PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o $(PIPELINE_C99_PORT_O)
+PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/base32.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/fragment.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/url.o $(PIPELINE_C99_PORT_O)
 
 # NOTE: the generated pipeline headers (format_descriptor.h, event_profile.h,
 # secp256k1_baked.h) that pack_adapter.o/build_event.o/event_id.o/
@@ -642,7 +654,7 @@ $(BUILD_DIR)/src/game/hud.o: $(PIPELINE_EVENT_PROFILE_H)
 # recipe (see stamp_rom_registry.py), so a shipped .z64 is always traceable.
 $(PIPELINE_EVENT_PROFILE_H): $(PIPELINE_EVENT_PROFILE_H_IN) $(PIPELINE_PRIVKEY_FILE) $(GEN_EVENT_PROFILE_PY) $(TOOLS_DIR)/nostr_secp256k1.py
 	$(call print,Generating event profile:,$<,$@)
-	$(V)$(PYTHON) $(GEN_EVENT_PROFILE_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_EVENT_PROFILE_H_IN) --out $@ --label $(PIPELINE_KEY_LABEL) --manifest $(PIPELINE_EVENT_MANIFEST) --event-name "$(PIPELINE_EVENT_NAME)"
+	$(V)$(PYTHON) $(GEN_EVENT_PROFILE_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_EVENT_PROFILE_H_IN) --out $@ --label $(PIPELINE_KEY_LABEL) --manifest $(PIPELINE_EVENT_MANIFEST) --event-name "$(PIPELINE_EVENT_NAME)" --url-base "$(PIPELINE_URL_BASE)"
 
 # Format descriptor header: single source of truth for the packed QR
 # payload's field layout, rendered from src/pipeline/format_descriptor.json.

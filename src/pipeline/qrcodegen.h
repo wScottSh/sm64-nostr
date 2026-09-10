@@ -31,11 +31,16 @@
  * <assert.h>/<stdbool.h>/<stddef.h>/<stdint.h>/<stdlib.h>/<string.h> --
  * qrcodegen.c supplies drop-in local equivalents instead. The public
  * surface is also trimmed to exactly what the pipeline needs: encoding an
- * arbitrary byte buffer as a single BYTE-mode segment (never numeric,
- * alphanumeric, kanji, or ECI, and never free-form text), matching this
- * repo's "hide the ported library behind the pipeline interface" rule
- * (spec #24 story 21) -- upstream's text/segment-array API surface is
- * dropped entirely rather than exposed unused.
+ * arbitrary byte buffer as a single BYTE-mode segment, or a validated
+ * alphanumeric-charset text buffer as a single ALPHANUMERIC-mode segment
+ * (never numeric, kanji, or ECI, and never upstream's general free-form
+ * multi-segment text API), matching this repo's "hide the ported library
+ * behind the pipeline interface" rule (spec #24 story 21) -- upstream's
+ * text/segment-array API surface is dropped entirely rather than exposed
+ * unused. The alphanumeric path (spec #115, sub-issue #116) is a second,
+ * equally narrow single-segment/single-mode entry point alongside the
+ * original BYTE-mode one, added for ADR-0006's airgap transport (URL-
+ * wrapped fragment text rides the denser alphanumeric charset).
  *
  * Like port_stub_c99.c, this file is C99 (block-scope `for` loop
  * declarations throughout) and goes through the root Makefile's per-object
@@ -96,6 +101,34 @@ enum qrcodegen_Mask {
 int qrcodegen_encodeBinary(qr_u8 dataAndTemp[], int dataLen, qr_u8 qrcode[],
                             enum qrcodegen_Ecc ecl, int minVersion, int maxVersion,
                             enum qrcodegen_Mask mask, int boostEcl);
+
+/*
+ * qrcodegen_encodeAlphanumeric: ALPHANUMERIC-mode counterpart of
+ * qrcodegen_encodeBinary() above (spec #115, sub-issue #116). Encodes
+ * text[0 : textLen] as a single ALPHANUMERIC-mode segment -- text must
+ * contain only the QR alphanumeric charset (0-9, A-Z, space,
+ * $ % * + - . / :); any other byte is rejected -- searching versions
+ * [minVersion, maxVersion] for the smallest that fits at ecl (silently
+ * raised to a higher ECC level, never lower, if boostEcl is nonzero and it
+ * still fits), and writes the finished, masked QR Code into qrcode[].
+ *
+ * Returns nonzero (true) on success. Returns 0 (false) -- writing nothing
+ * usable to qrcode (qrcode[0] is set to 0, an invalid size) -- if text
+ * contains a non-alphanumeric-charset byte or the data does not fit any
+ * version in range at the given ecl. This is the clean rejection path for
+ * invalid/over-budget input: callers must check the return value, and no
+ * truncated/partial QR Code is ever produced.
+ *
+ * Unlike qrcodegen_encodeBinary(), text[] is read-only input, not scratch:
+ * tempBuffer[] (length qrcodegen_BUFFER_LEN_FOR_VERSION(maxVersion)) is the
+ * separate scratch buffer this function needs for error-correction
+ * interleaving and the function-module map, mirroring the tempBuffer
+ * qrcodegen_encodeBinary() borrows from its caller's dataAndTemp argument.
+ * text[]/tempBuffer[]/qrcode[] must not overlap.
+ */
+int qrcodegen_encodeAlphanumeric(const qr_u8 text[], int textLen, qr_u8 qrcode[], qr_u8 tempBuffer[],
+                                  enum qrcodegen_Ecc ecl, int minVersion, int maxVersion,
+                                  enum qrcodegen_Mask mask, int boostEcl);
 
 /* Same semantics as upstream qrcodegen_getSize/qrcodegen_getModule
  * (nonzero/zero in place of bool). */

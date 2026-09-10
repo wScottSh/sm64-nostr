@@ -20,6 +20,9 @@
 #include "schnorr_adapter.h"
 #include "pack_adapter.h"
 #include "qr_adapter.h"
+#include "base32.h"
+#include "fragment.h"
+#include "url.h"
 
 /* Compile-time checks that build_event.h's own duplicated size/version
  * constants (kept there instead of #including pack_adapter.h/qr_adapter.h --
@@ -56,6 +59,31 @@ typedef char pipeline_build_event_qr_version_check[
 typedef char pipeline_build_event_qr_bitmap_size_check[
     (PIPELINE_BUILT_QR_BITMAP_SIZE == PIPELINE_QR_BUFFER_LEN) ? 1 : -1];
 
+/*
+ * ADR-0006 multi-frame transport checks (spec #115, sub-issue #116),
+ * mirroring the discipline of the five checks above: build_event.h
+ * duplicates a handful of qr_adapter.h/base32.h formulas/constants rather
+ * than #including those headers (circular-include hazard -- see
+ * build_event.h's own comments on each duplicated macro); these checks are
+ * what keep the duplicates from silently drifting instead. */
+typedef char pipeline_build_event_base32_len_check[
+    (PIPELINE_BUILT_BASE32_LEN == PIPELINE_BASE32_ENCODED_LEN(PIPELINE_BUILT_PAYLOAD_SIZE)) ? 1 : -1];
+typedef char pipeline_build_event_qr_alnum_max_check[
+    (PIPELINE_BUILT_QR_ALNUM_MAX_CHARS == PIPELINE_QR_ALNUM_MAX_CHARS) ? 1 : -1];
+/* This build's own PIPELINE_URL_BASE must leave room for at least one
+ * base32 character per fragment -- a longer base URL than this build's
+ * fixed QR alphanumeric budget allows is a build-time configuration error,
+ * not a runtime one (mirrors the tag/name-length checks above: loud, not
+ * silent). Recomputed independently here in signed `long` arithmetic
+ * (rather than just checking PIPELINE_BUILT_FRAGMENT_CHUNK_LEN's own
+ * unsigned `pipeline_u32` value directly) so an over-long PIPELINE_URL_BASE
+ * that would make that macro's own unsigned subtraction WRAP AROUND to a
+ * huge positive value can never masquerade as "budget >= 1" here. */
+typedef char pipeline_build_event_fragment_budget_check[
+    (((long)PIPELINE_BUILT_QR_ALNUM_MAX_CHARS - (long)PIPELINE_URL_SCHEME_LEN -
+      (long)PIPELINE_URL_BASE_LEN - (long)PIPELINE_URL_PATH_SEP_LEN -
+      (long)PIPELINE_FRAGMENT_HEADER_LEN) >= 1L) ? 1 : -1];
+
 int build_event(const StarCapture *capture, const pipeline_u8 key[PIPELINE_KEY_SIZE], BuiltEvent *out)
 {
     pipeline_u8 id[PIPELINE_EVENT_ID_SIZE];
@@ -83,8 +111,53 @@ int build_event(const StarCapture *capture, const pipeline_u8 key[PIPELINE_KEY_S
         return 0;
     }
 
-    if (!pipeline_qr_encode(out->packed_payload, packedLen, out->qr_bitmap)) {
-        return 0;
+    /*
+     * ADR-0006 multi-frame transport (spec #115, sub-issue #116): wrap the
+     * unchanged packed_payload bytes above in the reversible base32 /
+     * fragment / URL / alphanumeric-QR envelope -- see build_event.h's own
+     * comment on this section's fixed compile-time sizing.
+     */
+    {
+        static const pipeline_u8 kUrlBase[] = PIPELINE_URL_BASE;
+        pipeline_u8 base32Text[PIPELINE_BUILT_BASE32_LEN];
+        pipeline_u32 base32Len;
+        pipeline_u32 frameCount;
+        pipeline_u32 i;
+
+        base32Len = pipeline_base32_encode(out->packed_payload, packedLen, base32Text,
+                                            (pipeline_u32)PIPELINE_BUILT_BASE32_LEN);
+        if (base32Len != (pipeline_u32)PIPELINE_BUILT_BASE32_LEN) {
+            return 0;
+        }
+
+        frameCount = pipeline_fragment_count(base32Len, (pipeline_u32)PIPELINE_BUILT_FRAGMENT_BUDGET);
+        if (frameCount != (pipeline_u32)PIPELINE_BUILT_FRAME_COUNT) {
+            return 0;
+        }
+
+        for (i = 0; i < frameCount; i++) {
+            pipeline_u8 fragment[PIPELINE_BUILT_FRAGMENT_BUDGET];
+            pipeline_u32 fragmentLen;
+            pipeline_u8 url[PIPELINE_BUILT_URL_MAX_LEN];
+            pipeline_u32 urlLen;
+
+            if (!pipeline_fragment_build(base32Text, base32Len, (pipeline_u32)PIPELINE_BUILT_FRAGMENT_BUDGET,
+                                          i, frameCount, fragment, &fragmentLen)) {
+                return 0;
+            }
+
+            urlLen = pipeline_url_wrap(kUrlBase, (pipeline_u32)PIPELINE_URL_BASE_LEN, fragment, fragmentLen,
+                                        url, (pipeline_u32)PIPELINE_BUILT_URL_MAX_LEN);
+            if (urlLen == 0) {
+                return 0;
+            }
+
+            if (!pipeline_qr_encode_alphanumeric(url, urlLen, out->qr_bitmaps[i])) {
+                return 0;
+            }
+        }
+
+        out->frame_count = frameCount;
     }
 
     return 1;

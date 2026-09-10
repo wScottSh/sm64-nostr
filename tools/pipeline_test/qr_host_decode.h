@@ -43,4 +43,16 @@
  */
 int qr_host_decode(const unsigned char *qrcode, unsigned char *out, int outCap, int *outLen);
 
+/*
+ * qr_host_decode_alphanumeric: the ALPHANUMERIC-mode counterpart of
+ * qr_host_decode() above (spec #115, sub-issue #116), for QR bitmaps
+ * produced by pipeline_qr_encode_alphanumeric() (qr_adapter.h) -- ADR-0006's
+ * URL-wrapped fragment frames. Decodes qrcode[] into outText[0 : *outTextLen]
+ * (the recovered alphanumeric-charset text, e.g. a full "HTTPS://..." URL),
+ * NOT NUL-terminated. outCap is outText's capacity; if the decoded text
+ * would not fit, returns 0 without writing to outText fully. Returns
+ * nonzero (true) and sets *outTextLen on success.
+ */
+int qr_host_decode_alphanumeric(const unsigned char *qrcode, unsigned char *outText, int outCap, int *outTextLen);
+
 #endif /* QR_HOST_DECODE_H */

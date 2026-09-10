@@ -148,7 +148,8 @@ SRCS := main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c $(P
         $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c qr_host_decode.c \
         $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c \
         $(PIPELINE_DIR)/secp256k1.c $(PIPELINE_DIR)/schnorr_adapter.c \
-        $(PIPELINE_DIR)/capture.c $(GAME_DIR)/qr_render.c $(GAME_DIR)/qr_display.c
+        $(PIPELINE_DIR)/capture.c $(GAME_DIR)/qr_render.c $(GAME_DIR)/qr_display.c \
+        $(PIPELINE_DIR)/base32.c $(PIPELINE_DIR)/fragment.c $(PIPELINE_DIR)/url.c
 BIN  := pipeline_test
 
 # BIP-340 test vector 0 (privkey=3): a fixed, published known-answer key,
@@ -157,6 +158,16 @@ BIN  := pipeline_test
 TEST_PRIVKEY_HEX  := 0000000000000000000000000000000000000000000000000000000000000003
 TEST_PRIVKEY_FILE := $(BUILD_DIR)/test_privkey.hex
 TEST_CREATED_AT   := 1700000000
+
+# ADR-0006 airgap transport base URL (spec #115, sub-issue #116): the same
+# dev-default host the root Makefile's PIPELINE_URL_BASE defaults to, so
+# this host tool's baked BuiltEvent (PIPELINE_BUILT_PAYLOAD_SIZE 121 B, "sm64"
+# tag + "TEST" name) exercises a realistic multi-frame split (N=2) at the
+# real build_event() seam -- see main.c's test_build_event_multiframe_
+# round_trip() for why: ADR-0006 itself observes the honest v3 floor
+# already overflows one frame once URL-wrapped under any realistic domain,
+# so this build's own N is expected to be >1, not a hand-picked worst case.
+TEST_URL_BASE     := SM64NOSTR.PAGES.DEV
 
 FORMAT_DESCRIPTOR_JSON := $(PIPELINE_DIR)/format_descriptor.json
 FORMAT_DESCRIPTOR_H    := $(INC_DIR)/format_descriptor.h
@@ -180,7 +191,7 @@ $(FORMAT_DESCRIPTOR_H): $(FORMAT_DESCRIPTOR_JSON) $(TOOLS_DIR)/gen_format_descri
 
 $(EVENT_PROFILE_H): $(EVENT_PROFILE_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_event_profile.py $(TOOLS_DIR)/nostr_secp256k1.py
 	@mkdir -p $(INC_DIR)
-	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat --manifest $(EVENT_MANIFEST) --commit host-test --created-at $(TEST_CREATED_AT) --event-name "TEST"
+	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat --manifest $(EVENT_MANIFEST) --commit host-test --created-at $(TEST_CREATED_AT) --event-name "TEST" --url-base "$(TEST_URL_BASE)"
 
 $(SECP256K1_BAKED_H): $(SECP256K1_BAKED_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_secp256k1_baked.py $(TOOLS_DIR)/nostr_secp256k1.py
 	@mkdir -p $(INC_DIR)

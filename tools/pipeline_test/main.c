@@ -175,6 +175,9 @@
 #include "capture.h"
 #include "qr_render.h"
 #include "qr_display.h"
+#include "base32.h"
+#include "fragment.h"
+#include "url.h"
 #include "fixtures/live_vectors.h"
 
 static int g_failures = 0;
@@ -187,6 +190,89 @@ static void check(int ok, const char *what)
         printf("FAIL: %s\n", what);
         g_failures++;
     }
+}
+
+/*
+ * reassemble_built_event: the "opened webpage" half of ADR-0006's transport
+ * (spec #115, sub-issue #116), exercised at the HOST level for this host
+ * tool's own baked BuiltEvent shape (PIPELINE_BUILT_FRAME_COUNT frames,
+ * PIPELINE_URL_BASE base URL). For each of useCount frame indices named by
+ * frameOrder[] (or natural order 0..useCount-1 if frameOrder is NULL):
+ * decodes the QR (qr_host_decode_alphanumeric), strips the known base URL
+ * (pipeline_url_strip), parses the fragment header (pipeline_fragment_
+ * parse_header), and copies its chunk into base32Text at the header's own
+ * index -- so frames can be fed in ANY order and still land correctly.
+ * Returns nonzero (true) and de-base32's the reassembled text into
+ * rawOut/*rawLenOut ONLY if every index 0..PIPELINE_BUILT_FRAME_COUNT-1 was
+ * seen at least once; returns 0 (false) -- writing nothing to rawOut -- if
+ * any frame fails to decode/strip/parse, or the set is incomplete (a
+ * missing fragment reports incomplete, never a wrong/partial event, per
+ * spec #115's own acceptance criterion).
+ */
+static int reassemble_built_event(const BuiltEvent *event, const int *frameOrder, pipeline_u32 useCount,
+                                   pipeline_u8 *rawOut, pipeline_u32 rawCap, pipeline_u32 *rawLenOut)
+{
+    static const pipeline_u8 kUrlBase[] = PIPELINE_URL_BASE;
+    pipeline_u8 base32Text[PIPELINE_BUILT_BASE32_LEN];
+    int seen[PIPELINE_BUILT_FRAME_COUNT];
+    pipeline_u32 seenCount;
+    pipeline_u32 i;
+
+    seenCount = 0;
+    for (i = 0; i < (pipeline_u32)PIPELINE_BUILT_FRAME_COUNT; i++) {
+        seen[i] = 0;
+    }
+
+    for (i = 0; i < useCount; i++) {
+        int frameIdx = frameOrder ? frameOrder[i] : (int)i;
+        unsigned char urlText[PIPELINE_BUILT_URL_MAX_LEN];
+        int urlTextLen = -1;
+        pipeline_u8 fragment[PIPELINE_BUILT_URL_MAX_LEN];
+        pipeline_u32 fragmentLen;
+        pipeline_u32 idx, cnt;
+
+        if (frameIdx < 0 || frameIdx >= (int)PIPELINE_BUILT_FRAME_COUNT) {
+            return 0;
+        }
+        if (!qr_host_decode_alphanumeric(event->qr_bitmaps[frameIdx], urlText,
+                                          (int)sizeof(urlText), &urlTextLen)) {
+            return 0;
+        }
+        if (!pipeline_url_strip((const pipeline_u8 *)urlText, (pipeline_u32)urlTextLen,
+                                 kUrlBase, (pipeline_u32)PIPELINE_URL_BASE_LEN,
+                                 fragment, (pipeline_u32)sizeof(fragment), &fragmentLen)) {
+            return 0;
+        }
+        if (!pipeline_fragment_parse_header(fragment, fragmentLen, &idx, &cnt)) {
+            return 0;
+        }
+        if (cnt != (pipeline_u32)PIPELINE_BUILT_FRAME_COUNT || idx >= cnt) {
+            return 0;
+        }
+        {
+            pipeline_u32 chunkCap = (pipeline_u32)PIPELINE_BUILT_FRAGMENT_CHUNK_LEN;
+            pipeline_u32 chunkLen = fragmentLen - (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN;
+            pipeline_u32 dest = idx * chunkCap;
+            pipeline_u32 k;
+
+            if (dest + chunkLen > (pipeline_u32)PIPELINE_BUILT_BASE32_LEN) {
+                return 0;
+            }
+            for (k = 0; k < chunkLen; k++) {
+                base32Text[dest + k] = fragment[(pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN + k];
+            }
+        }
+        if (!seen[idx]) {
+            seen[idx] = 1;
+            seenCount++;
+        }
+    }
+
+    if (seenCount != (pipeline_u32)PIPELINE_BUILT_FRAME_COUNT) {
+        return 0; /* incomplete set -- never guess at the missing bytes */
+    }
+
+    return pipeline_base32_decode(base32Text, (pipeline_u32)PIPELINE_BUILT_BASE32_LEN, rawOut, rawCap, rawLenOut);
 }
 
 /*
@@ -245,7 +331,7 @@ static void test_build_event_end_to_end(void)
     BuiltEvent event;
     int buildOk;
     unsigned char decoded[PIPELINE_BUILT_PAYLOAD_SIZE];
-    int decodedLen = -1;
+    pipeline_u32 decodedLen = 0;
     int decodeOk;
     StarCapture rebuilt;
     pipeline_u32 createdAtOut;
@@ -289,11 +375,21 @@ static void test_build_event_end_to_end(void)
           "build_event's packed_payload size is 121 B (113 + 4-byte \"sm64\" tag + 4-byte \"TEST\" name), "
           "within the v7/MEDIUM ceiling");
 
-    /* (a) the host decodes qr_bitmap back to the exact packed_payload. */
-    decodeOk = qr_host_decode(event.qr_bitmap, decoded, (int)sizeof(decoded), &decodedLen);
-    check(decodeOk != 0 && decodedLen == (int)PIPELINE_BUILT_PAYLOAD_SIZE &&
+    /* (a) ADR-0006's transport envelope (spec #115, sub-issue #116): the
+     * host decodes every emitted QR frame (ALPHANUMERIC-mode URLs, not raw
+     * bytes), strips the known base URL, parses each fragment header, and
+     * reassembles by index back to the exact packed_payload -- the
+     * cabinet->jumper keystone round-trip, in natural frame order. See
+     * test_build_event_multiframe_round_trip() below for the any-order and
+     * missing-fragment coverage this same reassembler is put through. */
+    check((int)event.frame_count == (int)PIPELINE_BUILT_FRAME_COUNT && event.frame_count >= 1u,
+          "build_event reports a nonzero frame_count matching PIPELINE_BUILT_FRAME_COUNT");
+    decodeOk = reassemble_built_event(&event, NULL, event.frame_count, decoded,
+                                       (pipeline_u32)sizeof(decoded), &decodedLen);
+    check(decodeOk != 0 && decodedLen == (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE &&
           memcmp(decoded, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
-          "qr_bitmap decodes back to the exact packed_payload byte-for-byte");
+          "build_event's N emitted QR frames decode+strip+debase32+reassemble back to the exact "
+          "packed_payload byte-for-byte");
 
     /* (b) the host unpack adapter (format-descriptor-derived) rebuilds
      * EVERY field the companion needs straight off the wire -- capture,
@@ -717,7 +813,7 @@ static void test_qr_render_blit_round_trips_through_decode(void)
     int allQuietZoneWhite = 1;
     int allBlocksExact = 1;
     pipeline_u8 reconstructed[PIPELINE_QR_BUFFER_LEN];
-    unsigned char decoded[PIPELINE_BUILT_PAYLOAD_SIZE];
+    unsigned char decoded[PIPELINE_BUILT_URL_MAX_LEN];
     int decodedLen = -1;
     int decodeOk;
     int px, py;
@@ -749,7 +845,7 @@ static void test_qr_render_blit_round_trips_through_decode(void)
      * anything if this doesn't hold (see qr_render.c's own defensive
      * bound), but this test's own geometry assertions must not run after
      * a call that could, in principle, already have misbehaved. */
-    gridSize  = pipeline_qr_get_size(event.qr_bitmap);
+    gridSize  = pipeline_qr_get_size(event.qr_bitmaps[0]);
     imageSize = (gridSize + 2 * QR_RENDER_QUIET_ZONE_MODULES) * QR_RENDER_MODULE_SCALE_PX;
 
     /* Left-positioned origin now comes from the pure layout (QR flush-left of
@@ -775,7 +871,7 @@ static void test_qr_render_blit_round_trips_through_decode(void)
         return;
     }
 
-    qr_render_blit_qr_at(event.qr_bitmap, fb, QR_RENDER_TEST_FB_WIDTH, QR_RENDER_TEST_FB_HEIGHT,
+    qr_render_blit_qr_at(event.qr_bitmaps[0], fb, QR_RENDER_TEST_FB_WIDTH, QR_RENDER_TEST_FB_HEIGHT,
                          originX, originY);
 
     /* Quiet-zone assertion: every pixel in the fixed-width quiet-zone ring
@@ -802,7 +898,7 @@ static void test_qr_render_blit_round_trips_through_decode(void)
      * approximate or off-by-one. */
     for (row = 0; row < gridSize && allBlocksExact; row++) {
         for (col = 0; col < gridSize && allBlocksExact; col++) {
-            int isDark = pipeline_qr_get_module(event.qr_bitmap, col, row);
+            int isDark = pipeline_qr_get_module(event.qr_bitmaps[0], col, row);
             unsigned short expected = isDark ? QR_RENDER_BLACK_RGBA16 : QR_RENDER_WHITE_RGBA16;
             int blockX = originX + (QR_RENDER_QUIET_ZONE_MODULES + col) * QR_RENDER_MODULE_SCALE_PX;
             int blockY = originY + (QR_RENDER_QUIET_ZONE_MODULES + row) * QR_RENDER_MODULE_SCALE_PX;
@@ -847,10 +943,32 @@ static void test_qr_render_blit_round_trips_through_decode(void)
         }
     }
 
-    decodeOk = qr_host_decode(reconstructed, decoded, (int) sizeof(decoded), &decodedLen);
-    check(decodeOk != 0 && decodedLen == (int) PIPELINE_BUILT_PAYLOAD_SIZE &&
-          memcmp(decoded, event.packed_payload, (size_t) PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
-          "qr_render: render->reconstruct->decode == build_event's exact packed_payload");
+    decodeOk = qr_host_decode_alphanumeric(reconstructed, decoded, (int) sizeof(decoded), &decodedLen);
+
+    /* Frame 0 now carries a URL-wrapped fragment (ADR-0006, spec #115
+     * sub-issue #116), not raw payload bytes -- recompute the expected
+     * text via the SAME production base32/fragment/url functions
+     * build_event() itself calls, never a hand-duplicated literal. */
+    {
+        pipeline_u8 base32Text[PIPELINE_BUILT_BASE32_LEN];
+        pipeline_u32 base32Len;
+        pipeline_u8 fragment[PIPELINE_BUILT_FRAGMENT_BUDGET];
+        pipeline_u32 fragmentLen;
+        pipeline_u8 expectedUrl[PIPELINE_BUILT_URL_MAX_LEN];
+        pipeline_u32 expectedUrlLen;
+        static const pipeline_u8 kUrlBase[] = PIPELINE_URL_BASE;
+
+        base32Len = pipeline_base32_encode(event.packed_payload, (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE,
+                                            base32Text, (pipeline_u32)PIPELINE_BUILT_BASE32_LEN);
+        pipeline_fragment_build(base32Text, base32Len, (pipeline_u32)PIPELINE_BUILT_FRAGMENT_BUDGET,
+                                 0u, (pipeline_u32)PIPELINE_BUILT_FRAME_COUNT, fragment, &fragmentLen);
+        expectedUrlLen = pipeline_url_wrap(kUrlBase, (pipeline_u32)PIPELINE_URL_BASE_LEN, fragment, fragmentLen,
+                                            expectedUrl, (pipeline_u32)PIPELINE_BUILT_URL_MAX_LEN);
+
+        check(decodeOk != 0 && (pipeline_u32)decodedLen == expectedUrlLen &&
+              memcmp(decoded, expectedUrl, (size_t)expectedUrlLen) == 0,
+              "qr_render: render->reconstruct->decode == build_event's exact frame-0 URL fragment");
+    }
 }
 
 /*
@@ -964,7 +1082,7 @@ static void test_qr_render_overlay_paint(void) {
     }
 
     init_fake_font(&font);
-    qr_render_layout(pipeline_qr_get_size(event.qr_bitmap),
+    qr_render_layout(pipeline_qr_get_size(event.qr_bitmaps[0]),
                      QR_RENDER_TEST_FB_WIDTH, QR_RENDER_TEST_FB_HEIGHT, &font,
                      QR_RENDER_COPY_HEADING, QR_RENDER_COPY_BODY, QR_RENDER_COPY_PROMPT,
                      &layout);
@@ -981,7 +1099,7 @@ static void test_qr_render_overlay_paint(void) {
      * (glyphs start at inset 7 / top pad 4). Capture it before/after. */
     cornerBefore = fb[layout.boxY * QR_RENDER_TEST_FB_WIDTH + layout.boxX];
 
-    qr_render_overlay_rgba16(event.qr_bitmap, fb, QR_RENDER_TEST_FB_WIDTH,
+    qr_render_overlay_rgba16(event.qr_bitmaps[0], fb, QR_RENDER_TEST_FB_WIDTH,
                              QR_RENDER_TEST_FB_HEIGHT, &font);
 
     cornerAfter = fb[layout.boxY * QR_RENDER_TEST_FB_WIDTH + layout.boxX];
@@ -997,14 +1115,26 @@ static void test_qr_render_overlay_paint(void) {
           == QR_RENDER_WHITE_RGBA16,
           "qr_render overlay: an authentic-path glyph writes white over the box");
 
-    /* And the QR still decodes from its left origin. */
+    /* And the QR still decodes from its left origin -- to the exact frame-0
+     * URL fragment build_event() emitted (ADR-0006's ALPHANUMERIC-mode
+     * transport envelope, spec #115 sub-issue #116, not raw payload bytes
+     * any more). The expected URL is recomputed via the SAME production
+     * base32/fragment/url functions build_event() itself calls, never a
+     * hand-duplicated literal. */
     {
         pipeline_u8 reconstructed[PIPELINE_QR_BUFFER_LEN];
-        unsigned char decoded[PIPELINE_BUILT_PAYLOAD_SIZE];
+        unsigned char decoded[PIPELINE_BUILT_URL_MAX_LEN];
         int decodedLen = -1;
-        int gridSize = pipeline_qr_get_size(event.qr_bitmap);
+        int gridSize = pipeline_qr_get_size(event.qr_bitmaps[0]);
         int row, col;
         int decodeOk;
+        pipeline_u8 base32Text[PIPELINE_BUILT_BASE32_LEN];
+        pipeline_u32 base32Len;
+        pipeline_u8 fragment[PIPELINE_BUILT_FRAGMENT_BUDGET];
+        pipeline_u32 fragmentLen;
+        pipeline_u8 expectedUrl[PIPELINE_BUILT_URL_MAX_LEN];
+        pipeline_u32 expectedUrlLen;
+        static const pipeline_u8 kUrlBase[] = PIPELINE_URL_BASE;
 
         memset(reconstructed, 0, sizeof(reconstructed));
         reconstructed[0] = (pipeline_u8) gridSize;
@@ -1021,10 +1151,18 @@ static void test_qr_render_overlay_paint(void) {
                 }
             }
         }
-        decodeOk = qr_host_decode(reconstructed, decoded, (int) sizeof(decoded), &decodedLen);
-        check(decodeOk != 0 && decodedLen == (int) PIPELINE_BUILT_PAYLOAD_SIZE
-              && memcmp(decoded, event.packed_payload, (size_t) PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
-              "qr_render overlay: QR still decodes to build_event's payload from its left origin");
+        decodeOk = qr_host_decode_alphanumeric(reconstructed, decoded, (int) sizeof(decoded), &decodedLen);
+
+        base32Len = pipeline_base32_encode(event.packed_payload, (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE,
+                                            base32Text, (pipeline_u32)PIPELINE_BUILT_BASE32_LEN);
+        pipeline_fragment_build(base32Text, base32Len, (pipeline_u32)PIPELINE_BUILT_FRAGMENT_BUDGET,
+                                 0u, (pipeline_u32)PIPELINE_BUILT_FRAME_COUNT, fragment, &fragmentLen);
+        expectedUrlLen = pipeline_url_wrap(kUrlBase, (pipeline_u32)PIPELINE_URL_BASE_LEN, fragment, fragmentLen,
+                                            expectedUrl, (pipeline_u32)PIPELINE_BUILT_URL_MAX_LEN);
+
+        check(decodeOk != 0 && (pipeline_u32)decodedLen == expectedUrlLen
+              && memcmp(decoded, expectedUrl, (size_t)expectedUrlLen) == 0,
+              "qr_render overlay: QR still decodes to build_event's exact frame-0 URL fragment from its left origin");
     }
 }
 
@@ -1094,7 +1232,7 @@ static void test_qr_render_glyph_orientation(void) {
     font.glyph = real_L_font_glyph;
     font.ctx = NULL;
 
-    qr_render_layout(pipeline_qr_get_size(event.qr_bitmap),
+    qr_render_layout(pipeline_qr_get_size(event.qr_bitmaps[0]),
                      QR_RENDER_TEST_FB_WIDTH, QR_RENDER_TEST_FB_HEIGHT, &font,
                      QR_RENDER_COPY_HEADING, QR_RENDER_COPY_BODY, QR_RENDER_COPY_PROMPT,
                      &layout);
@@ -1106,7 +1244,7 @@ static void test_qr_render_glyph_orientation(void) {
     for (i = 0; i < QR_RENDER_TEST_FB_WIDTH * QR_RENDER_TEST_FB_HEIGHT; i++) {
         fb[i] = QR_RENDER_BLACK_RGBA16;
     }
-    qr_render_overlay_rgba16(event.qr_bitmap, fb, QR_RENDER_TEST_FB_WIDTH,
+    qr_render_overlay_rgba16(event.qr_bitmaps[0], fb, QR_RENDER_TEST_FB_WIDTH,
                              QR_RENDER_TEST_FB_HEIGHT, &font);
 
     /* Upright 'L' from the real bytes has a solid left vertical stroke:
@@ -1311,6 +1449,357 @@ static void test_qr_rejects_over_budget_cleanly(void)
         check(encodeOk == 0, "QR encode rejects a grossly over-budget payload cleanly");
         check(qrcode[0] == 0, "grossly-over-budget rejection also leaves the invalid-size sentinel");
     }
+}
+
+/*
+ * ADR-0006's airgap transport envelope (spec #115, sub-issue #116): base32
+ * codec, fragmenter, URL wrapper, ALPHANUMERIC QR round-trip, and the
+ * full build_event() multi-frame keystone round-trip.
+ */
+
+/*
+ * pipeline_qr_encode_alphanumeric()/qr_host_decode_alphanumeric() round
+ * trip -- the QR encoder's other segment mode, added for ADR-0006's
+ * URL-wrapped fragment frames. Mirrors test_qr_round_trip_representative_
+ * sizes()'s BYTE-mode shape above but at the ALPHANUMERIC charset/budget.
+ */
+static void fill_alnum_pattern(pipeline_u8 *buf, int len)
+{
+    /* A test-only fixture pattern (not a wire constant): cycles through
+     * the QR alphanumeric charset so encode/decode exercise every symbol,
+     * not just digits. */
+    static const char charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+    int i;
+    for (i = 0; i < len; i++) {
+        buf[i] = (pipeline_u8)charset[i % 45];
+    }
+}
+
+static void test_qr_alphanumeric_round_trip_and_rejections(void)
+{
+    pipeline_u8 text[PIPELINE_QR_ALNUM_MAX_CHARS];
+    pipeline_u8 qrcode[PIPELINE_QR_BUFFER_LEN];
+    unsigned char decoded[PIPELINE_QR_ALNUM_MAX_CHARS];
+    int decodedLen = -1;
+    int encodeOk, decodeOk;
+
+    /* A realistic URL-shaped string (odd character count) round-trips
+     * exactly. */
+    {
+        static const char url[] = "HTTPS://SM64NOSTR.PAGES.DEV/0102ABCDEFGHIJKLMNOP";
+        int len = (int)(sizeof(url) - 1);
+        encodeOk = pipeline_qr_encode_alphanumeric((const pipeline_u8 *)url, (pipeline_u32)len, qrcode);
+        check(encodeOk != 0, "QR alphanumeric encode succeeds for a URL-shaped alphanumeric string");
+        decodeOk = qr_host_decode_alphanumeric(qrcode, decoded, (int)sizeof(decoded), &decodedLen);
+        check(decodeOk != 0 && decodedLen == len && memcmp(decoded, url, (size_t)len) == 0,
+              "QR alphanumeric round-trip is byte-exact for a URL-shaped string (odd character count)");
+    }
+
+    /* Exact max budget (178 chars, an even count) round-trips. */
+    {
+        fill_alnum_pattern(text, PIPELINE_QR_ALNUM_MAX_CHARS);
+        encodeOk = pipeline_qr_encode_alphanumeric(text, (pipeline_u32)PIPELINE_QR_ALNUM_MAX_CHARS, qrcode);
+        check(encodeOk != 0, "QR alphanumeric encode succeeds at exactly PIPELINE_QR_ALNUM_MAX_CHARS (178)");
+        decodeOk = qr_host_decode_alphanumeric(qrcode, decoded, (int)sizeof(decoded), &decodedLen);
+        check(decodeOk != 0 && decodedLen == PIPELINE_QR_ALNUM_MAX_CHARS &&
+              memcmp(decoded, text, (size_t)PIPELINE_QR_ALNUM_MAX_CHARS) == 0,
+              "QR alphanumeric round-trip is byte-exact at the max budget");
+    }
+
+    /* One character over budget: cleanly rejected, no truncation. */
+    {
+        pipeline_u8 overBudget[PIPELINE_QR_ALNUM_MAX_CHARS + 1];
+        fill_alnum_pattern(overBudget, (int)sizeof(overBudget));
+        memset(qrcode, 0xFF, sizeof(qrcode));
+        encodeOk = pipeline_qr_encode_alphanumeric(overBudget, (pipeline_u32)sizeof(overBudget), qrcode);
+        check(encodeOk == 0, "QR alphanumeric encode rejects one character over budget (179)");
+        check(qrcode[0] == 0, "rejected alphanumeric encode leaves the invalid-size sentinel");
+    }
+
+    /* An odd character count (a trailing 6-bit single character) round-trips too. */
+    {
+        fill_alnum_pattern(text, 5);
+        encodeOk = pipeline_qr_encode_alphanumeric(text, 5u, qrcode);
+        check(encodeOk != 0, "QR alphanumeric encode succeeds for an odd (5) character count");
+        decodeOk = qr_host_decode_alphanumeric(qrcode, decoded, (int)sizeof(decoded), &decodedLen);
+        check(decodeOk != 0 && decodedLen == 5 && memcmp(decoded, text, 5) == 0,
+              "QR alphanumeric round-trip is byte-exact for an odd character count (trailing 6-bit char)");
+    }
+
+    /* A byte outside the alphanumeric charset (lowercase, never legal on
+     * this build's all-uppercase wire) is rejected, not silently coerced. */
+    {
+        pipeline_u8 badText[8];
+        memcpy(badText, "HTTPS://", 8);
+        badText[0] = (pipeline_u8)'h'; /* lowercase */
+        memset(qrcode, 0xFF, sizeof(qrcode));
+        encodeOk = pipeline_qr_encode_alphanumeric(badText, 8u, qrcode);
+        check(encodeOk == 0, "QR alphanumeric encode rejects a non-alphanumeric-charset byte (lowercase)");
+        check(qrcode[0] == 0, "rejected alphanumeric encode (bad charset) leaves the invalid-size sentinel");
+    }
+}
+
+/*
+ * base32 codec known-answer tests (spec #115, sub-issue #116): RFC 4648
+ * section 10's own example vectors, adapted to this codec's no-padding
+ * convention (upstream's vectors include trailing '=' padding; this codec
+ * never emits or expects it -- base32.h's own header comment explains why
+ * -- so each expected string below is upstream's vector with any trailing
+ * '=' stripped).
+ */
+static void check_base32(const char *input, int inputLen, const char *expected, const char *what)
+{
+    pipeline_u8 encoded[64];
+    pipeline_u32 encodedLen;
+    int expectedLen = (int)strlen(expected);
+    pipeline_u8 decoded[64];
+    pipeline_u32 decodedLen = 0;
+    int decodeOk;
+    char whatDecode[192];
+
+    encodedLen = pipeline_base32_encode((const pipeline_u8 *)input, (pipeline_u32)inputLen,
+                                         encoded, (pipeline_u32)sizeof(encoded));
+    check(encodedLen == (pipeline_u32)expectedLen && memcmp(encoded, expected, (size_t)expectedLen) == 0, what);
+
+    decodeOk = pipeline_base32_decode(encoded, encodedLen, decoded, (pipeline_u32)sizeof(decoded), &decodedLen);
+    snprintf(whatDecode, sizeof(whatDecode), "%s (decode is the exact inverse)", what);
+    check(decodeOk != 0 && decodedLen == (pipeline_u32)inputLen &&
+          memcmp(decoded, input, (size_t)inputLen) == 0, whatDecode);
+}
+
+static void test_base32_known_answer_vectors(void)
+{
+    check_base32("", 0, "", "base32(\"\") == \"\" (RFC 4648 section 10)");
+    check_base32("f", 1, "MY", "base32(\"f\") == \"MY\" (RFC 4648 section 10, no padding)");
+    check_base32("fo", 2, "MZXQ", "base32(\"fo\") == \"MZXQ\" (RFC 4648 section 10, no padding)");
+    check_base32("foo", 3, "MZXW6", "base32(\"foo\") == \"MZXW6\" (RFC 4648 section 10, no padding)");
+    check_base32("foob", 4, "MZXW6YQ", "base32(\"foob\") == \"MZXW6YQ\" (RFC 4648 section 10, no padding)");
+    check_base32("fooba", 5, "MZXW6YTB", "base32(\"fooba\") == \"MZXW6YTB\" (RFC 4648 section 10, no padding)");
+    check_base32("foobar", 6, "MZXW6YTBOI", "base32(\"foobar\") == \"MZXW6YTBOI\" (RFC 4648 section 10, no padding)");
+
+    /* Decode-side rejection: a non-alphabet byte (including a literal '='
+     * -- this codec's wire never carries padding) is rejected, not
+     * silently skipped. */
+    {
+        pipeline_u8 decoded[16];
+        pipeline_u32 decodedLen = 0;
+        int decodeOk = pipeline_base32_decode((const pipeline_u8 *)"MY======", 8, decoded, (pipeline_u32)sizeof(decoded), &decodedLen);
+        check(decodeOk == 0, "pipeline_base32_decode rejects a literal '=' padding byte");
+    }
+    {
+        pipeline_u8 decoded[16];
+        pipeline_u32 decodedLen = 0;
+        int decodeOk = pipeline_base32_decode((const pipeline_u8 *)"my", 2, decoded, (pipeline_u32)sizeof(decoded), &decodedLen);
+        check(decodeOk == 0, "pipeline_base32_decode rejects lowercase (this codec is uppercase-only)");
+    }
+}
+
+/*
+ * Fragmenter boundary + header round-trip tests (spec #115, sub-issue
+ * #116): pipeline_fragment_count()/pipeline_fragment_build()/
+ * pipeline_fragment_parse_header() are pure functions of (base32 length,
+ * per-frame alnum budget) -- exercised directly here, hand-computed,
+ * independent of any real build_event() payload (see
+ * test_build_event_multiframe_round_trip()'s own header comment for why
+ * the genuine N=1 boundary is pinned HERE rather than at the build_event
+ * seam).
+ */
+static void test_fragment_boundaries_and_header_round_trip(void)
+{
+    pipeline_u8 base32Text[16];
+    pipeline_u32 count;
+    pipeline_u8 fragment[16];
+    pipeline_u32 fragmentLen = 0;
+    pipeline_u32 idx, cnt;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        base32Text[i] = (pipeline_u8)('A' + (i % 26));
+    }
+
+    /* N=1 boundary: a payload that exactly fills one frame's chunk budget
+     * (perFrameBudget=10 -> 4-byte header + 6-byte chunk cap) still
+     * reports N=1, not N=2. */
+    count = pipeline_fragment_count(6u, 10u);
+    check(count == 1u, "pipeline_fragment_count: base32Len == chunkCap reports N=1 (fits exactly)");
+
+    /* Just-over-one-frame boundary: one character more than the chunk
+     * budget forces a second frame. */
+    count = pipeline_fragment_count(7u, 10u);
+    check(count == 2u, "pipeline_fragment_count: base32Len == chunkCap+1 reports N=2 (just over one frame)");
+
+    /* The degenerate empty-payload case is still N=1. */
+    count = pipeline_fragment_count(0u, 10u);
+    check(count == 1u, "pipeline_fragment_count: an empty payload still reports N=1 (degenerate case)");
+
+    /* An invalid budget (no room for even one chunk byte after the fixed
+     * header) is reported as invalid (0), not silently miscounted. */
+    count = pipeline_fragment_count(6u, 4u);
+    check(count == 0u, "pipeline_fragment_count: a budget with no room for a chunk byte is invalid (0)");
+
+    /* Build+parse round-trip at the N=2 boundary: fragment 0 gets exactly
+     * chunkCap (6) chars, fragment 1 gets the 1 leftover char; both
+     * headers parse back to their own index/count. */
+    check(pipeline_fragment_build(base32Text, 7u, 10u, 0u, 2u, fragment, &fragmentLen) != 0 &&
+          fragmentLen == 10u && memcmp(fragment + 4, base32Text, 6) == 0,
+          "pipeline_fragment_build: fragment 0 of 2 carries the first 6-char chunk after its 4-char header");
+    check(pipeline_fragment_parse_header(fragment, fragmentLen, &idx, &cnt) != 0 && idx == 0u && cnt == 2u,
+          "pipeline_fragment_parse_header: fragment 0's header round-trips to index 0 of 2");
+
+    check(pipeline_fragment_build(base32Text, 7u, 10u, 1u, 2u, fragment, &fragmentLen) != 0 &&
+          fragmentLen == 5u && fragment[4] == base32Text[6],
+          "pipeline_fragment_build: fragment 1 of 2 carries the trailing 1-char chunk after its 4-char header");
+    check(pipeline_fragment_parse_header(fragment, fragmentLen, &idx, &cnt) != 0 && idx == 1u && cnt == 2u,
+          "pipeline_fragment_parse_header: fragment 1's header round-trips to index 1 of 2");
+
+    /* A structurally invalid header (index >= count) is rejected. */
+    {
+        pipeline_u8 badHeader[6];
+        memcpy(badHeader, "ZZ01AB", 6); /* index "ZZ" (1295) >= count "01" (1) */
+        check(pipeline_fragment_parse_header(badHeader, 6u, &idx, &cnt) == 0,
+              "pipeline_fragment_parse_header rejects a header whose index >= its own count");
+    }
+
+    /* Rejects a bad request: frameIndex >= frameCount. */
+    check(pipeline_fragment_build(base32Text, 7u, 10u, 2u, 2u, fragment, &fragmentLen) == 0,
+          "pipeline_fragment_build rejects frameIndex >= frameCount");
+}
+
+/*
+ * URL wrap/strip tests (spec #115, sub-issue #116): pipeline_url_wrap()/
+ * pipeline_url_strip() are pure functions producing/consuming exactly
+ * HTTPS://<base>/<fragment>, all-uppercase, path-based.
+ */
+static void test_url_wrap_and_strip(void)
+{
+    static const pipeline_u8 baseUrl[] = "EXAMPLE.TEST";
+    pipeline_u32 baseUrlLen = (pipeline_u32)(sizeof(baseUrl) - 1);
+    static const pipeline_u8 fragment[] = "0102ABCDEF";
+    pipeline_u32 fragmentLen = (pipeline_u32)(sizeof(fragment) - 1);
+    pipeline_u8 url[128];
+    pipeline_u32 urlLen;
+    pipeline_u8 stripped[64];
+    pipeline_u32 strippedLen = 0;
+
+    urlLen = pipeline_url_wrap(baseUrl, baseUrlLen, fragment, fragmentLen, url, (pipeline_u32)sizeof(url));
+    check(urlLen == (pipeline_u32)(8 + 12 + 1 + 10) &&
+          memcmp(url, "HTTPS://EXAMPLE.TEST/0102ABCDEF", (size_t)urlLen) == 0,
+          "pipeline_url_wrap produces the exact expected all-uppercase path-based URL");
+
+    check(pipeline_url_strip(url, urlLen, baseUrl, baseUrlLen, stripped, (pipeline_u32)sizeof(stripped),
+                              &strippedLen) != 0 &&
+          strippedLen == fragmentLen && memcmp(stripped, fragment, fragmentLen) == 0,
+          "pipeline_url_strip recovers the exact original fragment");
+
+    /* A URL wrapped around a DIFFERENT base is rejected, not silently
+     * mis-stripped. */
+    {
+        static const pipeline_u8 wrongBase[] = "OTHER.TEST";
+        check(pipeline_url_strip(url, urlLen, wrongBase, (pipeline_u32)(sizeof(wrongBase) - 1),
+                                  stripped, (pipeline_u32)sizeof(stripped), &strippedLen) == 0,
+              "pipeline_url_strip rejects a URL whose base doesn't match the expected one");
+    }
+    {
+        pipeline_u8 truncated[4];
+        memcpy(truncated, url, 4);
+        check(pipeline_url_strip(truncated, 4u, baseUrl, baseUrlLen, stripped, (pipeline_u32)sizeof(stripped),
+                                  &strippedLen) == 0,
+              "pipeline_url_strip rejects a URL shorter than the expected prefix");
+    }
+}
+
+/*
+ * The ADR-0006 keystone round-trip, at the real build_event() seam (spec
+ * #115, sub-issue #116): a real StarCapture + this host tool's own baked
+ * default "sm64" tag + "TEST" name produces N>=2 frames under this
+ * build's own baked PIPELINE_URL_BASE -- ADR-0006 itself observes the
+ * honest v3 floor already overflows one frame once URL-wrapped under any
+ * realistic domain (see docs/adr/0006's own "the honest floor overflows
+ * one frame" argument), so this build's own N is expected to be >1, not a
+ * hand-picked worst case (see tools/pipeline_test/Makefile's own comment
+ * on TEST_URL_BASE). The genuine N=1 boundary is instead pinned directly
+ * at the fragmenter (test_fragment_boundaries_and_header_round_trip()
+ * above), since build_event()'s own frame count is a single compile-time
+ * constant for this whole binary (PIPELINE_BUILT_FRAME_COUNT) and can't be
+ * varied per call the way a real reader must handle across different
+ * builds.
+ */
+static void test_build_event_multiframe_round_trip(void)
+{
+    StarCapture capture;
+    BuiltEvent event;
+    int buildOk;
+    pipeline_u8 recovered[PIPELINE_BUILT_PAYLOAD_SIZE];
+    pipeline_u32 recoveredLen = 0;
+    int ok;
+    StarCapture rebuilt;
+    pipeline_u32 createdAtOut;
+    pipeline_u8 pubkeyOut[PIPELINE_FMT_SIZE_PUBKEY];
+    pipeline_u8 tagOut[PIPELINE_PACK_MAX_TAG_LEN];
+    pipeline_u8 tagLenOut;
+    pipeline_u8 nameOut[PIPELINE_PACK_MAX_NAME_LEN];
+    pipeline_u8 nameLenOut;
+    pipeline_u8 sigOut[PIPELINE_FMT_SIZE_SIG];
+    int unpackRc;
+    int reversedOrder[PIPELINE_BUILT_FRAME_COUNT];
+    pipeline_u32 i;
+
+    capture.course  = 8;
+    capture.act     = 4;
+    capture.coins   = 50;
+    capture.frames  = 0x0BAD0BADu;
+    capture.nonce16 = 0xABCD;
+    capture.keyId   = 1;
+
+    buildOk = build_event(&capture, kBuildEventPrivkey, &event);
+    check(buildOk != 0, "multiframe round-trip: build_event succeeds");
+    if (!buildOk) {
+        return;
+    }
+
+    check(event.frame_count >= 2u,
+          "multiframe round-trip: this build's default \"sm64\" tag + representative event name "
+          "produces N>=2 frames (spec #115 sub-issue #116's own acceptance criterion)");
+
+    /* Natural order. */
+    ok = reassemble_built_event(&event, NULL, event.frame_count, recovered,
+                                 (pipeline_u32)sizeof(recovered), &recoveredLen);
+    check(ok != 0 && recoveredLen == (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE &&
+          memcmp(recovered, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
+          "multiframe round-trip: natural-order reassembly recovers the exact packed_payload");
+
+    /* Any order: reversed. Fragments carry their own index, so arrival
+     * order must never matter. */
+    for (i = 0; i < event.frame_count; i++) {
+        reversedOrder[i] = (int)(event.frame_count - 1u - i);
+    }
+    recoveredLen = 0;
+    ok = reassemble_built_event(&event, reversedOrder, event.frame_count, recovered,
+                                 (pipeline_u32)sizeof(recovered), &recoveredLen);
+    check(ok != 0 && recoveredLen == (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE &&
+          memcmp(recovered, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE) == 0,
+          "multiframe round-trip: reverse-order reassembly still recovers the exact packed_payload");
+
+    /* Missing fragment: drop the last frame -- reports incomplete, never a
+     * wrong/partial event. */
+    recoveredLen = 0;
+    ok = reassemble_built_event(&event, NULL, event.frame_count - 1u, recovered,
+                                 (pipeline_u32)sizeof(recovered), &recoveredLen);
+    check(ok == 0, "multiframe round-trip: a missing fragment reports incomplete, never a wrong/partial event");
+
+    /* Recovered bytes unpack back to the original StarCapture, closing the
+     * loop back to the unchanged v3 pack/unpack contract. */
+    recoveredLen = 0;
+    ok = reassemble_built_event(&event, NULL, event.frame_count, recovered,
+                                 (pipeline_u32)sizeof(recovered), &recoveredLen);
+    unpackRc = pipeline_unpack(recovered, recoveredLen, &rebuilt, &createdAtOut, pubkeyOut,
+                                tagOut, &tagLenOut, nameOut, &nameLenOut, sigOut);
+    check(ok != 0 && unpackRc == PIPELINE_UNPACK_OK,
+          "multiframe round-trip: the reassembled bytes pipeline_unpack cleanly");
+    check(rebuilt.course == capture.course && rebuilt.act == capture.act &&
+          rebuilt.coins == capture.coins && rebuilt.frames == capture.frames &&
+          rebuilt.nonce16 == capture.nonce16 && rebuilt.keyId == capture.keyId,
+          "multiframe round-trip: the reassembled+unpacked StarCapture matches the original exactly");
 }
 
 /*
@@ -1959,7 +2448,7 @@ static void test_capture_matches_host_build_event(void)
           "for the same course/act/coins/frames/nonce");
 
     check(buildOkA && buildOkB
-              && memcmp(eventFromGlue.qr_bitmap, eventFromHand.qr_bitmap,
+              && memcmp(eventFromGlue.qr_bitmaps[0], eventFromHand.qr_bitmaps[0],
                          PIPELINE_BUILT_QR_BITMAP_SIZE) == 0,
           "byte-identity: capture-glue path's qr_bitmap == hand-built-StarCapture path's qr_bitmap "
           "for the same course/act/coins/frames/nonce");
@@ -1999,7 +2488,7 @@ static void test_qr_display_state_machine(void)
      * assertion below (c) is actually meaningful. */
     anyNonZero = 0;
     for (i = 0; i < PIPELINE_BUILT_QR_BITMAP_SIZE; i++) {
-        if (event.qr_bitmap[i] != 0) {
+        if (event.qr_bitmaps[0][i] != 0) {
             anyNonZero = 1;
             break;
         }
@@ -2009,10 +2498,10 @@ static void test_qr_display_state_machine(void)
     qr_display_init(&state);
     check(!qr_display_is_active(&state), "qr_display: freshly-initialized state is not active");
 
-    check(qr_display_present(&state, event.qr_bitmap) != 0,
+    check(qr_display_present(&state, event.qr_bitmaps[0]) != 0,
           "qr_display: present() succeeds on a fresh state");
     check(qr_display_is_active(&state), "qr_display: state is active immediately after present()");
-    check(memcmp(state.bitmap, event.qr_bitmap, PIPELINE_BUILT_QR_BITMAP_SIZE) == 0,
+    check(memcmp(state.bitmap, event.qr_bitmaps[0], PIPELINE_BUILT_QR_BITMAP_SIZE) == 0,
           "qr_display: presented state holds a copy of the bitmap");
 
     /* (a) holding A from the dance (the same press that triggered it,
@@ -2047,7 +2536,7 @@ static void test_qr_display_state_machine(void)
 
     /* (d) a re-summon attempt (present() again on the SAME, already-
      * dismissed state) is rejected -- the never-re-summonable invariant. */
-    check(qr_display_present(&state, event.qr_bitmap) == 0,
+    check(qr_display_present(&state, event.qr_bitmaps[0]) == 0,
           "qr_display: present() after a dismissal on the same state is rejected "
           "(never re-summonable)");
     check(!qr_display_is_active(&state), "qr_display: a rejected present() leaves the state inactive");
@@ -3008,6 +3497,11 @@ int main(void)
     test_pubkey_known_answer();
     test_qr_round_trip_representative_sizes();
     test_qr_rejects_over_budget_cleanly();
+    test_qr_alphanumeric_round_trip_and_rejections();
+    test_base32_known_answer_vectors();
+    test_fragment_boundaries_and_header_round_trip();
+    test_url_wrap_and_strip();
+    test_build_event_multiframe_round_trip();
     test_sha256_known_answer_vectors();
     test_event_id_matches_reference();
     test_event_name_change_changes_id();

@@ -96,6 +96,27 @@
 #define PIPELINE_QR_MAX_PAYLOAD_BYTES 122
 
 /*
+ * Usable ALPHANUMERIC-mode character capacity of a version 7, ECC MEDIUM QR
+ * Code (spec #115, sub-issue #116 -- ADR-0006's airgap transport wraps
+ * every fragment as a plaintext URL, which rides this denser mode rather
+ * than BYTE): after the mandatory 4-bit mode indicator + 9-bit alphanumeric
+ * character-count header (versions 1-9), 992 - 13 = 979 data bits remain.
+ * Alphanumeric mode packs 2 characters per 11 bits (a lone trailing
+ * character costs 6 bits): floor(979 / 11) = 89 pairs uses exactly 979
+ * bits (89*11 == 979) with 0 bits left over for a trailing single
+ * character (which would need 6 more), so the maximum is exactly 89*2 =
+ * 178 characters -- confirmed empirically against this exact encoder: 178
+ * chars round-trips, 179 is cleanly rejected. This bounds the URL text
+ * (scheme + PIPELINE_URL_BASE + path separator + fragment) build_event.c
+ * QR-encodes per frame, not the packed-payload byte budget above (a
+ * different mode, a different ceiling, and per ADR-0006 no longer a total-
+ * payload ceiling at all -- see this header's own comment on
+ * PIPELINE_QR_MAX_PAYLOAD_BYTES for why that one stays BYTE-mode-only and
+ * per-build).
+ */
+#define PIPELINE_QR_ALNUM_MAX_CHARS 178
+
+/*
  * pipeline_qr_encode: encodes payload[0 : payloadLen] as a fixed-version-7/
  * ECC-MEDIUM, BYTE-mode QR Code, with a single fixed mask (PIPELINE_QR_MASK,
  * not qrcodegen_Mask_AUTO), into out (a qrcodegen-format bitmap; read it
@@ -108,6 +129,22 @@
  */
 int pipeline_qr_encode(const pipeline_u8 *payload, pipeline_u32 payloadLen,
                         pipeline_u8 out[PIPELINE_QR_BUFFER_LEN]);
+
+/*
+ * pipeline_qr_encode_alphanumeric: encodes text[0 : textLen] as a fixed-
+ * version-7/ECC-MEDIUM, ALPHANUMERIC-mode QR Code, with the same single
+ * fixed mask (PIPELINE_QR_MASK) as pipeline_qr_encode() above, into out.
+ * text must contain only the QR alphanumeric charset (0-9, A-Z, space,
+ * $ % * + - . / :) -- ADR-0006's URL-wrapped fragment text (url.h) always
+ * does, by construction.
+ *
+ * Returns nonzero (true) on success. Returns 0 (false) -- writing nothing
+ * usable to out -- if textLen exceeds PIPELINE_QR_ALNUM_MAX_CHARS or text
+ * contains a non-alphanumeric-charset byte. Callers must check the return
+ * value.
+ */
+int pipeline_qr_encode_alphanumeric(const pipeline_u8 *text, pipeline_u32 textLen,
+                                     pipeline_u8 out[PIPELINE_QR_BUFFER_LEN]);
 
 /* Thin pass-throughs to qrcodegen_getSize/qrcodegen_getModule, so callers
  * outside src/pipeline never need to name those functions directly -- note
