@@ -81,7 +81,7 @@ int main(void)
         /* Don't read event.frame_count below: on failure build_event() makes
          * no promise about out's contents (see build_event.h's own return-
          * value contract), so event is not guaranteed initialized here. */
-        printf("1 worst-case check(s) FAILED\n");
+        printf("%d worst-case check(s) FAILED\n", g_failures);
         return 1;
     }
 
