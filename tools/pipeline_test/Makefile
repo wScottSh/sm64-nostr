@@ -122,6 +122,13 @@
 # stays purely a small, readable host-test fixture choice, not a
 # ceiling-driven one.
 #
+# Spec #115 sub-issue #118 adds ../../src/game/qr_cycle.c -- the star-
+# capture overlay's frame-cycling PURE core (the (frameCount, tick) ->
+# frameIndex selector). Compiled here unmodified, exactly like qr_render.c/
+# qr_display.c above; the N64 shell half (qr_display_n64.c's cycling glue)
+# is deliberately excluded for the same <ultra64.h> reason qr_render_n64.c/
+# qr_display_n64.c already are.
+#
 # Spec #115 sub-issue #117 adds a SECOND, separate binary (WORSTCASE_BIN,
 # worst_case_main.c) built against its own generated event_profile.h, baked
 # with format v3's actual worst-case field widths (WORSTCASE_TAG, 10 B;
@@ -160,6 +167,7 @@ SRCS := main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c $(P
         $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c \
         $(PIPELINE_DIR)/secp256k1.c $(PIPELINE_DIR)/schnorr_adapter.c \
         $(PIPELINE_DIR)/capture.c $(GAME_DIR)/qr_render.c $(GAME_DIR)/qr_display.c \
+        $(GAME_DIR)/qr_cycle.c \
         $(PIPELINE_DIR)/base32.c $(PIPELINE_DIR)/fragment.c $(PIPELINE_DIR)/url.c
 BIN  := pipeline_test
 

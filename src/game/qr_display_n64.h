@@ -49,19 +49,19 @@
 
 /*
  * qr_display_n64_present: presents event->qr_bitmaps[0] on the shared
- * state (spec #115, sub-issue #116: BuiltEvent is now frame_count + N
- * qr_bitmaps, but this call is a deliberate frame-0-only stopgap until
- * sibling sub-issue #118 lands the real on-device cycling shell -- see
- * qr_display_n64.c's own comment on qr_display_n64_present()).
- * Returns nonzero on success, 0 if rejected -- see qr_display_present()
- * (already shown once this session, or already active). Callers (both
- * save-flow sites) must check the return value: on rejection there is
- * nothing new to show, so they must fall through to whatever they'd do if
- * no event applies at all (this never actually happens for a real star
- * grab today, since each grab can only reach its site once per dance, but
- * is still the documented, checked contract -- mirroring build_event()'s
- * own "callers must check the return value" convention, src/pipeline/
- * build_event.h).
+ * state and arms this shell's own frame-cycling copy of the WHOLE frame set
+ * (spec #115, sub-issue #118: BuiltEvent is frame_count + N qr_bitmaps,
+ * ADR-0006/sub-issue #116; qr_display_n64_render_if_active() below cycles
+ * through all of them at a fixed cadence via the pure qr_cycle_frame_index()
+ * selector, qr_cycle.h). Returns nonzero on success, 0 if rejected -- see
+ * qr_display_present() (already shown once this session, or already
+ * active). Callers (both save-flow sites) must check the return value: on
+ * rejection there is nothing new to show, so they must fall through to
+ * whatever they'd do if no event applies at all (this never actually
+ * happens for a real star grab today, since each grab can only reach its
+ * site once per dance, but is still the documented, checked contract --
+ * mirroring build_event()'s own "callers must check the return value"
+ * convention, src/pipeline/build_event.h).
  */
 int qr_display_n64_present(const BuiltEvent *event);
 
@@ -94,7 +94,16 @@ int qr_display_n64_step(void);
  * framebuffer is a PHYSICAL framebuffer address (e.g.
  * gPhysicalFramebuffers[sRenderedFramebuffer], see this header's own
  * comment for why THAT specific buffer, at THAT specific call site, is
- * the correct one) -- passed straight through to
+ * the correct one).
+ *
+ * Also owns the frame-cycling cadence (spec #115, sub-issue #118): each
+ * call is one render tick, advancing this shell's own tick counter and
+ * feeding it, plus the frame count captured at present() time, through the
+ * pure qr_cycle_frame_index() selector (qr_cycle.h) to pick which of the N
+ * captured frames to blit this tick -- QR_CYCLE_HOLD_TICKS consecutive
+ * ticks per frame, then advance and wrap. An N=1 event's selector always
+ * returns 0, so it renders as a single static frame, unchanged from
+ * before this sub-issue. The selected frame is passed straight through to
  * qr_render_blit_to_uncached_framebuffer (#32), which performs the actual
  * uncached-address conversion and pixel writes.
  */

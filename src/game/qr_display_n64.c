@@ -7,6 +7,7 @@
 #include <ultra64.h>
 
 #include "game_init.h"
+#include "qr_cycle.h"
 #include "qr_display.h"
 #include "qr_display_n64.h"
 #include "qr_render_n64.h"
@@ -35,22 +36,54 @@
  */
 static QrDisplayState sQrDisplay;
 
+/*
+ * The cycling shell's own copy of the WHOLE frame set (spec #115, sub-issue
+ * #118), captured at present() time -- sQrDisplay.bitmap only ever holds
+ * frame 0 (the pure qr_display core's own contract, qr_display.h, is
+ * unmodified by this sub-issue), so the remaining N-1 frames live here,
+ * where the shell that actually cycles them can reach them. Sized to
+ * PIPELINE_BUILT_FRAME_COUNT/PIPELINE_BUILT_QR_BITMAP_SIZE, the SAME
+ * compile-time constants BuiltEvent::qr_bitmaps itself uses (build_event.h)
+ * -- this build only ever has one frame count/bitmap size, so no separate
+ * bound is introduced. sFrameCount and sTick are meaningless while
+ * sQrDisplay is not active; qr_display_n64_present() (re-)arms both exactly
+ * when it (re-)arms sQrDisplay, and qr_display_n64_render_if_active() only
+ * ever reads them while sQrDisplay IS active.
+ */
+static pipeline_u8 sQrFrames[PIPELINE_BUILT_FRAME_COUNT][PIPELINE_BUILT_QR_BITMAP_SIZE];
+static pipeline_u32 sFrameCount;
+static pipeline_u32 sTick;
+
 int qr_display_n64_present(const BuiltEvent *event) {
+    pipeline_u32 i, j;
+
     if (!qr_display_is_active(&sQrDisplay)) {
         qr_display_init(&sQrDisplay);
     }
+
+    if (!qr_display_present(&sQrDisplay, event->qr_bitmaps[0])) {
+        return 0;
+    }
+
     /*
-     * ADR-0006 multi-frame transport (spec #115, sub-issue #116) replaced
-     * BuiltEvent's single qr_bitmap with frame_count + qr_bitmaps[N].
-     * Presenting frame 0 only, unconditionally, is a deliberate STOPGAP:
-     * on-device cycling through all N frames on a fixed cadence (the pure
-     * (frameCount, tick) -> frameIndex selector ADR-0006/spec #115 itself
-     * calls for) is sibling sub-issue #118's scope, not this one's. This
-     * keeps the ROM building and keeps today's N=1 behavior exactly
-     * unchanged (a single static frame); an N>1 build displays only its
-     * first fragment's QR until #118 lands the real cycling shell.
+     * Copy the full frame set (ADR-0006 multi-frame transport, spec #115
+     * sub-issue #116) into this shell's own storage so
+     * qr_display_n64_render_if_active() can cycle through all of them
+     * (sub-issue #118), not just the frame 0 the pure qr_display core
+     * holds. Byte-by-byte, hand-rolled -- mirroring qr_display.c's own
+     * <string.h>-avoidance convention (this file already includes
+     * <ultra64.h>, so a real memcpy would be available here, but matching
+     * the surrounding module's own idiom keeps the copy visibly identical
+     * to qr_display_present()'s).
      */
-    return qr_display_present(&sQrDisplay, event->qr_bitmaps[0]);
+    sFrameCount = event->frame_count;
+    for (i = 0; i < sFrameCount; i++) {
+        for (j = 0; j < (pipeline_u32) sizeof(sQrFrames[i]); j++) {
+            sQrFrames[i][j] = event->qr_bitmaps[i][j];
+        }
+    }
+    sTick = 0;
+    return 1;
 }
 
 int qr_display_n64_is_active(void) {
@@ -63,7 +96,20 @@ int qr_display_n64_step(void) {
 }
 
 void qr_display_n64_render_if_active(uintptr_t framebuffer) {
-    if (qr_display_is_active(&sQrDisplay)) {
-        qr_render_blit_to_uncached_framebuffer(sQrDisplay.bitmap, framebuffer);
+    pipeline_u32 frameIndex;
+
+    if (!qr_display_is_active(&sQrDisplay)) {
+        return;
     }
+
+    /*
+     * Cycling shell (spec #115, sub-issue #118): pick this tick's frame via
+     * the pure qr_cycle_frame_index() selector (qr_cycle.h), then advance
+     * the tick counter for the next render call. An N=1 event's selector
+     * always returns 0, so this blits the same single frame every tick --
+     * unchanged from before this sub-issue.
+     */
+    frameIndex = qr_cycle_frame_index(sFrameCount, sTick);
+    sTick++;
+    qr_render_blit_to_uncached_framebuffer(sQrFrames[frameIndex], framebuffer);
 }

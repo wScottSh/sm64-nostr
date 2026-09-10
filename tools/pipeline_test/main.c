@@ -180,6 +180,15 @@
  * wrap/strip pair, the QR alphanumeric round-trip, and the
  * build_event()-seam keystone round-trip (natural order, any order,
  * missing-fragment-is-incomplete) -- see each test's own header comment.
+ *
+ * Spec #115 sub-issue #118 adds test_qr_cycle_frame_index()
+ * (../../src/game/qr_cycle.h/.c -- the star-capture overlay's frame-
+ * cycling PURE core, compiled a second time here exactly like qr_render.c/
+ * qr_display.c already are). Pins the (frameCount, tick) -> frameIndex
+ * selector's cycling/wrap/N=1 behavior directly; the N64-specific cycling
+ * shell (real per-tick blit, real cadence-driving render loop --
+ * qr_display_n64.c) is deliberately NOT compiled here, for the same
+ * <ultra64.h> reason qr_render_n64.c/qr_display_n64.c already aren't.
  */
 #include <stdio.h>
 #include <string.h>
@@ -197,6 +206,7 @@
 #include "capture.h"
 #include "qr_render.h"
 #include "qr_display.h"
+#include "qr_cycle.h"
 #include "base32.h"
 #include "fragment.h"
 #include "url.h"
@@ -2664,6 +2674,71 @@ static void test_qr_display_state_machine(void)
 }
 
 /*
+ * test_qr_cycle_frame_index: the star-capture overlay's frame-cycling PURE
+ * core (spec #115, sub-issue #118) -- see ../../src/game/qr_cycle.h. Pins
+ * the acceptance-critical shape directly: cycles 0..N-1, holds each frame
+ * for QR_CYCLE_HOLD_TICKS consecutive ticks, wraps back to 0, and the N=1
+ * degenerate case never advances off frame 0.
+ */
+static void test_qr_cycle_frame_index(void)
+{
+    pipeline_u32 tick;
+
+    /* N=1: every tick, no matter how large, stays on frame 0 -- the
+     * degenerate "single static frame" case spec #118 requires stay
+     * unchanged from today. */
+    {
+        int ok = 1;
+        for (tick = 0; tick < 5 * QR_CYCLE_HOLD_TICKS + 3; tick++) {
+            if (qr_cycle_frame_index(1, tick) != 0) {
+                ok = 0;
+                break;
+            }
+        }
+        check(ok, "qr_cycle: frameCount == 1 always returns frame 0");
+    }
+
+    /* N=3: each frame holds for exactly QR_CYCLE_HOLD_TICKS ticks, then
+     * advances by one and wraps -- walk two full cycles (0,1,2,0,1,2). */
+    {
+        pipeline_u32 frameCount = 3;
+        pipeline_u32 cycle;
+        int ok = 1;
+
+        for (cycle = 0; cycle < 2 && ok; cycle++) {
+            pipeline_u32 frame;
+            for (frame = 0; frame < frameCount && ok; frame++) {
+                pipeline_u32 offset;
+                for (offset = 0; offset < QR_CYCLE_HOLD_TICKS; offset++) {
+                    pipeline_u32 t = (cycle * frameCount + frame) * QR_CYCLE_HOLD_TICKS + offset;
+                    pipeline_u32 got = qr_cycle_frame_index(frameCount, t);
+                    if (got != frame) {
+                        ok = 0;
+                        break;
+                    }
+                }
+            }
+        }
+        check(ok, "qr_cycle: N=3 holds each frame for QR_CYCLE_HOLD_TICKS ticks, "
+                  "cycles 0..N-1, and wraps across two full cycles");
+    }
+
+    /* The tick just before a hold boundary is still the old frame; the
+     * tick AT the boundary is the new one -- pins the exact edge, not just
+     * the interior of each hold. */
+    check(qr_cycle_frame_index(3, QR_CYCLE_HOLD_TICKS - 1) == 0,
+          "qr_cycle: the last tick of frame 0's hold is still frame 0");
+    check(qr_cycle_frame_index(3, QR_CYCLE_HOLD_TICKS) == 1,
+          "qr_cycle: the tick at the hold boundary advances to frame 1");
+
+    /* frameCount == 0 is a defensive floor (build_event() never actually
+     * produces this): stay total, never divide by zero, always frame 0. */
+    check(qr_cycle_frame_index(0, 0) == 0, "qr_cycle: frameCount == 0 floors to frame 0 (tick 0)");
+    check(qr_cycle_frame_index(0, QR_CYCLE_HOLD_TICKS * 7) == 0,
+          "qr_cycle: frameCount == 0 floors to frame 0 (a later tick too)");
+}
+
+/*
  * Field-reduction differential sweep + operation-count proxy (spec #43
  * sub-issue #44). Establishes the two proof mechanisms this spec's later
  * sub-issues reuse -- see secp256k1.h's header comment on
@@ -3650,6 +3725,7 @@ int main(void)
     test_qr_render_overlay_paint();
     test_qr_render_glyph_orientation();
     test_qr_display_state_machine();
+    test_qr_cycle_frame_index();
     test_field_mul_differential_sweep();
     test_field_inv_differential_sweep();
     test_scalar_differential_sweep();
