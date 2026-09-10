@@ -112,14 +112,25 @@
 # must be present or gen_event_profile.py now refuses to run.
 #
 # Spec #109 sub-issue #111 promotes the event name to a signed on-wire tag,
-# packed onto the wire alongside the per-game tag within the SAME v7-MEDIUM
-# single-QR-symbol budget (PIPELINE_QR_MAX_PAYLOAD_BYTES, 122 B -- ADR-0006's
-# multi-frame transport that lifts this ceiling is out of scope for #109;
-# see build_event.c's own compile-time fits-QR check). With TAG_1_VALUE
-# fixed at "sm64" (4 B) here, the value below was shortened from the
-# pre-#111 "HOST TEST" (9 B) to "TEST" (4 B) so 113 (FIXED_SIZE) + 4 (TAG) +
-# 4 (NAME) = 121 B stays under that ceiling -- purely a host-test fixture
-# choice, not a wire-format constant.
+# packed onto the wire alongside the per-game tag. Prior to ADR-0006's
+# multi-frame transport (spec #115, sub-issue #117), both fields shared the
+# SAME v7-MEDIUM single-QR-symbol budget (PIPELINE_QR_MAX_PAYLOAD_BYTES,
+# 122 B), which is why the fixture value below was shortened from the
+# pre-#111 "HOST TEST" (9 B) to "TEST" (4 B) -- that combined single-frame
+# ceiling is now retired (build_event.c's fits-QR compile-time check is
+# gone; a longer tag+name combination just emits more frames), so "TEST"
+# stays purely a small, readable host-test fixture choice, not a
+# ceiling-driven one.
+#
+# Spec #115 sub-issue #117 adds a SECOND, separate binary (WORSTCASE_BIN,
+# worst_case_main.c) built against its own generated event_profile.h, baked
+# with format v3's actual worst-case field widths (WORSTCASE_TAG, 10 B;
+# WORSTCASE_EVENT_NAME, 15 B) instead of this file's own small "sm64"/
+# "TEST" fixture -- see worst_case_main.c's own header comment for why this
+# has to be a separate binary (PIPELINE_BUILT_PAYLOAD_SIZE/_FRAME_COUNT are
+# fixed compile-time constants per binary, derived from whichever ONE
+# event_profile.h it links) and why this build existing and compiling at
+# all is the sub-issue #117 regression lock.
 
 CC           := gcc
 PYTHON       := python3
@@ -177,9 +188,31 @@ EVENT_MANIFEST         := $(BUILD_DIR)/event_profile.manifest.json
 SECP256K1_BAKED_H_IN   := ../../include/secp256k1_baked.h.in
 SECP256K1_BAKED_H      := $(INC_DIR)/secp256k1_baked.h
 
-.PHONY: all test clean
+# Worst-case tag+name fixture (spec #115, sub-issue #117): format v3's own
+# actual per-field maxima (format_descriptor.json's TAG.max_size == 10,
+# gen_event_profile.py's EVENT_NAME_MAX_LEN == 15) -- the exact combination
+# that used to overflow the now-removed single-QR-frame total-payload
+# ceiling. A SEPARATE build dir/binary from the main pipeline_test above
+# (see worst_case_main.c's own header comment for why).
+WORSTCASE_TAG          := 0123456789
+WORSTCASE_EVENT_NAME   := ABCDEFGHIJKLMNO
+WORSTCASE_BUILD_DIR    := build-worstcase
+WORSTCASE_INC_DIR      := $(WORSTCASE_BUILD_DIR)/include
+WORSTCASE_EVENT_PROFILE_H := $(WORSTCASE_INC_DIR)/event_profile.h
+WORSTCASE_FORMAT_DESCRIPTOR_H := $(WORSTCASE_INC_DIR)/format_descriptor.h
+WORSTCASE_SECP256K1_BAKED_H := $(WORSTCASE_INC_DIR)/secp256k1_baked.h
+WORSTCASE_MANIFEST     := $(WORSTCASE_BUILD_DIR)/event_profile.manifest.json
+WORSTCASE_SRCS := worst_case_main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c \
+        $(PIPELINE_DIR)/pack_adapter.c $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c \
+        $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c \
+        $(PIPELINE_DIR)/secp256k1.c $(PIPELINE_DIR)/schnorr_adapter.c \
+        $(PIPELINE_DIR)/base32.c $(PIPELINE_DIR)/fragment.c $(PIPELINE_DIR)/url.c
+WORSTCASE_CFLAGS := -std=gnu99 -Wall -Wextra -DPIPELINE_SECP256K1_OP_COUNT -I $(SRC_DIR) -I $(PIPELINE_DIR) -I $(WORSTCASE_INC_DIR)
+WORSTCASE_BIN := pipeline_test_worstcase
 
-all: test
+.PHONY: all test worstcase-test clean
+
+all: test worstcase-test
 
 $(TEST_PRIVKEY_FILE):
 	@mkdir -p $(BUILD_DIR)
@@ -203,5 +236,23 @@ $(BIN): $(SRCS) $(FORMAT_DESCRIPTOR_H) $(EVENT_PROFILE_H) $(SECP256K1_BAKED_H)
 test: $(BIN)
 	./$(BIN)
 
+$(WORSTCASE_FORMAT_DESCRIPTOR_H): $(FORMAT_DESCRIPTOR_JSON) $(TOOLS_DIR)/gen_format_descriptor.py
+	@mkdir -p $(WORSTCASE_INC_DIR)
+	$(PYTHON) $(TOOLS_DIR)/gen_format_descriptor.py --json $(FORMAT_DESCRIPTOR_JSON) --out $@
+
+$(WORSTCASE_EVENT_PROFILE_H): $(EVENT_PROFILE_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_event_profile.py $(TOOLS_DIR)/nostr_secp256k1.py
+	@mkdir -p $(WORSTCASE_INC_DIR)
+	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat-worstcase --manifest $(WORSTCASE_MANIFEST) --commit host-test --created-at $(TEST_CREATED_AT) --event-name "$(WORSTCASE_EVENT_NAME)" --tag "$(WORSTCASE_TAG)" --url-base "$(TEST_URL_BASE)"
+
+$(WORSTCASE_SECP256K1_BAKED_H): $(SECP256K1_BAKED_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_secp256k1_baked.py $(TOOLS_DIR)/nostr_secp256k1.py
+	@mkdir -p $(WORSTCASE_INC_DIR)
+	$(PYTHON) $(TOOLS_DIR)/gen_secp256k1_baked.py --privkey $(TEST_PRIVKEY_FILE) --template $(SECP256K1_BAKED_H_IN) --out $@
+
+$(WORSTCASE_BIN): $(WORSTCASE_SRCS) $(WORSTCASE_FORMAT_DESCRIPTOR_H) $(WORSTCASE_EVENT_PROFILE_H) $(WORSTCASE_SECP256K1_BAKED_H)
+	$(CC) $(WORSTCASE_CFLAGS) -o $@ $(WORSTCASE_SRCS)
+
+worstcase-test: $(WORSTCASE_BIN)
+	./$(WORSTCASE_BIN)
+
 clean:
-	$(RM) -r $(BIN) $(BUILD_DIR)
+	$(RM) -r $(BIN) $(BUILD_DIR) $(WORSTCASE_BIN) $(WORSTCASE_BUILD_DIR)

@@ -40,20 +40,21 @@
  * pipeline_pack()'s own runtime check (returning 0) already catches this at
  * build_event() call time (see the packedLen check below), but failing at
  * COMPILE time, not just "the ROM silently never grabs a star", is the
- * loud-not-silent failure this pipeline's own conventions call for. A tag
- * over budget would otherwise surface only as the QR-fits check below
- * failing with a confusing "over the QR ceiling" message rather than the
- * real "tag too long" cause. The same discipline applies to the baked event
- * name (spec #109, sub-issue #111): gen_event_profile.py's own
- * EVENT_NAME_MAX_LEN cap (15) already keeps PIPELINE_EVENT_NAME_LEN within
- * PIPELINE_PACK_MAX_NAME_LEN, but this compile-time check catches a future
- * drift between the two loud, not silent. */
+ * loud-not-silent failure this pipeline's own conventions call for. The
+ * same discipline applies to the baked event name (spec #109, sub-issue
+ * #111): gen_event_profile.py's own EVENT_NAME_MAX_LEN cap (15) already
+ * keeps PIPELINE_EVENT_NAME_LEN within PIPELINE_PACK_MAX_NAME_LEN, but this
+ * compile-time check catches a future drift between the two loud, not
+ * silent. Both caps are independent, per-field budgets (v7-MEDIUM's own
+ * pack-format limits) -- as of ADR-0006's multi-frame transport (spec
+ * #115, sub-issue #117), neither has to also fit some COMBINED single-QR-
+ * frame total-payload ceiling: a tag+name combination that used to overflow
+ * one frame now simply produces more frames (see the base32/fragment/URL
+ * section below), never a compile error. */
 typedef char pipeline_build_event_tag_len_check[
     (PIPELINE_EVENT_TAG_1_LEN <= PIPELINE_PACK_MAX_TAG_LEN) ? 1 : -1];
 typedef char pipeline_build_event_name_len_check[
     (PIPELINE_EVENT_NAME_LEN <= PIPELINE_PACK_MAX_NAME_LEN) ? 1 : -1];
-typedef char pipeline_build_event_payload_fits_qr_check[
-    (PIPELINE_BUILT_PAYLOAD_SIZE <= PIPELINE_QR_MAX_PAYLOAD_BYTES) ? 1 : -1];
 typedef char pipeline_build_event_qr_version_check[
     (PIPELINE_BUILT_QR_VERSION == PIPELINE_QR_VERSION) ? 1 : -1];
 typedef char pipeline_build_event_qr_bitmap_size_check[

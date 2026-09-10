@@ -414,15 +414,17 @@ static void test_build_event_end_to_end(void)
      * format_descriptor.json) plus this build's own per-game tag length
      * (4 for "sm64") plus this build's own baked event-name length (4 for
      * "TEST", spec #109 sub-issue #111 threads the real baked name into
-     * build_event -- see build_event.c's own comment) = 121 B, comfortably
-     * inside the v7/MEDIUM 122 B single-symbol ceiling
-     * (PIPELINE_QR_MAX_PAYLOAD_BYTES). 138 B is format v3's own worst case
-     * (TAG_LEN=10, NAME_LEN=15) and does NOT fit this ceiling -- see
-     * qr_adapter.h's own comment on why that's expected, not a bug, under
-     * ADR-0006's multi-frame transport. */
+     * build_event -- see build_event.c's own comment) = 121 B. This fixture
+     * happens to fit one v7/MEDIUM QR symbol's raw BYTE-mode capacity
+     * (PIPELINE_QR_MAX_PAYLOAD_BYTES, 122 B), but that is no longer load-
+     * bearing for build_event() itself: as of ADR-0006's multi-frame
+     * transport (spec #115, sub-issue #117), the packed payload is never
+     * QR-encoded directly, and there is no total-payload ceiling -- format
+     * v3's own worst case (TAG_LEN=10, NAME_LEN=15, 138 B) builds and
+     * reassembles too, just as more frames (see
+     * test_build_event_multiframe_round_trip() below). */
     check(PIPELINE_BUILT_PAYLOAD_SIZE == 121u,
-          "build_event's packed_payload size is 121 B (113 + 4-byte \"sm64\" tag + 4-byte \"TEST\" name), "
-          "within the v7/MEDIUM ceiling");
+          "build_event's packed_payload size is 121 B (113 + 4-byte \"sm64\" tag + 4-byte \"TEST\" name)");
 
     /* (a) ADR-0006's transport envelope (spec #115, sub-issue #116): the
      * host decodes every emitted QR frame (ALPHANUMERIC-mode URLs, not raw

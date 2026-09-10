@@ -242,7 +242,7 @@ typedef struct BuiltEvent {
  * url.h's pipeline_url_wrap(), or qr_adapter.h's
  * pipeline_qr_encode_alphanumeric()) reporting a length/budget mismatch --
  * which this build's own compile-time checks in build_event.c (mirroring
- * pipeline_build_event_payload_fits_qr_check's existing discipline) already
+ * pipeline_build_event_base32_len_check's existing discipline) already
  * refuse to build at all if the fixed compile-time sizes above ever
  * disagree with the real seams they duplicate, so these are defensive
  * runtime paths, not expected ones. On any such failure,
