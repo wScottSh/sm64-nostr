@@ -66,11 +66,19 @@
  * and never packed onto the wire (the companion already knows them from
  * the spec, the moment it sees FORMAT_TAG -- 0x03 as of format v3, spec
  * #109/sub-issue #110). The per-game SECOND tag
- * (event_profile.h's PIPELINE_EVENT_TAG_1_VALUE) is the only tag value
- * that varies per build. */
-#define PIPELINE_EVENT_KIND        8064
-#define PIPELINE_EVENT_TAG_KEY     "t"
-#define PIPELINE_EVENT_TAG0_VALUE  "ag-lb"
+ * (event_profile.h's PIPELINE_EVENT_TAG_1_VALUE) and the THIRD tag's VALUE
+ * (event_profile.h's PIPELINE_EVENT_NAME, format v3 spec #109 sub-issue
+ * #111) are the two tag values that vary per build -- PIPELINE_EVENT_
+ * NAME_TAG_KEY below ("n") is itself still a format-v3-pinned spec
+ * constant (docs/format-v3-spec.md, ADR-0007), never baked per-build data,
+ * exactly like PIPELINE_EVENT_TAG_KEY/PIPELINE_EVENT_TAG0_VALUE. */
+#define PIPELINE_EVENT_KIND          8064
+#define PIPELINE_EVENT_TAG_KEY       "t"
+#define PIPELINE_EVENT_TAG0_VALUE    "ag-lb"
+/* The third tag's KEY (format v3, spec #109 sub-issue #111) -- ["n",<name>],
+ * see pipeline_event_serialize_from_fields()'s own comment below. Only the
+ * VALUE (the baked event name) varies per build; the key itself is pinned. */
+#define PIPELINE_EVENT_NAME_TAG_KEY  "n"
 
 /* Generous fixed upper bound on the content JSON's length (unescaped):
  * literal/key overhead (`{"course":`=10, `,"act":`=7, `,"coins":`=9,
@@ -84,9 +92,11 @@
 /* Generous fixed upper bound on the full canonical serialization's length:
  * `[0,"` + 64-hex-char pubkey + `",` + up to 10 digits created_at + `,` +
  * up to 5 digits kind + `,[["t","ag-lb"],["t","` + up to 10 tag bytes
- * (format v2's PIPELINE_FMT_MAX_SIZE_TAG) + `"]],"` + the escaped content
- * (worst case: every content byte is a quote, doubling
- * PIPELINE_EVENT_CONTENT_MAX) + `"]`. Rounded up with margin. */
+ * (format v2's PIPELINE_FMT_MAX_SIZE_TAG) + `"],["n","` + up to 15 name
+ * bytes (format v3's PIPELINE_FMT_MAX_SIZE_NAME, spec #109 sub-issue #111)
+ * + `"]],"` + the escaped content (worst case: every content byte is a
+ * quote, doubling PIPELINE_EVENT_CONTENT_MAX) + `"]`. Rounded up with
+ * margin. */
 #define PIPELINE_EVENT_SERIALIZED_MAX 512
 
 /*
@@ -113,18 +123,24 @@ void pipeline_event_compute_id(const StarCapture *capture, pipeline_u8 id_out[PI
 /*
  * pipeline_event_serialize_from_fields: the generic form of
  * pipeline_event_serialize() -- pubkey (32 raw bytes, hex-encoded here),
- * createdAt, and tag1/tag1Len (the per-game tag, NOT NUL-terminated) are
- * plain arguments instead of event_profile.h's baked macros, so a caller
- * with only unpacked wire fields (no access to -- or need of -- this
- * build's own event_profile.h) can still produce the exact canonical
- * serialization. TAG_0 is always the format-v2-pinned literal "ag-lb" (see
- * this file's header comment); it is not a parameter. out must be at least
- * PIPELINE_EVENT_SERIALIZED_MAX bytes. Returns the length written.
+ * createdAt, tag1/tag1Len (the per-game tag, NOT NUL-terminated), and
+ * name/nameLen (the event name, NOT NUL-terminated; format v3, spec #109
+ * sub-issue #111) are plain arguments instead of event_profile.h's baked
+ * macros, so a caller with only unpacked wire fields (no access to -- or
+ * need of -- this build's own event_profile.h) can still produce the exact
+ * canonical serialization. TAG_0 is always the format-v2-pinned literal
+ * "ag-lb" (see this file's header comment); it is not a parameter. The tags
+ * array is `[["t",TAG_0],["t",tag1],["n",name]]` -- name is appended in
+ * canonical position after both "t" tags, so the signed `id` commits to it.
+ * out must be at least PIPELINE_EVENT_SERIALIZED_MAX bytes. Returns the
+ * length written.
  */
 pipeline_u32 pipeline_event_serialize_from_fields(const pipeline_u8 pubkey[PIPELINE_FMT_SIZE_PUBKEY],
                                                    pipeline_u32 createdAt,
                                                    const char *tag1,
                                                    pipeline_u32 tag1Len,
+                                                   const char *name,
+                                                   pipeline_u32 nameLen,
                                                    const StarCapture *capture,
                                                    pipeline_u8 out[PIPELINE_EVENT_SERIALIZED_MAX]);
 
@@ -138,6 +154,8 @@ void pipeline_event_compute_id_from_fields(const pipeline_u8 pubkey[PIPELINE_FMT
                                             pipeline_u32 createdAt,
                                             const char *tag1,
                                             pipeline_u32 tag1Len,
+                                            const char *name,
+                                            pipeline_u32 nameLen,
                                             const StarCapture *capture,
                                             pipeline_u8 id_out[PIPELINE_EVENT_ID_SIZE]);
 

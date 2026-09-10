@@ -319,13 +319,26 @@ endif
 # immediately above -- same exemptions, same reasoning (goals that don't
 # actually build a ROM never need it). PIPELINE_EVENT_NAME has deliberately
 # NO default (unlike PIPELINE_KEY_LABEL above): pass it on the make command
-# line, e.g. `make PIPELINE_EVENT_NAME="SUMMER JAM 2026"`. The REAL
-# validation (charset, length, uppercase-folding) happens inside
-# gen_event_profile.py's normalize_event_name() -- this check only catches
-# the unset/empty case before that script is ever invoked.
+# line, e.g. `make PIPELINE_EVENT_NAME="JAM"`. The REAL validation (charset,
+# length, uppercase-folding) happens inside gen_event_profile.py's
+# normalize_event_name() -- this check only catches the unset/empty case
+# before that script is ever invoked.
+#
+# NOTE (format v3, spec #109 sub-issue #111): the event name is now a
+# signed, packed-onto-the-wire field (NAME_LEN+NAME, alongside the per-game
+# TAG_LEN+TAG), sharing the single v7-MEDIUM QR symbol's 122 B ceiling
+# (PIPELINE_QR_MAX_PAYLOAD_BYTES) with the fixed 113 B spine and the tag --
+# gen_event_profile.py's own EVENT_NAME_MAX_LEN (15 chars, the HUD glyph
+# budget) is looser than what actually fits under this ceiling once the
+# tag's length is added in (e.g. the default "sm64" 4-byte tag leaves only
+# 5 B of that combined budget for the name). An over-budget combination
+# fails LOUD, at compile time (build_event.c's own
+# pipeline_build_event_payload_fits_qr_check), not silently -- shorten
+# PIPELINE_EVENT_NAME or --tag if you hit it. ADR-0006's multi-frame
+# transport is the intended future fix for this ceiling; out of scope here.
 ifeq ($(filter clean distclean print-% pipeline-test,$(MAKECMDGOALS)),)
   ifeq ($(strip $(PIPELINE_EVENT_NAME)),)
-    $(error PIPELINE_EVENT_NAME is unset/empty: the Nostr pipeline requires a human-readable event name to build (spec #75, sub-issue #76) -- an event ROM must state, honestly and locally, which event it was built for. Pass one on the command line, e.g. make PIPELINE_EVENT_NAME="SUMMER JAM 2026". The build refuses to produce a nameless binary)
+    $(error PIPELINE_EVENT_NAME is unset/empty: the Nostr pipeline requires a human-readable event name to build (spec #75, sub-issue #76) -- an event ROM must state, honestly and locally, which event it was built for. Pass one on the command line, e.g. make PIPELINE_EVENT_NAME="JAM". The build refuses to produce a nameless binary)
   endif
 endif
 

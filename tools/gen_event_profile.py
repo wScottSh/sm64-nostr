@@ -38,17 +38,24 @@ docs/qr-handoff-spec.md's wire contract must not, JSON-escape the tag value
 itself) -- so an unrestricted tag could inject into a build's own generated
 header or corrupt its own signed serialization.
 
-Also bakes a REQUIRED, display-only --event-name (spec #75, sub-issue #76)
-into the generated header's PIPELINE_EVENT_NAME -- a human-readable identity
-for the event a ROM was built for, shown locally in the castle HUD corner.
+Also bakes a REQUIRED --event-name (spec #75, sub-issue #76; promoted to a
+signed on-wire tag by format v3, spec #109 sub-issue #111) into the
+generated header's PIPELINE_EVENT_NAME -- a human-readable identity for the
+event a ROM was built for, shown locally in the castle HUD corner AND, as of
+v3, folded into the signed NIP-01 ["n",...] tag and packed onto the wire
+(format_descriptor.h's NAME_LEN+NAME field) by build_event()'s pack stage.
 Deliberately kept separate from --label (registry label) and --tag (per-game
 wire tag): unlike both, --event-name has NO default (the Makefile's
 PIPELINE_EVENT_NAME fails closed with a $(error) before this script ever
-runs, mirroring PIPELINE_PRIVKEY_FILE's own fail-closed check), and unlike
---tag, --event-name is validated here and then NEVER read by build_event()'s
-pack stage -- it must never appear in the packed QR payload or the signed
-NIP-01 event. See normalize_event_name() below and this script's
-PIPELINE_EVENT_NAME_LEN emission.
+runs, mirroring PIPELINE_PRIVKEY_FILE's own fail-closed check). Validated
+here against the same charset/length discipline TAG_VALUE_RE enforces for
+--tag above (see EVENT_NAME_ALLOWED_CHARS/normalize_event_name() below), and
+against the wire's own NAME length budget, read straight from
+src/pipeline/format_descriptor.json's NAME field -- never a second,
+hand-duplicated literal that could drift from the real wire limit. See
+normalize_event_name() below and this script's PIPELINE_EVENT_NAME_LEN
+emission. Rejected-not-truncated on overlength, same as --tag over its own
+budget.
 
 Usage:
   gen_event_profile.py --privkey <path> --template <path> --out <path>
@@ -78,9 +85,14 @@ TAG_VALUE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 # Event-name charset (spec #75, sub-issue #76): A-Z, 0-9, and space, checked
 # AFTER uppercase-folding a-z->A-Z (see normalize_event_name()). This is the
-# HUD font's actual glyph budget (print_text's US LUT, extended per #67/#69),
-# not a wire-safety restriction like TAG_VALUE_RE above -- the event name
-# never reaches the wire at all (see normalize_event_name()'s own comment).
+# HUD font's actual glyph budget (print_text's US LUT, extended per #67/#69)
+# AND, as of format v3 (spec #109, sub-issue #111), the wire-safety charset
+# for the signed, un-escaped ["n",...] tag value (event_id.c does not, and
+# per docs/format-v3-spec.md's wire contract must not, JSON-escape the name
+# value itself) -- the same double duty TAG_VALUE_RE serves for --tag above.
+# It happens to already exclude every byte (`"`, `\`, control characters)
+# that would otherwise need escaping, so no separate wire-charset check is
+# needed here.
 #
 # A literal frozenset of legal single characters -- NOT a `^...$`-anchored
 # regex applied per character. `$` in Python `re` matches both "end of
@@ -94,26 +106,31 @@ EVENT_NAME_ALLOWED_CHARS = frozenset(
 
 # Length cap (spec #75, sub-issue #76): power-meter left edge (x=108) to the
 # vanilla TV-safe right margin at the fixed 12px-per-char HUD pitch. Overflow
-# is REJECTED, never truncated -- see normalize_event_name().
+# is REJECTED, never truncated -- see normalize_event_name(). This also
+# happens to equal format_descriptor.json's NAME.max_size (15 B) as of format
+# v3 -- main() below fails closed if that ever drifts (see the NAME max-size
+# check next to the existing TAG one), rather than hand-trusting the two
+# constants stay in sync.
 EVENT_NAME_MAX_LEN = 15
 
 # Path to the single JSON source of truth for the wire layout (spec #52,
-# sub-issue #54) -- this script reads TAG's own "max_size" from there rather
-# than hand-duplicating the 10-byte v7-MEDIUM budget as a second literal
-# that could silently drift from tools/gen_format_descriptor.py's own
-# rendering of the same field.
+# sub-issue #54; format v3 NAME field, spec #109 sub-issue #110) -- this
+# script reads TAG's and NAME's own "max_size" from there rather than
+# hand-duplicating either budget as a second literal that could silently
+# drift from tools/gen_format_descriptor.py's own rendering of the same
+# fields.
 FORMAT_DESCRIPTOR_JSON = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "src", "pipeline", "format_descriptor.json"
 )
 
 
-def load_tag_max_size(path):
+def load_var_field_max_size(path, field_name):
     with open(path, "r") as f:
         descriptor = json.load(f)
     for field in descriptor["fields"]:
-        if field.get("name") == "TAG" and field.get("var_len"):
+        if field.get("name") == field_name and field.get("var_len"):
             return field["max_size"]
-    raise ValueError("%s: no var_len TAG field found" % path)
+    raise ValueError("%s: no var_len %s field found" % (path, field_name))
 
 
 def read_privkey_hex(path):
@@ -141,10 +158,11 @@ def normalize_event_name(raw):
     validation shape above: never silently drop a bad character, never
     silently truncate an overlong name.
 
-    Display-only: the caller must never pass the return value anywhere near
-    build_event()'s pack stage or the signed NIP-01 event -- see this
+    On-wire, signed (format v3, spec #109 sub-issue #111): the returned
+    value is baked into PIPELINE_EVENT_NAME and consumed both by the castle
+    HUD corner and by build_event()'s serialize/pack stages -- see this
     script's own module docstring and event_profile.h.in's PIPELINE_EVENT_
-    NAME comment for the airgapped honesty invariant this enforces.
+    NAME comment.
     """
     if not raw or not raw.strip():
         raise ValueError(
@@ -203,13 +221,15 @@ def main():
     ap.add_argument(
         "--event-name",
         required=True,
-        help="REQUIRED, display-only event name (spec #75, sub-issue #76); "
-        "no default -- a nameless ROM cannot be built. Uppercase-folded, "
-        "must match A-Z/0-9/space after folding, capped at %d chars "
-        "(rejected, not truncated, if longer). Baked into event_profile.h's "
-        "PIPELINE_EVENT_NAME for the castle HUD corner only -- never packed "
-        "onto the QR wire or the signed event. Kept separate from --label "
-        "and --tag." % EVENT_NAME_MAX_LEN,
+        help="REQUIRED event name (spec #75, sub-issue #76; signed on-wire "
+        "tag, spec #109 sub-issue #111); no default -- a nameless ROM cannot "
+        "be built. Uppercase-folded, must match A-Z/0-9/space after folding, "
+        "capped at %d chars (rejected, not truncated, if longer) and must "
+        "fit within format_descriptor.json's NAME.max_size. Baked into "
+        "event_profile.h's PIPELINE_EVENT_NAME, consumed by the castle HUD "
+        "corner AND packed onto the QR wire and folded into the signed "
+        "NIP-01 event as [\"n\",...]. Kept separate from --label and --tag."
+        % EVENT_NAME_MAX_LEN,
     )
     ap.add_argument("--commit", default=None)
     ap.add_argument("--created-at", type=int, default=None)
@@ -244,7 +264,7 @@ def main():
         return 1
 
     try:
-        tag_max_size = load_tag_max_size(FORMAT_DESCRIPTOR_JSON)
+        tag_max_size = load_var_field_max_size(FORMAT_DESCRIPTOR_JSON, "TAG")
     except Exception as e:
         sys.stderr.write(
             "gen_event_profile.py: FATAL: could not read TAG's max_size from %s: %s\n"
@@ -259,6 +279,31 @@ def main():
             "per-game tag budget (format_descriptor.json's TAG.max_size); a longer "
             "tag requires moving to a wider format (docs/adr/0002), not a silent "
             "truncation\n" % (args.tag, len(game_tag_bytes), tag_max_size)
+        )
+        return 1
+
+    try:
+        name_max_size = load_var_field_max_size(FORMAT_DESCRIPTOR_JSON, "NAME")
+    except Exception as e:
+        sys.stderr.write(
+            "gen_event_profile.py: FATAL: could not read NAME's max_size from %s: %s\n"
+            % (FORMAT_DESCRIPTOR_JSON, e)
+        )
+        return 1
+
+    # EVENT_NAME_MAX_LEN is the HUD font's own glyph-budget cap (see its own
+    # comment above), which happens to equal the wire's NAME.max_size -- this
+    # is the fail-closed guard against that drifting silently (format v3,
+    # spec #109 sub-issue #111): if a future wire-format change shrinks
+    # NAME.max_size below what the HUD cap allows, a name normalize_event_name()
+    # accepts could overflow pipeline_pack()'s own runtime check, surfacing
+    # only as a confusing pack failure rather than this precise cause.
+    if EVENT_NAME_MAX_LEN > name_max_size:
+        sys.stderr.write(
+            "gen_event_profile.py: FATAL: EVENT_NAME_MAX_LEN (%d) exceeds "
+            "format_descriptor.json's NAME.max_size (%d) -- the HUD's own "
+            "event-name length cap must never allow a name pipeline_pack() "
+            "cannot fit onto the wire\n" % (EVENT_NAME_MAX_LEN, name_max_size)
         )
         return 1
 

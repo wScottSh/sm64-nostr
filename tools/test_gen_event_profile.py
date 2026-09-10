@@ -11,8 +11,9 @@ Mirrors the two kinds of prior art already in gen_event_profile.py:
 Two layers, same split gen_event_profile.py itself uses:
   - Fast, in-process tests of normalize_event_name() (accept/reject/fold/
     length).
-  - End-to-end CLI (subprocess) tests of main() -- required-ness, the emitted
-    header, and the off-wire invariant.
+  - End-to-end CLI (subprocess) tests of main() -- required-ness and the
+    emitted header. EventNameOnWireTests below covers the on-wire, signed
+    invariant format v3 (spec #109, sub-issue #111) promoted this value to.
 
 Run directly:   python tools/test_gen_event_profile.py
 Or via pytest:  python -m pytest tools/test_gen_event_profile.py
@@ -248,10 +249,11 @@ class GenEventProfileCliTests(unittest.TestCase):
         self.assertIn('"event_name": "ARCADE NIGHT"', manifest_text)
         self.assertIn('"label": "test-label"', manifest_text)
 
-    def test_event_name_absent_from_format_descriptor_wire_fields(self):
-        # The emitted header must define PIPELINE_EVENT_NAME (display-only)
-        # but the wire-relevant macros (TAG_1, pubkey, created_at) must be
-        # unaffected by / independent of it.
+    def test_event_name_present_in_format_descriptor_wire_fields(self):
+        # The emitted header must define PIPELINE_EVENT_NAME, consumed
+        # on-wire by build_event() as of format v3 (spec #109, sub-issue
+        # #111) alongside the other wire-relevant macros (TAG_1, pubkey,
+        # created_at).
         result = self.run_script(["--event-name", "ARCADE NIGHT"])
         self.assertEqual(result.returncode, 0, result.stderr)
         with open(self.out_path) as f:
@@ -261,43 +263,38 @@ class GenEventProfileCliTests(unittest.TestCase):
         self.assertIn("PIPELINE_EVENT_NAME", header)
 
 
-class EventNameOffWireTests(unittest.TestCase):
-    """Static off-wire checks (spec #75, sub-issue #76): PIPELINE_EVENT_NAME
-    must never be sourced by build_event()'s pack stage or reach the packed
-    payload / signed NIP-01 event. Since this is a structural invariant
-    (an absence), assert it directly against the actual pipeline sources
-    rather than only against gen_event_profile.py's own behavior above."""
+class EventNameOnWireTests(unittest.TestCase):
+    """Static on-wire checks (format v3, spec #109 sub-issue #111):
+    PIPELINE_EVENT_NAME is now sourced by build_event()'s serialize + pack
+    stages, so it must reach both the signed NIP-01 event and the packed
+    payload -- retires the old off-wire invariant sub-issue #76 established.
+    Since this is a structural invariant (a required presence), assert it
+    directly against the actual pipeline sources rather than only against
+    gen_event_profile.py's own behavior above."""
 
-    PACK_STAGE_FILES = [
+    SERIALIZE_AND_PACK_STAGE_FILES = [
         os.path.join(REPO_ROOT, "src", "pipeline", "build_event.c"),
         os.path.join(REPO_ROOT, "src", "pipeline", "build_event.h"),
-        os.path.join(REPO_ROOT, "src", "pipeline", "pack_adapter.c"),
-        os.path.join(REPO_ROOT, "src", "pipeline", "pack_adapter.h"),
         os.path.join(REPO_ROOT, "src", "pipeline", "event_id.c"),
-        os.path.join(REPO_ROOT, "src", "pipeline", "event_id.h"),
     ]
 
-    def test_pipeline_event_name_not_referenced_by_pack_stage(self):
-        for path in self.PACK_STAGE_FILES:
-            if not os.path.exists(path):
-                continue  # tolerate future file moves; other files still checked
+    def test_pipeline_event_name_referenced_by_serialize_and_pack_stage(self):
+        for path in self.SERIALIZE_AND_PACK_STAGE_FILES:
             with open(path, "r") as f:
                 contents = f.read()
-            self.assertNotIn(
+            self.assertIn(
                 "PIPELINE_EVENT_NAME",
                 contents,
-                "%s must never reference PIPELINE_EVENT_NAME -- the event "
-                "name is display-only and must never reach the packed QR "
-                "payload or the signed NIP-01 event (spec #75, sub-issue #76)"
-                % path,
+                "%s must reference PIPELINE_EVENT_NAME -- format v3 folds "
+                "the event name into the signed NIP-01 [\"n\",...] tag and "
+                "packs it onto the wire (spec #109, sub-issue #111)" % path,
             )
 
-    def test_template_documents_the_honesty_invariant(self):
+    def test_template_documents_the_on_wire_signed_invariant(self):
         with open(TEMPLATE, "r") as f:
             contents = f.read()
         self.assertIn("PIPELINE_EVENT_NAME", contents)
-        self.assertIn("DISPLAY-ONLY", contents.upper())
-        self.assertIn("AIRGAPPED HONESTY INVARIANT", contents)
+        self.assertIn("ON-WIRE, SIGNED", contents.upper())
 
 
 class MakefileFailClosedStaticTests(unittest.TestCase):

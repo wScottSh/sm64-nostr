@@ -107,9 +107,19 @@
 # Spec #75 sub-issue #76 (--event-name build input) makes ../gen_event_
 # profile.py's --event-name REQUIRED (no default, mirroring the privkey
 # fail-closed discipline), so EVENT_PROFILE_H's recipe below now always
-# passes a fixed, in-charset, KAT-style value ("HOST TEST") -- this host
-# tool has no HUD to render the name on, so the value itself is arbitrary,
-# but the flag must be present or gen_event_profile.py now refuses to run.
+# passes a fixed, in-charset, KAT-style value -- this host tool has no HUD
+# to render the name on, so the value itself is arbitrary, but the flag
+# must be present or gen_event_profile.py now refuses to run.
+#
+# Spec #109 sub-issue #111 promotes the event name to a signed on-wire tag,
+# packed onto the wire alongside the per-game tag within the SAME v7-MEDIUM
+# single-QR-symbol budget (PIPELINE_QR_MAX_PAYLOAD_BYTES, 122 B -- ADR-0006's
+# multi-frame transport that lifts this ceiling is out of scope for #109;
+# see build_event.c's own compile-time fits-QR check). With TAG_1_VALUE
+# fixed at "sm64" (4 B) here, the value below was shortened from the
+# pre-#111 "HOST TEST" (9 B) to "TEST" (4 B) so 113 (FIXED_SIZE) + 4 (TAG) +
+# 4 (NAME) = 121 B stays under that ceiling -- purely a host-test fixture
+# choice, not a wire-format constant.
 
 CC           := gcc
 PYTHON       := python3
@@ -170,7 +180,7 @@ $(FORMAT_DESCRIPTOR_H): $(FORMAT_DESCRIPTOR_JSON) $(TOOLS_DIR)/gen_format_descri
 
 $(EVENT_PROFILE_H): $(EVENT_PROFILE_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_event_profile.py $(TOOLS_DIR)/nostr_secp256k1.py
 	@mkdir -p $(INC_DIR)
-	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat --manifest $(EVENT_MANIFEST) --commit host-test --created-at $(TEST_CREATED_AT) --event-name "HOST TEST"
+	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat --manifest $(EVENT_MANIFEST) --commit host-test --created-at $(TEST_CREATED_AT) --event-name "TEST"
 
 $(SECP256K1_BAKED_H): $(SECP256K1_BAKED_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_secp256k1_baked.py $(TOOLS_DIR)/nostr_secp256k1.py
 	@mkdir -p $(INC_DIR)

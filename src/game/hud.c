@@ -280,10 +280,12 @@ void render_hud_mario_lives(void) {
  * gating with no special-casing here). Castle and in-level content can never
  * overlap on screen because only one branch fires per frame.
  *
- * Castle/hub: draws the ROM's baked, display-only event name
- * (PIPELINE_EVENT_NAME, from the generated event_profile.h -- see that
- * header's comment for the airgapped honesty invariant: this value is never
- * sourced by the QR pack stage). Right-aligned, growing left, anchored to
+ * Castle/hub: draws the ROM's baked event name (PIPELINE_EVENT_NAME, from
+ * the generated event_profile.h). As of format v3 (spec #109, sub-issue
+ * #111) this same value is ALSO folded into the signed NIP-01 ["n",...] tag
+ * and packed onto the QR wire -- see event_profile.h.in's own comment --
+ * so this render is no longer the value's only consumer, just its local,
+ * human-facing one. Right-aligned, growing left, anchored to
  * the vanilla star counter's own right edge
  * (GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(48)) so names of differing lengths
  * share a fixed right edge and never clip. The origin_x subtraction uses

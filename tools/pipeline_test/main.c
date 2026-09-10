@@ -143,10 +143,21 @@
  * test_live_wire_vectors_round_trip() now asserts REJECTION of its frozen
  * real-device format-v2 captures (FORMAT_TAG 0x02) -- #110's own explicit
  * acceptance criterion -- rather than acceptance; see that test's own
- * updated header comment. build_event() itself does not yet thread a real
- * baked event name onto the wire (it packs a zero-length placeholder name;
- * sub-issue #111 wires the real name into both the signed serialization and
- * this pack call).
+ * updated header comment.
+ *
+ * Spec #109 sub-issue #111 threads the real baked event name
+ * (PIPELINE_EVENT_NAME, "TEST" for this host tool -- see the Makefile's own
+ * comment) into both the signed serialization (event_id.c's
+ * pipeline_event_serialize(), a third tag ["n","TEST"]) and build_event()'s
+ * pack call (PIPELINE_BUILT_PAYLOAD_SIZE grows from 117 to 121 B). Every
+ * id/sig oracle value derived from the baked profile -- kExpectedIdA/B/C,
+ * kBuildEventExpectedIdA, kBuildEventExpectedSig, and the pinned
+ * expectedSerialized string in test_content_escaping_path() -- was
+ * re-derived against tools/reference_event_id.js/
+ * tools/verify_schnorr_reference.js for the new three-tag serialization
+ * (see those scripts' own updated header comments); test_build_event_
+ * end_to_end()'s unpacked-name assertion now expects the real baked name,
+ * not a zero-length placeholder.
  */
 #include <stdio.h>
 #include <string.h>
@@ -204,6 +215,12 @@ static void check(int ok, const char *what)
  * changed from "cabinet-leaderboard" to the spec-pinned "ag-lb" (see
  * tools/reference_event_id.js/tools/verify_schnorr_reference.js's own
  * header comments for the re-derivation).
+ *
+ * Format v3 (spec #109, sub-issue #111): both changed AGAIN because
+ * build_event() now folds this host tool's baked PIPELINE_EVENT_NAME
+ * ("TEST", tools/pipeline_test/Makefile's --event-name) into a third
+ * signed tag, ["n","TEST"] -- see tools/reference_event_id.js/
+ * tools/verify_schnorr_reference.js's own updated header comments.
  */
 static const pipeline_u8 kBuildEventPrivkey[PIPELINE_KEY_SIZE] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -212,14 +229,14 @@ static const pipeline_u8 kBuildEventPrivkey[PIPELINE_KEY_SIZE] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
 };
 static const pipeline_u8 kBuildEventExpectedIdA[PIPELINE_EVENT_ID_SIZE] = {
-    0xda, 0x41, 0xe3, 0x23, 0x1c, 0xbb, 0x22, 0x8d, 0xd6, 0xa6, 0x8d, 0xdd, 0x57, 0xfb, 0x54, 0xdc,
-    0x00, 0x52, 0x8d, 0x62, 0xa3, 0x59, 0x90, 0xd2, 0xef, 0x58, 0x70, 0xbc, 0x83, 0x2a, 0xa4, 0xee,
+    0x91, 0xff, 0x8d, 0xf5, 0x9c, 0x33, 0x9b, 0xf5, 0xc6, 0x43, 0x75, 0x0c, 0xdb, 0x1c, 0x7e, 0xdf,
+    0x99, 0xc4, 0x8a, 0xa9, 0xce, 0x78, 0x79, 0xa2, 0x2c, 0x9a, 0x52, 0xda, 0x7b, 0x84, 0x36, 0x2f,
 };
 static const pipeline_u8 kBuildEventExpectedSig[PIPELINE_SCHNORR_SIG_SIZE] = {
-    0x69, 0x67, 0x6d, 0x63, 0x72, 0x8c, 0xd3, 0xd1, 0xcc, 0x1f, 0x91, 0x86, 0x78, 0x54, 0x77, 0x79,
-    0xe9, 0x17, 0xb0, 0x3d, 0xb5, 0x48, 0x32, 0xe8, 0xf7, 0x1a, 0x02, 0x32, 0xeb, 0x4b, 0xee, 0xdd,
-    0x80, 0x4c, 0xa7, 0x67, 0x60, 0x55, 0x97, 0x38, 0x1c, 0xa4, 0xa2, 0xa9, 0xf8, 0x1d, 0x1f, 0xf8,
-    0xf2, 0x07, 0x37, 0xbd, 0x1e, 0xc1, 0x87, 0xcb, 0x29, 0x99, 0xea, 0x9b, 0x22, 0x70, 0x48, 0x7b,
+    0x0f, 0x4b, 0xa8, 0x0a, 0xe3, 0x3f, 0x8e, 0x8e, 0x1b, 0xe4, 0x08, 0x38, 0x7f, 0x0e, 0x8e, 0x23,
+    0x3b, 0xa2, 0xc7, 0xb0, 0x79, 0x12, 0x0e, 0x0c, 0x12, 0x86, 0xd9, 0x75, 0x03, 0x75, 0x95, 0x3f,
+    0x4f, 0x15, 0x88, 0x75, 0x78, 0xcf, 0x46, 0x93, 0xa3, 0xad, 0x45, 0x46, 0xf8, 0x99, 0xe1, 0x76,
+    0xb1, 0x25, 0x39, 0x98, 0xd9, 0xfe, 0xf3, 0xa8, 0xa1, 0x9d, 0xba, 0xf8, 0x67, 0xf5, 0x12, 0xb0,
 };
 
 static void test_build_event_end_to_end(void)
@@ -260,15 +277,16 @@ static void test_build_event_end_to_end(void)
     /* Report the actual packed payload size: 113 B fixed (format v3's
      * FORMAT_TAG..PUBKEY..TAG_LEN..NAME_LEN..SIG spine, see
      * format_descriptor.json) plus this build's own per-game tag length
-     * (4 for "sm64") plus this build's zero-length placeholder name (#110
-     * doesn't yet thread the real baked name into build_event -- see
-     * build_event.c's own comment) = 117 B, comfortably inside the
-     * v7/MEDIUM 122 B single-symbol ceiling (PIPELINE_QR_MAX_PAYLOAD_BYTES).
-     * 138 B is format v3's own worst case (TAG_LEN=10, NAME_LEN=15) and
-     * does NOT fit this ceiling -- see qr_adapter.h's own comment on why
-     * that's expected, not a bug, under ADR-0006's multi-frame transport. */
-    check(PIPELINE_BUILT_PAYLOAD_SIZE == 117u,
-          "build_event's packed_payload size is 117 B (113 + 4-byte \"sm64\" tag + 0-byte name), "
+     * (4 for "sm64") plus this build's own baked event-name length (4 for
+     * "TEST", spec #109 sub-issue #111 threads the real baked name into
+     * build_event -- see build_event.c's own comment) = 121 B, comfortably
+     * inside the v7/MEDIUM 122 B single-symbol ceiling
+     * (PIPELINE_QR_MAX_PAYLOAD_BYTES). 138 B is format v3's own worst case
+     * (TAG_LEN=10, NAME_LEN=15) and does NOT fit this ceiling -- see
+     * qr_adapter.h's own comment on why that's expected, not a bug, under
+     * ADR-0006's multi-frame transport. */
+    check(PIPELINE_BUILT_PAYLOAD_SIZE == 121u,
+          "build_event's packed_payload size is 121 B (113 + 4-byte \"sm64\" tag + 4-byte \"TEST\" name), "
           "within the v7/MEDIUM ceiling");
 
     /* (a) the host decodes qr_bitmap back to the exact packed_payload. */
@@ -296,9 +314,10 @@ static void test_build_event_end_to_end(void)
     check(tagLenOut == (pipeline_u8)PIPELINE_EVENT_TAG_1_LEN &&
           memcmp(tagOut, gameTag, tagLenOut) == 0,
           "unpacked per-game tag matches this build's baked tag exactly (self-contained: it came off the wire)");
-    check(nameLenOut == 0,
-          "unpacked event name is zero-length (this build packs only a placeholder name -- #110 "
-          "doesn't yet thread the real baked event name into build_event, see its own comment)");
+    check(nameLenOut == (pipeline_u8)PIPELINE_EVENT_NAME_LEN &&
+          memcmp(nameOut, PIPELINE_EVENT_NAME, nameLenOut) == 0,
+          "unpacked event name matches this build's baked event name exactly (self-contained: it came off "
+          "the wire -- spec #109, sub-issue #111)");
 
     /* (c) SELF-CONTAINED RECONSTRUCTION, with ZERO out-of-band constants:
      * recompute the id purely from the values pipeline_unpack() just
@@ -311,7 +330,7 @@ static void test_build_event_end_to_end(void)
      * exposes -- a real companion app (a different language, out of this
      * repo's scope) does the equivalent using docs/qr-handoff-spec.md. */
     pipeline_event_compute_id_from_fields(pubkeyOut, createdAtOut, (const char *)tagOut, tagLenOut,
-                                           &rebuilt, recomputedId);
+                                           (const char *)nameOut, nameLenOut, &rebuilt, recomputedId);
     check(memcmp(recomputedId, kBuildEventExpectedIdA, PIPELINE_EVENT_ID_SIZE) == 0,
           "id recomputed from ONLY the unpacked wire fields matches the nostr-tools reference id (vector A)");
 
@@ -338,9 +357,13 @@ static void test_build_event_end_to_end(void)
      * different signature). KEY_ID (the star index) is signed content: a
      * flipped KEY_ID byte changes the recomputed id, so the signature check
      * fails, closing the earlier tamper hole for stars where `act` alone
-     * doesn't identify which star was grabbed. It does NOT hold for
-     * FORMAT_TAG, which pipeline_unpack() checks structurally (see the second
-     * check below), not cryptographically. */
+     * doesn't identify which star was grabbed. It also holds for NAME
+     * (format v3, spec #109 sub-issue #111): the event name is now signed
+     * content too, folded into the ["n",...] tag, so a flipped NAME byte
+     * changes the recomputed id exactly like COURSE/KEY_ID -- see the
+     * dedicated NAME check below. It does NOT hold for FORMAT_TAG, which
+     * pipeline_unpack() checks structurally (see the second check below),
+     * not cryptographically. */
     {
         pipeline_u8 corrupted[PIPELINE_BUILT_PAYLOAD_SIZE];
         StarCapture corruptCapture;
@@ -362,7 +385,8 @@ static void test_build_event_end_to_end(void)
                          &corruptCreatedAt, corruptPubkey, corruptTag, &corruptTagLen,
                          corruptName, &corruptNameLen, corruptSig);
         pipeline_event_compute_id_from_fields(corruptPubkey, corruptCreatedAt, (const char *)corruptTag,
-                                               corruptTagLen, &corruptCapture, corruptId);
+                                               corruptTagLen, (const char *)corruptName, corruptNameLen,
+                                               &corruptCapture, corruptId);
         corruptVerify = pipeline_schnorr_verify(corruptId, corruptPubkey, corruptSig);
         check(corruptVerify == 0,
               "flipping one packed_payload byte (a signed content field) makes signature verification fail");
@@ -388,10 +412,30 @@ static void test_build_event_end_to_end(void)
                          &corruptCreatedAt, corruptPubkey, corruptTag, &corruptTagLen,
                          corruptName, &corruptNameLen, corruptSig);
         pipeline_event_compute_id_from_fields(corruptPubkey, corruptCreatedAt, (const char *)corruptTag,
-                                               corruptTagLen, &corruptCapture, corruptId);
+                                               corruptTagLen, (const char *)corruptName, corruptNameLen,
+                                               &corruptCapture, corruptId);
         corruptVerify = pipeline_schnorr_verify(corruptId, corruptPubkey, corruptSig);
         check(corruptVerify == 0,
               "flipping the KEY_ID byte (signed star index) makes signature verification fail");
+
+        /* A flipped NAME byte must also fail verification -- the direct
+         * regression guard for spec #109 sub-issue #111's own acceptance
+         * criterion (the signed `id` commits to the event name): the name
+         * is now signed content (folded into the ["n",...] tag by
+         * event_id.c's pipeline_event_serialize()), so tampering with it
+         * post-signing must break verification exactly like COURSE/KEY_ID
+         * above, not just structurally round-trip through pipeline_unpack. */
+        memcpy(corrupted, event.packed_payload, (size_t)PIPELINE_BUILT_PAYLOAD_SIZE);
+        corrupted[PIPELINE_FMT_OFF_NAME((pipeline_u32)PIPELINE_EVENT_TAG_1_LEN)] ^= 0x01;
+        pipeline_unpack(corrupted, (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE, &corruptCapture,
+                         &corruptCreatedAt, corruptPubkey, corruptTag, &corruptTagLen,
+                         corruptName, &corruptNameLen, corruptSig);
+        pipeline_event_compute_id_from_fields(corruptPubkey, corruptCreatedAt, (const char *)corruptTag,
+                                               corruptTagLen, (const char *)corruptName, corruptNameLen,
+                                               &corruptCapture, corruptId);
+        corruptVerify = pipeline_schnorr_verify(corruptId, corruptPubkey, corruptSig);
+        check(corruptVerify == 0,
+              "flipping a NAME byte (the signed event name) makes signature verification fail");
     }
 }
 
@@ -1371,18 +1415,23 @@ static void test_event_id_matches_reference(void)
      * exact command/output and the header comment above for why it's a
      * faithful independent oracle. Format v2 (spec #52, sub-issue #54):
      * these changed from their pre-v2 values because TAG_0 changed from
-     * "cabinet-leaderboard" to the spec-pinned "ag-lb". */
+     * "cabinet-leaderboard" to the spec-pinned "ag-lb". Format v3 (spec
+     * #109, sub-issue #111): these changed AGAIN because pipeline_event_
+     * compute_id() (the baked-profile wrapper these vectors exercise) now
+     * folds PIPELINE_EVENT_NAME into a third signed tag, ["n","TEST"] --
+     * "TEST" is this host tool's own baked event name (Makefile's
+     * --event-name, shortened from "HOST TEST" -- see its own comment). */
     static const pipeline_u8 kExpectedIdA[32] = {
-        0xda, 0x41, 0xe3, 0x23, 0x1c, 0xbb, 0x22, 0x8d, 0xd6, 0xa6, 0x8d, 0xdd, 0x57, 0xfb, 0x54, 0xdc,
-        0x00, 0x52, 0x8d, 0x62, 0xa3, 0x59, 0x90, 0xd2, 0xef, 0x58, 0x70, 0xbc, 0x83, 0x2a, 0xa4, 0xee,
+        0x91, 0xff, 0x8d, 0xf5, 0x9c, 0x33, 0x9b, 0xf5, 0xc6, 0x43, 0x75, 0x0c, 0xdb, 0x1c, 0x7e, 0xdf,
+        0x99, 0xc4, 0x8a, 0xa9, 0xce, 0x78, 0x79, 0xa2, 0x2c, 0x9a, 0x52, 0xda, 0x7b, 0x84, 0x36, 0x2f,
     };
     static const pipeline_u8 kExpectedIdB[32] = {
-        0xef, 0x60, 0x2d, 0x3e, 0xa4, 0x85, 0xde, 0x2d, 0x1b, 0x5d, 0xa4, 0x86, 0x34, 0xc8, 0x65, 0x7d,
-        0x4f, 0x57, 0xa8, 0x37, 0x50, 0x33, 0x2d, 0x08, 0xe0, 0x27, 0xb9, 0xb1, 0x99, 0xa6, 0xe4, 0x82,
+        0xe8, 0x03, 0x85, 0xaf, 0x51, 0x8c, 0xb2, 0xa2, 0x99, 0xc9, 0x7b, 0x94, 0x73, 0xa0, 0x8b, 0x44,
+        0xc6, 0x74, 0x19, 0xab, 0x37, 0x19, 0x12, 0x65, 0x81, 0x0f, 0x9d, 0x68, 0x2d, 0xbe, 0x4c, 0x86,
     };
     static const pipeline_u8 kExpectedIdC[32] = {
-        0x10, 0xf8, 0xe9, 0x77, 0x55, 0x34, 0xca, 0x8e, 0xfd, 0xbf, 0x4c, 0x75, 0x2c, 0xda, 0xf8, 0xbe,
-        0x2f, 0x75, 0x28, 0x93, 0xc8, 0x98, 0x7d, 0x49, 0xbc, 0x0e, 0x4b, 0xb9, 0x3e, 0xb7, 0xec, 0x13,
+        0x33, 0xe6, 0x40, 0xf7, 0xc6, 0xf0, 0x20, 0x09, 0x0d, 0xaf, 0xe0, 0x5f, 0x21, 0x02, 0x34, 0x59,
+        0xdc, 0x9d, 0xbd, 0xc9, 0xf2, 0xf1, 0xd1, 0xff, 0x72, 0xed, 0x5b, 0x31, 0x7d, 0x67, 0xa8, 0x93,
     };
 
     captureA.course = 15; captureA.act = 6; captureA.coins = 100; captureA.frames = 0x01020304u; captureA.nonce16 = 0xCAFE; captureA.keyId = 0;
@@ -1392,6 +1441,45 @@ static void test_event_id_matches_reference(void)
     check_event_id(&captureA, kExpectedIdA, "event id matches nostr-tools reference (vector A)");
     check_event_id(&captureB, kExpectedIdB, "event id matches nostr-tools reference (vector B)");
     check_event_id(&captureC, kExpectedIdC, "event id matches nostr-tools reference (all-zero vector C)");
+}
+
+/*
+ * Event name is signed content: changing ONLY the name changes `id` (spec
+ * #109, sub-issue #111's own acceptance criterion, stated directly rather
+ * than only proven transitively through the re-pinned oracle vectors above).
+ * Uses pipeline_event_serialize_from_fields()/pipeline_event_compute_id_
+ * from_fields() (the generic, non-baked-profile forms) so pubkey/createdAt/
+ * tag1/capture can be held IDENTICAL across two calls while only name
+ * varies -- isolating the one field under test the way check_event_id()
+ * above (which always uses this build's single baked PIPELINE_EVENT_NAME)
+ * cannot.
+ */
+static void test_event_name_change_changes_id(void)
+{
+    static const pipeline_u8 pubkey[PIPELINE_FMT_SIZE_PUBKEY] = PIPELINE_EVENT_PUBKEY_BYTES;
+    static const char tag1[] = "sm64";
+    static const char nameA[] = "ALPHA";
+    static const char nameB[] = "BETA";
+    StarCapture capture;
+    pipeline_u8 idA[PIPELINE_EVENT_ID_SIZE];
+    pipeline_u8 idB[PIPELINE_EVENT_ID_SIZE];
+    pipeline_u8 idARepeat[PIPELINE_EVENT_ID_SIZE];
+
+    capture.course = 15; capture.act = 6; capture.coins = 100; capture.frames = 0x01020304u;
+    capture.nonce16 = 0xCAFE; capture.keyId = 0;
+
+    pipeline_event_compute_id_from_fields(pubkey, 1700000000u, tag1, (pipeline_u32)(sizeof(tag1) - 1),
+                                           nameA, (pipeline_u32)(sizeof(nameA) - 1), &capture, idA);
+    pipeline_event_compute_id_from_fields(pubkey, 1700000000u, tag1, (pipeline_u32)(sizeof(tag1) - 1),
+                                           nameB, (pipeline_u32)(sizeof(nameB) - 1), &capture, idB);
+    pipeline_event_compute_id_from_fields(pubkey, 1700000000u, tag1, (pipeline_u32)(sizeof(tag1) - 1),
+                                           nameA, (pipeline_u32)(sizeof(nameA) - 1), &capture, idARepeat);
+
+    check(memcmp(idA, idB, PIPELINE_EVENT_ID_SIZE) != 0,
+          "changing ONLY the event name (pubkey/createdAt/tag/capture held fixed) changes the signed id");
+    check(memcmp(idA, idARepeat, PIPELINE_EVENT_ID_SIZE) == 0,
+          "recomputing the id with the SAME name (and everything else fixed) reproduces the same id "
+          "(sanity check on the differential comparison above)");
 }
 
 /*
@@ -1420,14 +1508,17 @@ static void test_content_escaping_path(void)
      * 8064/the two t tags) -- cross-checked byte-for-byte against
      * JSON.stringify([0,pubkey,created_at,kind,tags,content]) via Node, the
      * same expression nostr-tools' getEventHash() evaluates (see
-     * tools/reference_event_id.js). Pinning the whole 205-byte buffer, not
-     * just a substring, proves the prefix/field ordering/escaping directly
-     * rather than only through the opaque id in the test above. Format v2
-     * (spec #52, sub-issue #54): TAG_0 changed from "cabinet-leaderboard"
-     * to the spec-pinned "ag-lb" (205 B, was 219 B pre-v2). */
+     * tools/reference_event_id.js). Pinning the whole buffer, not just a
+     * substring, proves the prefix/field ordering/escaping directly rather
+     * than only through the opaque id in the test above. Format v2 (spec
+     * #52, sub-issue #54): TAG_0 changed from "cabinet-leaderboard" to the
+     * spec-pinned "ag-lb" (205 B, was 219 B pre-v2). Format v3 (spec #109,
+     * sub-issue #111): a third tag, ["n","TEST"], is now appended after the
+     * two "t" tags -- "TEST" is this host tool's own baked event name (218 B,
+     * was 205 B pre-#111). */
     const char *expectedSerialized =
         "[0,\"f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9\","
-        "1700000000,8064,[[\"t\",\"ag-lb\"],[\"t\",\"sm64\"]],"
+        "1700000000,8064,[[\"t\",\"ag-lb\"],[\"t\",\"sm64\"],[\"n\",\"TEST\"]],"
         "\"{\\\"course\\\":15,\\\"act\\\":6,\\\"coins\\\":100,\\\"frames\\\":16909060,\\\"nonce\\\":51966,\\\"keyId\\\":0}\"]";
 
     capture.course = 15; capture.act = 6; capture.coins = 100; capture.frames = 0x01020304u; capture.nonce16 = 0xCAFE; capture.keyId = 0;
@@ -2843,6 +2934,7 @@ int main(void)
     test_qr_rejects_over_budget_cleanly();
     test_sha256_known_answer_vectors();
     test_event_id_matches_reference();
+    test_event_name_change_changes_id();
     test_content_escaping_path();
     test_schnorr_signing_known_answer();
     test_schnorr_verify_internal_self_consistency();

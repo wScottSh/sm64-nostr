@@ -1,16 +1,18 @@
 /*
  * build_event -- the pipeline's real interface (spec #24, sub-issue #30;
- * format v2 self-contained payload, spec #52 sub-issue #54).
+ * format v2 self-contained payload, spec #52 sub-issue #54; format v3
+ * signed event-name tag, spec #109 sub-issue #111).
  *
  * Wires the internal seams together, in order: canonical NIP-01 serialize +
  * SHA-256 id (event_id.h) -> BIP-340 Schnorr sign of that id
  * (schnorr_adapter.h) -> pack capture's fields + createdAt + pubkey + the
- * per-game tag + the signature into the wire payload (pack_adapter.h) ->
- * QR-encode that payload (qr_adapter.h). createdAt/pubkey/the per-game tag
- * are sourced from the generated event_profile.h -- the SAME baked values
- * event_id.c's pipeline_event_serialize() already uses for the signed
- * serialization, so the packed wire bytes and the signed content can never
- * disagree. See build_event.h for the full interface contract.
+ * per-game tag + the event name + the signature into the wire payload
+ * (pack_adapter.h) -> QR-encode that payload (qr_adapter.h).
+ * createdAt/pubkey/the per-game tag/the event name are sourced from the
+ * generated event_profile.h -- the SAME baked values event_id.c's
+ * pipeline_event_serialize() already uses for the signed serialization, so
+ * the packed wire bytes and the signed content can never disagree. See
+ * build_event.h for the full interface contract.
  */
 
 #include "build_event.h"
@@ -38,9 +40,15 @@
  * loud-not-silent failure this pipeline's own conventions call for. A tag
  * over budget would otherwise surface only as the QR-fits check below
  * failing with a confusing "over the QR ceiling" message rather than the
- * real "tag too long" cause. */
+ * real "tag too long" cause. The same discipline applies to the baked event
+ * name (spec #109, sub-issue #111): gen_event_profile.py's own
+ * EVENT_NAME_MAX_LEN cap (15) already keeps PIPELINE_EVENT_NAME_LEN within
+ * PIPELINE_PACK_MAX_NAME_LEN, but this compile-time check catches a future
+ * drift between the two loud, not silent. */
 typedef char pipeline_build_event_tag_len_check[
     (PIPELINE_EVENT_TAG_1_LEN <= PIPELINE_PACK_MAX_TAG_LEN) ? 1 : -1];
+typedef char pipeline_build_event_name_len_check[
+    (PIPELINE_EVENT_NAME_LEN <= PIPELINE_PACK_MAX_NAME_LEN) ? 1 : -1];
 typedef char pipeline_build_event_payload_fits_qr_check[
     (PIPELINE_BUILT_PAYLOAD_SIZE <= PIPELINE_QR_MAX_PAYLOAD_BYTES) ? 1 : -1];
 typedef char pipeline_build_event_qr_version_check[
@@ -54,15 +62,12 @@ int build_event(const StarCapture *capture, const pipeline_u8 key[PIPELINE_KEY_S
     pipeline_u8 sig[PIPELINE_SCHNORR_SIG_SIZE];
     static const pipeline_u8 kPubkey[PIPELINE_FMT_SIZE_PUBKEY] = PIPELINE_EVENT_PUBKEY_BYTES;
     static const pipeline_u8 kTag[] = PIPELINE_EVENT_TAG_1_VALUE;
-    /* Format v3's NAME_LEN/NAME wire field is not yet threaded through this
-     * build (spec #109, sub-issue #111 wires the real baked event name into
-     * both the signed serialization and this pack call) -- sub-issue #110
-     * only generalizes the descriptor/pack/unpack seam to carry it, so this
-     * build packs a zero-length placeholder name for now. Deliberately not
-     * the baked event-name macro (still off-wire here, per the honesty
-     * invariant sub-issue #76 established; see event_id.c's own two-tag
-     * serialization, unchanged by #110). */
-    static const pipeline_u8 kName[] = "";
+    /* Format v3's baked event name (spec #109, sub-issue #111): the same
+     * PIPELINE_EVENT_NAME event_id.c's pipeline_event_serialize() already
+     * folds into the signed ["n",...] tag is now packed onto the wire too,
+     * so the packed payload and the signed serialization can never disagree
+     * on the name -- retires the old display-only contract (#76). */
+    static const pipeline_u8 kName[] = PIPELINE_EVENT_NAME;
     pipeline_u32 packedLen;
 
     pipeline_event_compute_id(capture, id);
@@ -73,7 +78,7 @@ int build_event(const StarCapture *capture, const pipeline_u8 key[PIPELINE_KEY_S
 
     packedLen = pipeline_pack(capture, (pipeline_u32)PIPELINE_EVENT_CREATED_AT, kPubkey,
                                kTag, (pipeline_u8)PIPELINE_EVENT_TAG_1_LEN,
-                               kName, 0, sig, out->packed_payload);
+                               kName, (pipeline_u8)PIPELINE_EVENT_NAME_LEN, sig, out->packed_payload);
     if (packedLen != (pipeline_u32)PIPELINE_BUILT_PAYLOAD_SIZE) {
         return 0;
     }
