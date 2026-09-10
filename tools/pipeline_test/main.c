@@ -158,6 +158,28 @@
  * (see those scripts' own updated header comments); test_build_event_
  * end_to_end()'s unpacked-name assertion now expects the real baked name,
  * not a zero-length placeholder.
+ *
+ * Spec #115 sub-issue #116 (ADR-0006's cabinet-side multi-frame transport)
+ * replaces BuiltEvent's single qr_bitmap field with frame_count + N
+ * qr_bitmaps (build_event.h): build_event() now base32-encodes the
+ * unchanged packed_payload, splits it into fragment.h-headered chunks
+ * sized to url.h/qr_adapter.h's per-frame alphanumeric budget, URL-wraps
+ * each, and QR-encodes each as an ALPHANUMERIC segment
+ * (pipeline_qr_encode_alphanumeric) rather than the earlier single
+ * BYTE-mode qr_bitmap. Every existing test above that touched
+ * event.qr_bitmap now reads event.qr_bitmaps[0] instead (content-agnostic
+ * uses: rendering, the qr_display state machine, byte-identity checks);
+ * the two that actually decoded content (test_build_event_end_to_end's
+ * step (a), and the qr_render blit/overlay tests' own tail assertions) now
+ * decode via qr_host_decode_alphanumeric and either reassemble the full
+ * envelope (reassemble_built_event()) or compare against the exact
+ * expected frame-0 URL (compute_built_event_frame_url()), both recomputed
+ * from the same production functions build_event() itself calls, never a
+ * hand-duplicated literal. New tests below cover the base32 codec (RFC
+ * 4648 KATs), the fragmenter's N=1/just-over-one-frame boundaries, the URL
+ * wrap/strip pair, the QR alphanumeric round-trip, and the
+ * build_event()-seam keystone round-trip (natural order, any order,
+ * missing-fragment-is-incomplete) -- see each test's own header comment.
  */
 #include <stdio.h>
 #include <string.h>
@@ -230,7 +252,7 @@ static pipeline_u32 compute_built_event_frame_url(const BuiltEvent *event, pipel
  * parse_header), and copies its chunk into base32Text at the header's own
  * index -- so frames can be fed in ANY order and still land correctly.
  * Returns nonzero (true) and de-base32's the reassembled text into
- * rawOut/*rawLenOut ONLY if every index 0..PIPELINE_BUILT_FRAME_COUNT-1 was
+ * rawOut/rawLenOut ONLY if every index 0..PIPELINE_BUILT_FRAME_COUNT-1 was
  * seen at least once; returns 0 (false) -- writing nothing to rawOut -- if
  * any frame fails to decode/strip/parse, or the set is incomplete (a
  * missing fragment reports incomplete, never a wrong/partial event, per
@@ -1472,11 +1494,14 @@ static void fill_alnum_pattern(pipeline_u8 *buf, int len)
 {
     /* A test-only fixture pattern (not a wire constant): cycles through
      * the QR alphanumeric charset so encode/decode exercise every symbol,
-     * not just digits. */
+     * not just digits. Mirrors qrcodegen.c's/qr_host_decode.c's own
+     * (separately duplicated, per each file's own header comment)
+     * ALPHANUMERIC_CHARSET/_LEN. */
     static const char charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+    enum { kCharsetLen = 45 };
     int i;
     for (i = 0; i < len; i++) {
-        buf[i] = (pipeline_u8)charset[i % 45];
+        buf[i] = (pipeline_u8)charset[i % kCharsetLen];
     }
 }
 
@@ -1718,6 +1743,88 @@ static void test_url_wrap_and_strip(void)
                                   &strippedLen) == 0,
               "pipeline_url_strip rejects a URL shorter than the expected prefix");
     }
+}
+
+/*
+ * The full ADR-0006 envelope chain at N=1 (spec #115, sub-issue #116):
+ * base32-encode -> fragment-build -> URL-wrap -> QR-encode(ALPHANUMERIC)
+ * -> QR-decode -> URL-strip -> header-parse -> base32-decode, on a short
+ * synthetic payload under a generous per-frame budget. This is the
+ * genuine N=1 boundary through the WHOLE transport envelope (not just the
+ * fragmenter alone, see test_fragment_boundaries_and_header_round_trip()
+ * above) -- exercised independently of build_event() because this host
+ * tool's own baked profile always produces N>=2 under its own
+ * PIPELINE_URL_BASE (test_build_event_multiframe_round_trip()'s own
+ * header comment explains why), so a genuine single-frame case can only
+ * be reached with a payload/budget build_event() itself never uses. Uses
+ * the SAME production functions (base32.h/fragment.h/url.h/qr_adapter.h)
+ * build_event() calls, at a different (but equally legal) fixed budget.
+ */
+static void test_transport_envelope_full_chain_n_equals_one(void)
+{
+    static const pipeline_u8 kPayload[] = { 0x01, 0x02, 0x03, 0x04, 0x05 };
+    static const pipeline_u8 kBaseUrl[] = "EXAMPLE.TEST";
+    pipeline_u32 baseUrlLen = (pipeline_u32)(sizeof(kBaseUrl) - 1);
+    pipeline_u8 base32Text[32];
+    pipeline_u32 base32Len;
+    pipeline_u32 frameCount;
+    pipeline_u8 fragment[64];
+    pipeline_u32 fragmentLen = 0;
+    pipeline_u8 url[128];
+    pipeline_u32 urlLen;
+    pipeline_u8 qrcode[PIPELINE_QR_BUFFER_LEN];
+    int encodeOk;
+    unsigned char decodedUrl[128];
+    int decodedUrlLen = -1;
+    int decodeOk;
+    pipeline_u8 strippedFragment[64];
+    pipeline_u32 strippedFragmentLen = 0;
+    pipeline_u32 idx, cnt;
+    pipeline_u8 recovered[16];
+    pipeline_u32 recoveredLen = 0;
+    int stripOk, parseOk, base32DecodeOk;
+    /* Generous on purpose: header (4) + this payload's whole base32
+     * length fits in a single fragment, forcing the N=1 branch. */
+    const pipeline_u32 perFrameBudget = 100u;
+
+    base32Len = pipeline_base32_encode(kPayload, (pipeline_u32)sizeof(kPayload), base32Text,
+                                        (pipeline_u32)sizeof(base32Text));
+
+    frameCount = pipeline_fragment_count(base32Len, perFrameBudget);
+    check(frameCount == 1u,
+          "transport envelope: a short payload under a generous per-frame budget is genuinely N=1");
+
+    check(pipeline_fragment_build(base32Text, base32Len, perFrameBudget, 0u, frameCount,
+                                   fragment, &fragmentLen) != 0,
+          "transport envelope: N=1 fragment builds");
+
+    urlLen = pipeline_url_wrap(kBaseUrl, baseUrlLen, fragment, fragmentLen, url, (pipeline_u32)sizeof(url));
+    check(urlLen != 0, "transport envelope: N=1 fragment wraps into a URL");
+
+    encodeOk = pipeline_qr_encode_alphanumeric(url, urlLen, qrcode);
+    check(encodeOk != 0, "transport envelope: N=1 URL QR-encodes in ALPHANUMERIC mode");
+
+    decodeOk = qr_host_decode_alphanumeric(qrcode, decodedUrl, (int)sizeof(decodedUrl), &decodedUrlLen);
+    check(decodeOk != 0 && (pipeline_u32)decodedUrlLen == urlLen && memcmp(decodedUrl, url, (size_t)urlLen) == 0,
+          "transport envelope: N=1 QR decodes back to the exact URL");
+
+    stripOk = pipeline_url_strip((const pipeline_u8 *)decodedUrl, (pipeline_u32)decodedUrlLen,
+                                  kBaseUrl, baseUrlLen, strippedFragment, (pipeline_u32)sizeof(strippedFragment),
+                                  &strippedFragmentLen);
+    check(stripOk != 0 && strippedFragmentLen == fragmentLen &&
+          memcmp(strippedFragment, fragment, fragmentLen) == 0,
+          "transport envelope: N=1 URL strips back to the exact fragment");
+
+    parseOk = pipeline_fragment_parse_header(strippedFragment, strippedFragmentLen, &idx, &cnt);
+    check(parseOk != 0 && idx == 0u && cnt == 1u,
+          "transport envelope: N=1 fragment header parses to index 0 of 1 (the degenerate single-frame case)");
+
+    base32DecodeOk = pipeline_base32_decode(strippedFragment + PIPELINE_FRAGMENT_HEADER_LEN,
+                                             strippedFragmentLen - (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN,
+                                             recovered, (pipeline_u32)sizeof(recovered), &recoveredLen);
+    check(base32DecodeOk != 0 && recoveredLen == (pipeline_u32)sizeof(kPayload) &&
+          memcmp(recovered, kPayload, sizeof(kPayload)) == 0,
+          "transport envelope: N=1 full chain recovers the exact original bytes byte-for-byte");
 }
 
 /*
@@ -3513,6 +3620,7 @@ int main(void)
     test_base32_known_answer_vectors();
     test_fragment_boundaries_and_header_round_trip();
     test_url_wrap_and_strip();
+    test_transport_envelope_full_chain_n_equals_one();
     test_build_event_multiframe_round_trip();
     test_sha256_known_answer_vectors();
     test_event_id_matches_reference();

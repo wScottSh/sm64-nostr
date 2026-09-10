@@ -49,7 +49,7 @@
 /* The count field stores the actual (1-based) count value, not count-1, so
  * the largest count 2 base36 digits can hold is 36*36 - 1 = 1295 (a value
  * of 1296 would wrap to "00" when base36-encoded -- see fragment.c's
- * encodeBase36Field()) -- matching this macro's own name (a MAX, not a
+ * encode_base36_field()) -- matching this macro's own name (a MAX, not a
  * digit-count) and this header's own comment above. */
 #define PIPELINE_FRAGMENT_MAX_COUNT (PIPELINE_FRAGMENT_BASE36_LEN * PIPELINE_FRAGMENT_BASE36_LEN - 1)
 
