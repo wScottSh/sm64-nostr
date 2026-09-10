@@ -23,7 +23,13 @@
  * qr_display.h core; this file contains no such logic itself.
  *
  * Split into two entry points, called from two different places, because
- * they run at two different points in the frame:
+ * they run at two different points in the frame (and, since sub-issue
+ * #118, drive two different per-frame counters off that same assumed
+ * once-per-frame cadence: qr_display_n64_step()'s dismiss debounce
+ * (pressFrames, qr_display.h) and qr_display_n64_render_if_active()'s own
+ * cycling tick (sTick, qr_display_n64.c) -- both implicitly assume exactly
+ * one call per rendered frame, matching how thread5_game_loop() already
+ * calls each of their call sites):
  *   - qr_display_n64_present()/qr_display_n64_step() are called from
  *     WITHIN the Mario action update (mario_actions_cutscene.c), which is
  *     where gPlayer1Controller's per-frame reading is already valid

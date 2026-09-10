@@ -38,17 +38,20 @@ static QrDisplayState sQrDisplay;
 
 /*
  * The cycling shell's own copy of the WHOLE frame set (spec #115, sub-issue
- * #118), captured at present() time -- sQrDisplay.bitmap only ever holds
- * frame 0 (the pure qr_display core's own contract, qr_display.h, is
- * unmodified by this sub-issue), so the remaining N-1 frames live here,
- * where the shell that actually cycles them can reach them. Sized to
- * PIPELINE_BUILT_FRAME_COUNT/PIPELINE_BUILT_QR_BITMAP_SIZE, the SAME
- * compile-time constants BuiltEvent::qr_bitmaps itself uses (build_event.h)
- * -- this build only ever has one frame count/bitmap size, so no separate
- * bound is introduced. sFrameCount and sTick are meaningless while
- * sQrDisplay is not active; qr_display_n64_present() (re-)arms both exactly
- * when it (re-)arms sQrDisplay, and qr_display_n64_render_if_active() only
- * ever reads them while sQrDisplay IS active.
+ * #118), captured at present() time -- sQrDisplay.bitmap still holds frame
+ * 0 too (the pure qr_display core's own contract, qr_display.h, is
+ * unmodified by this sub-issue, including its one-shot dismiss-erase of
+ * that copy), but is no longer this shell's blit source; the remaining N-1
+ * frames -- and, since this sub-issue, ALL N, frame 0 included -- are read
+ * from here instead, where the shell that actually cycles them can reach
+ * them. Sized to PIPELINE_BUILT_FRAME_COUNT/PIPELINE_BUILT_QR_BITMAP_SIZE,
+ * the SAME compile-time constants BuiltEvent::qr_bitmaps itself uses
+ * (build_event.h) -- this build only ever has one frame count/bitmap size,
+ * so no separate bound is introduced. sFrameCount and sTick are
+ * meaningless while sQrDisplay is not active; qr_display_n64_present()
+ * (re-)arms both exactly when it (re-)arms sQrDisplay, and
+ * qr_display_n64_render_if_active() only ever reads them while sQrDisplay
+ * IS active.
  */
 static pipeline_u8 sQrFrames[PIPELINE_BUILT_FRAME_COUNT][PIPELINE_BUILT_QR_BITMAP_SIZE];
 static pipeline_u32 sFrameCount;
@@ -70,13 +73,28 @@ int qr_display_n64_present(const BuiltEvent *event) {
      * sub-issue #116) into this shell's own storage so
      * qr_display_n64_render_if_active() can cycle through all of them
      * (sub-issue #118), not just the frame 0 the pure qr_display core
-     * holds. Byte-by-byte, hand-rolled -- mirroring qr_display.c's own
+     * holds. Byte-by-byte, hand-rolled, mirroring qr_display.c's own
      * <string.h>-avoidance convention (this file already includes
-     * <ultra64.h>, so a real memcpy would be available here, but matching
-     * the surrounding module's own idiom keeps the copy visibly identical
-     * to qr_display_present()'s).
+     * <ultra64.h>, so a real memcpy would be available here; matching the
+     * surrounding module's own idiom keeps the two copies easy to compare
+     * even though the loop types differ, pipeline_u32 here vs int there).
+     *
+     * event->frame_count is contractually always PIPELINE_BUILT_FRAME_COUNT
+     * on a successful build_event() (build_event.h), never 0 -- but this
+     * copy clamps to that same [1, PIPELINE_BUILT_FRAME_COUNT] range
+     * defensively rather than trusting that caller invariant blindly,
+     * exactly like qr_cycle_frame_index()'s own frameCount==0 floor
+     * (qr_cycle.h): an out-of-range value here would otherwise be either a
+     * BSS buffer overrun (too high) or a stale previous grab's frames left
+     * live in sQrFrames[0] (too low), neither of which qr_display_present()
+     * above already caught.
      */
     sFrameCount = event->frame_count;
+    if (sFrameCount == 0u) {
+        sFrameCount = 1u;
+    } else if (sFrameCount > (pipeline_u32) PIPELINE_BUILT_FRAME_COUNT) {
+        sFrameCount = (pipeline_u32) PIPELINE_BUILT_FRAME_COUNT;
+    }
     for (i = 0; i < sFrameCount; i++) {
         for (j = 0; j < (pipeline_u32) sizeof(sQrFrames[i]); j++) {
             sQrFrames[i][j] = event->qr_bitmaps[i][j];

@@ -25,7 +25,11 @@
  * #define in the shell-side game code (not the pipeline), means CRT
  * refresh-beat robustness (#107, a non-gating follow-up) can be retuned
  * later by changing this one constant -- no pipeline change, no format
- * change, no touching qr_display_n64.c's own logic.
+ * change, no touching qr_display_n64.c's own logic. One tick is one call
+ * to qr_display_n64_render_if_active() (qr_display_n64.c), which runs once
+ * per display_and_vsync() -- i.e. once per rendered frame, ~30 Hz on real
+ * hardware -- so at the default value below each QR frame holds for
+ * roughly 20/30 s (~0.67 s) before the sequence advances.
  */
 #define QR_CYCLE_HOLD_TICKS 20u
 
