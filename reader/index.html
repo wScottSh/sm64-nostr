@@ -287,7 +287,10 @@ document.getElementById('start').onclick = startCamera;
  * Start-camera flow still works.
  */
 (function bootstrapFromLocation() {
-  const openedUrl = TRANSPORT_CONTRACT.PIPELINE_URL_SCHEME + BASE_URL + location.pathname;
+  // Reuse FRAME_URL_PREFIX (scheme + host + PATH_SEP) rather than re-joining
+  // the pieces, so the path separator stays single-sourced; location.pathname
+  // always begins with "/", which slice(1) drops to avoid doubling PATH_SEP.
+  const openedUrl = FRAME_URL_PREFIX + location.pathname.slice(1);
   if (!openedUrl.startsWith(FRAME_URL_PREFIX)) return;
   if (addScannedUrl(openedUrl)) {
     statusEl.className = 'ok';

@@ -39,12 +39,13 @@
  * pipeline_event_compute_id_from_fields() below are the GENERIC forms --
  * they take pubkey/created_at/the per-game tag as plain arguments rather
  * than reading event_profile.h's baked macros, so a caller reconstructing
- * an event purely from UNPACKED WIRE FIELDS (the companion's job -- see
+ * an event purely from UNPACKED WIRE FIELDS (the reader's job -- see
  * docs/qr-handoff-spec.md) can recompute the exact same id with ZERO
  * out-of-band constants -- including `kind` and TAG_0, which is why
  * PIPELINE_EVENT_KIND/PIPELINE_EVENT_TAG_KEY/PIPELINE_EVENT_TAG0_VALUE
  * below are defined HERE (this file), not in event_profile.h.in: they are
- * format-v2-pinned spec constants (docs/qr-handoff-spec.md section 3),
+ * wire-format-pinned spec constants (docs/qr-handoff-spec.md section 3;
+ * identical across format v2 and v3 -- unchanged when v3 landed, spec #109),
  * identical for every build and every caller, never per-build baked data
  * and never a function parameter -- only TAG_1 (the per-game tag) varies
  * per build and is a parameter. event_profile.h.in's own PIPELINE_EVENT_KIND
@@ -60,10 +61,11 @@
 
 #define PIPELINE_EVENT_ID_SIZE 32
 
-/* Format-v2-pinned spec constants (docs/qr-handoff-spec.md section 3):
- * `kind` and the FIRST tag (`["t","ag-lb"]`) are fixed for every build --
+/* Wire-format-pinned spec constants (docs/qr-handoff-spec.md section 3;
+ * identical across format v2 and v3): `kind` and the FIRST tag
+ * (`["t","ag-lb"]`) are fixed for every build --
  * part of the published wire-format standard, never baked per-build data
- * and never packed onto the wire (the companion already knows them from
+ * and never packed onto the wire (the reader already knows them from
  * the spec, the moment it sees FORMAT_TAG -- 0x03 as of format v3, spec
  * #109/sub-issue #110). The per-game SECOND tag
  * (event_profile.h's PIPELINE_EVENT_TAG_1_VALUE) and the THIRD tag's VALUE
