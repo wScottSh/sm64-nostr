@@ -40,18 +40,30 @@ static QrDisplayState sQrDisplay;
  * The cycling shell's own copy of the WHOLE frame set (spec #115, sub-issue
  * #118), captured at present() time -- sQrDisplay.bitmap still holds frame
  * 0 too (the pure qr_display core's own contract, qr_display.h, is
- * unmodified by this sub-issue, including its one-shot dismiss-erase of
- * that copy), but is no longer this shell's blit source; the remaining N-1
- * frames -- and, since this sub-issue, ALL N, frame 0 included -- are read
- * from here instead, where the shell that actually cycles them can reach
- * them. Sized to PIPELINE_BUILT_FRAME_COUNT/PIPELINE_BUILT_QR_BITMAP_SIZE,
- * the SAME compile-time constants BuiltEvent::qr_bitmaps itself uses
- * (build_event.h) -- this build only ever has one frame count/bitmap size,
- * so no separate bound is introduced. sFrameCount and sTick are
- * meaningless while sQrDisplay is not active; qr_display_n64_present()
- * (re-)arms both exactly when it (re-)arms sQrDisplay, and
- * qr_display_n64_render_if_active() only ever reads them while sQrDisplay
- * IS active.
+ * unmodified by this sub-issue), but is no longer this shell's blit source
+ * and, past this point, is dead storage kept only because the pure core
+ * owns it; the remaining N-1 frames -- and, since this sub-issue, ALL N,
+ * frame 0 included -- are read from here instead, where the shell that
+ * actually cycles them can reach them. Sized to PIPELINE_BUILT_FRAME_COUNT/
+ * PIPELINE_BUILT_QR_BITMAP_SIZE, the SAME compile-time constants
+ * BuiltEvent::qr_bitmaps itself uses (build_event.h) -- this build only
+ * ever has one frame count/bitmap size, so no separate bound is
+ * introduced. sFrameCount and sTick are meaningless while sQrDisplay is
+ * not active; qr_display_n64_present() (re-)arms both exactly when it
+ * (re-)arms sQrDisplay, qr_display_n64_render_if_active() only ever reads
+ * them while sQrDisplay IS active, and qr_display_n64_step() erases
+ * sQrFrames (and resets both counters) on the exact tick it dismisses
+ * sQrDisplay -- so the pure core's "genuinely unrecoverable after dismiss"
+ * invariant (qr_display.h) covers every frame byte this shell ever held,
+ * not just the one dead copy in sQrDisplay.bitmap.
+ *
+ * sTick is a plain pipeline_u32 render-tick counter with no explicit wrap
+ * handling: at the ~30 Hz cadence QR_CYCLE_HOLD_TICKS assumes (qr_cycle.h),
+ * it would take roughly 4.5 CONTINUOUS years of one overlay staying
+ * presented and undismissed to wrap -- categorically unreachable for a
+ * single star-grab overlay's lifetime, so no defensive floor is added
+ * here (unlike sFrameCount's, which guards an input this module cannot
+ * itself bound).
  */
 static pipeline_u8 sQrFrames[PIPELINE_BUILT_FRAME_COUNT][PIPELINE_BUILT_QR_BITMAP_SIZE];
 static pipeline_u32 sFrameCount;
@@ -100,7 +112,7 @@ int qr_display_n64_present(const BuiltEvent *event) {
             sQrFrames[i][j] = event->qr_bitmaps[i][j];
         }
     }
-    sTick = 0;
+    sTick = 0u;
     return 1;
 }
 
@@ -110,7 +122,30 @@ int qr_display_n64_is_active(void) {
 
 int qr_display_n64_step(void) {
     int aButtonHeld = (gPlayer1Controller->buttonDown & A_BUTTON) != 0;
-    return qr_display_update(&sQrDisplay, aButtonHeld);
+    int dismissed = qr_display_update(&sQrDisplay, aButtonHeld);
+
+    if (dismissed) {
+        /*
+         * qr_display_update() already memset-erased sQrDisplay.bitmap (its
+         * own one-shot-erase contract, qr_display.h) -- but that copy is no
+         * longer this shell's blit source (see sQrFrames's own header
+         * comment above). Erase this shell's OWN copy of the full frame
+         * set too, byte-by-byte for the same reason the pure core doesn't
+         * use memset, so "the dismissed QR is genuinely unrecoverable" (the
+         * pure core's own stated invariant) actually covers every byte
+         * this shell ever held, not just the one dead copy.
+         */
+        pipeline_u32 i, j;
+        for (i = 0; i < (pipeline_u32) PIPELINE_BUILT_FRAME_COUNT; i++) {
+            for (j = 0; j < (pipeline_u32) sizeof(sQrFrames[i]); j++) {
+                sQrFrames[i][j] = 0;
+            }
+        }
+        sFrameCount = 0u;
+        sTick = 0u;
+    }
+
+    return dismissed;
 }
 
 void qr_display_n64_render_if_active(uintptr_t framebuffer) {
