@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>sm64-nostr airgap reader</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font:16px/1.4 system-ui, sans-serif; background:#111; color:#eee; }
+  header { padding:12px 16px; background:#1b1b1b; border-bottom:1px solid #333; }
+  header h1 { font-size:16px; margin:0 0 4px; }
+  header p { margin:0; color:#aaa; font-size:13px; }
+  main { padding:16px; max-width:720px; margin:0 auto; }
+  .card { background:#1b1b1b; border:1px solid #333; border-radius:10px; padding:16px; margin:0 0 16px; }
+  button { font:inherit; padding:12px 18px; border-radius:8px; border:0; background:#3b82f6; color:#fff; cursor:pointer; }
+  a { color:#60a5fa; }
+  #video { width:100%; border-radius:8px; background:#000; }
+  .stat { font-variant-numeric:tabular-nums; }
+  .ok { color:#34d399; } .bad { color:#f87171; } .warn { color:#fbbf24; }
+  .frames { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .frames span { min-width:26px; height:26px; padding:0 4px; display:grid; place-items:center; border-radius:6px; background:#374151; font-size:12px; }
+  .frames span.got { background:#059669; }
+  pre { white-space:pre-wrap; word-break:break-all; background:#0d0d0d; padding:10px; border-radius:6px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>sm64-nostr airgap reader</h1>
+  <p>Opened from a star-grab QR (spec #115, ADR-0005/ADR-0006). Decodes and broadcasts only -- it
+     reconstructs nothing signed.</p>
+</header>
+<main>
+  <div class="card">
+    <p id="status" class="warn">Tap Start to grab the camera (a user gesture is required).</p>
+    <button id="start">Start camera</button>
+    <video id="video" playsinline muted style="display:none"></video>
+    <div id="progress" style="display:none">
+      <p class="stat">Frames captured: <span id="got" class="ok">0</span> / <span id="tot">?</span></p>
+      <div class="frames" id="grid"></div>
+    </div>
+    <div id="done" style="display:none">
+      <p class="ok"><b>&#10003; Reassembled and broadcast.</b></p>
+      <pre id="result"></pre>
+    </div>
+    <div id="err" style="display:none"><p class="bad" id="errText"></p></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script type="module">
+import { reassembleFrames, base32Decode, decodeToBroadcastEvent, buildRelayMessage } from './reader.js';
+import { bytesToHex } from './sha256.js';
+
+/*
+ * Relay this reader broadcasts to (spec #115, sub-issue #119: "broadcasts
+ * to a configured relay"; relay selection/verification is downstream,
+ * ADR-0005, out of this ticket's scope). Overridable via ?relay= for
+ * testing against a local/alternate relay without editing this file.
+ */
+const DEFAULT_RELAY_URL = 'wss://relay.damus.io';
+const params = new URLSearchParams(location.search);
+const relayUrl = params.get('relay') || DEFAULT_RELAY_URL;
+
+// This reader's own base URL (transport_contract.h's URL template is
+// HTTPS://<PIPELINE_URL_BASE>/<fragment> -- PIPELINE_URL_BASE is always
+// uppercase and has no path component, so this reader's own host,
+// uppercased, is exactly the baseUrl every scanned frame's URL was wrapped
+// around). See url.h's own pipeline_url_strip() contract, which stripUrl()
+// in reader.js ports.
+const BASE_URL = location.host.toUpperCase();
+
+const statusEl = document.getElementById('status');
+const video = document.getElementById('video');
+const canvas = document.createElement('canvas');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+const scannedUrls = new Set();
+let raf = null;
+
+document.getElementById('start').onclick = async () => {
+  try {
+    if (!location.protocol.startsWith('https') && location.hostname !== 'localhost') {
+      setError('Not HTTPS -- getUserMedia will be blocked. Serve this over HTTPS.');
+      return;
+    }
+    statusEl.textContent = 'Requesting camera...';
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    video.srcObject = stream;
+    await video.play();
+    video.style.display = 'block';
+    document.getElementById('start').style.display = 'none';
+    document.getElementById('progress').style.display = 'block';
+    statusEl.className = 'ok';
+    statusEl.textContent = 'Camera live. Point it at the cycling QR.';
+    tick();
+  } catch (e) {
+    setError(`getUserMedia FAILED: ${e.name} -- ${e.message}`);
+  }
+};
+
+function setError(msg) {
+  statusEl.className = 'bad';
+  statusEl.textContent = msg;
+  document.getElementById('err').style.display = 'block';
+  document.getElementById('errText').textContent = msg;
+}
+
+function renderGrid(count) {
+  if (!count) return;
+  const grid = document.getElementById('grid');
+  if (grid.children.length !== count) {
+    grid.innerHTML = '';
+    for (let i = 0; i < count; i++) {
+      const s = document.createElement('span');
+      s.textContent = i;
+      grid.appendChild(s);
+    }
+    document.getElementById('tot').textContent = count;
+  }
+  let got = 0;
+  for (const url of scannedUrls) {
+    try {
+      const fragment = url.slice(('HTTPS://' + BASE_URL + '/').length);
+      const idx = parseInt(fragment.slice(0, 2), 36);
+      if (grid.children[idx]) {
+        grid.children[idx].classList.add('got');
+        got++;
+      }
+    } catch { /* ignore an unparsable scan; the camera will just keep looking */ }
+  }
+  document.getElementById('got').textContent = got;
+}
+
+async function broadcast(event) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(relayUrl);
+    const timeout = setTimeout(() => { ws.close(); reject(new Error('relay publish timed out')); }, 10000);
+    ws.onopen = () => ws.send(buildRelayMessage(event));
+    ws.onmessage = (msg) => {
+      try {
+        const parsed = JSON.parse(msg.data);
+        if (parsed[0] === 'OK' && parsed[1] === event.id) {
+          clearTimeout(timeout);
+          ws.close();
+          resolve(parsed);
+        }
+      } catch { /* not our OK frame; keep waiting */ }
+    };
+    ws.onerror = (e) => { clearTimeout(timeout); reject(e); };
+  });
+}
+
+async function finish() {
+  cancelAnimationFrame(raf);
+  (video.srcObject?.getTracks() || []).forEach((t) => t.stop());
+
+  const { complete, base32Text } = reassembleFrames([...scannedUrls], BASE_URL);
+  if (!complete) return; // shouldn't happen: tick() only calls finish() once complete
+
+  const packedBytes = base32Decode(base32Text);
+  const event = decodeToBroadcastEvent(packedBytes);
+
+  document.getElementById('progress').style.display = 'none';
+  document.getElementById('done').style.display = 'block';
+  document.getElementById('result').textContent = `id: ${event.id}\n\n` + JSON.stringify(event, null, 2);
+
+  try {
+    await broadcast(event);
+    document.getElementById('result').textContent += '\n\nbroadcast OK to ' + relayUrl;
+  } catch (e) {
+    document.getElementById('result').textContent += '\n\nbroadcast FAILED: ' + e;
+  }
+}
+
+function tick() {
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+    if (code && code.data && code.data.startsWith('HTTPS://' + BASE_URL + '/')) {
+      const before = scannedUrls.size;
+      scannedUrls.add(code.data);
+      if (scannedUrls.size !== before) {
+        const { complete, count } = reassembleFrames([...scannedUrls], BASE_URL);
+        renderGrid(count);
+        if (complete) {
+          return finish();
+        }
+      }
+    }
+  }
+  raf = requestAnimationFrame(tick);
+}
+</script>
+</body>
+</html>
