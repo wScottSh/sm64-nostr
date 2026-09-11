@@ -673,6 +673,20 @@ void general_star_dance_handler(struct MarioState *m, s32 isInWater) {
 
             case 80:
                 if (!(m->actionArg & 1)) {
+                    /* Exit flow (spec #24 sub-issue #31; deferred build by
+                     * spec #96, sub-issue #146): this dance action keeps
+                     * ticking through the 32-frame FADE_INTO_MARIO fade that
+                     * follows -- nothing else in this switch fires again for
+                     * this grab -- while the reload gap ahead does the
+                     * actual level change. The Nostr pipeline's deferred
+                     * build_event() call for this grab does NOT happen here;
+                     * it runs later, in level_update.c's
+                     * play_mode_change_level() (see its own comment on the
+                     * WARP_OP_STAR_EXIT branch for exactly what's on screen
+                     * there and why it's the right frame) -- the post-fade,
+                     * static cover frame for this flow, mirroring the
+                     * no-exit flow's enable_time_stop() cover frame in the
+                     * `else` branch just below. */
                     level_trigger_warp(m, WARP_OP_STAR_EXIT);
                 } else {
                     /* Nostr pipeline qr_display glue (spec #24, sub-issue

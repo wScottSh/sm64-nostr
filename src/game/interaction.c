@@ -55,9 +55,9 @@ s16 sInvulnerable;
 
 /*
  * Nostr pipeline capture-glue -> qr_display bridge (spec #24, sub-issue
- * #33; capture/build split by spec #96, sub-issue #145). display happens
- * several frames after grab, at park time (display@park, parent spec #24),
- * from a completely different function in a different file
+ * #33; capture/build split by spec #96, sub-issues #145/#146). display
+ * happens several frames after grab, at park time (display@park, parent
+ * spec #24), from a completely different function in a different file
  * (mario_actions_cutscene.c) once the star dance/exit animation finishes.
  * These two file-static globals are the hand-off: sPipelinePendingEvent
  * holds the bytes, sPipelinePendingValid says whether they're real (a star,
@@ -66,30 +66,36 @@ s16 sInvulnerable;
  * (qr_pending_star_event.h) for the one-shot "take" contract that keeps a
  * stale event from an earlier grab from ever being read twice.
  *
- * As of spec #96 sub-issue #145, an EXIT star still fills this hand-off
- * synchronously at grab, exactly as before (build_event() at grab,
- * unchanged this ticket) -- but a NO-EXIT star (100-coin star, secret-
- * collection sets) only fills sPipelineCapturedStar here at grab
- * (capture@grab, still reading nonce/coins/frames/entropy on the exact grab
- * frame) and records a captured-not-yet-built phase in sPipelineScheduler
- * (star_event_scheduler.h, the new pure scheduler core); the heavy
- * build_event() call for that capture doesn't run until
- * pipeline_build_pending_star_event_if_captured() is called from the
- * no-exit flow's cover frame (general_star_dance_handler's
- * enable_time_stop() frame, mario_actions_cutscene.c), which fills THIS
- * same sPipelinePendingEvent/sPipelinePendingValid hand-off just like the
- * exit path always has -- so pipeline_take_pending_star_event() itself, and
- * every one of its callers, is completely unchanged by this split.
+ * As of spec #96 sub-issue #145 (no-exit stars) and sub-issue #146 (exit
+ * stars), EVERY real star grab -- exit or no-exit alike -- only fills
+ * sPipelineCapturedStar here at grab (capture@grab, still reading
+ * nonce/coins/frames/entropy on the exact grab frame) and records a
+ * captured-not-yet-built phase in sPipelineScheduler (star_event_scheduler.h,
+ * the pure scheduler core); the heavy build_event() call for that capture
+ * doesn't run until pipeline_build_pending_star_event_if_captured() is
+ * called from that flow's own cover frame -- the no-exit flow's
+ * enable_time_stop() frame (general_star_dance_handler,
+ * mario_actions_cutscene.c) or the exit flow's post-fade, static cover
+ * frame -- the WARP_OP_STAR_EXIT branch of play_mode_change_level()
+ * (level_update.c; see its own comment for exactly what's on screen there
+ * and why it, not initiate_delayed_warp's own delayed-warp-timer-reaches-
+ * zero frame one frame earlier, is the right frame) -- which fills THIS
+ * same sPipelinePendingEvent/
+ * sPipelinePendingValid hand-off either way, so pipeline_take_pending_star_
+ * event() itself, and every one of its callers, is completely unaware of
+ * which flow (or cover frame) filled it. No grab frame, for either flow,
+ * ever calls build_event() again.
  */
 static BuiltEvent sPipelinePendingEvent;
 static int sPipelinePendingValid = FALSE;
 
 /* The per-event private key (see interact_star_or_key's own comment below
- * for where it's baked from) and the no-exit capture/scheduler pair now
- * live at file scope, not inside interact_star_or_key, because
+ * for where it's baked from) and the capture/scheduler pair now live at
+ * file scope, not inside interact_star_or_key, because
  * pipeline_build_pending_star_event_if_captured() -- called later, from a
- * different call site at the cover frame -- needs to reach the SAME key and
- * the SAME captured StarCapture that interact_star_or_key filled at grab. */
+ * different call site at the cover frame (either flow's) -- needs to reach
+ * the SAME key and the SAME captured StarCapture that interact_star_or_key
+ * filled at grab. */
 static const pipeline_u8 sPipelineEventPrivkey[PIPELINE_KEY_SIZE] = PIPELINE_EVENT_PRIVKEY_BYTES;
 static StarCapture sPipelineCapturedStar;
 /* No explicit star_event_scheduler_init() call anywhere: this state's
@@ -119,10 +125,10 @@ int pipeline_build_pending_star_event_if_captured(void) {
     star_event_scheduler_report_build_result(&sPipelineScheduler, buildOk);
 
     if (!buildOk) {
-        /* Same degrade-with-no-QR failure semantics as the exit path's own
-         * build_event() failure check below -- just occurring at the cover
-         * frame instead of the grab frame (spec #145 acceptance
-         * criterion). */
+        /* Same degrade-with-no-QR failure semantics build_event() failing
+         * synchronously at grab used to have, pre-#145/#146 -- just
+         * occurring at whichever flow's cover frame instead of the grab
+         * frame (spec #145/#146 acceptance criterion). */
         bzero(&sPipelinePendingEvent, sizeof(sPipelinePendingEvent));
         sPipelinePendingValid = FALSE;
     } else {
@@ -143,8 +149,10 @@ int pipeline_take_pending_star_event(BuiltEvent *out) {
      * nothing pending), this copy must not linger in BSS as a second,
      * unmanaged copy of a signed event outside qr_display's own erase-on-
      * dismiss discipline (qr_display_update()). bzero (PR/os.h) mirrors
-     * this same function's own existing bzero use further down in
-     * interact_star_or_key's build_event() failure path. */
+     * pipeline_build_pending_star_event_if_captured()'s own bzero use
+     * above, on its build_event() failure path (interact_star_or_key no
+     * longer has one of its own to mirror, as of #146 -- it never calls
+     * build_event() at all anymore). */
     bzero(&sPipelinePendingEvent, sizeof(sPipelinePendingEvent));
     sPipelinePendingValid = FALSE;
     return wasValid;
@@ -876,21 +884,19 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
     u32 noExit = (o->oInteractionSubtype & INT_SUBTYPE_NO_EXIT) != 0;
     u32 grandStar = (o->oInteractionSubtype & INT_SUBTYPE_GRAND_STAR) != 0;
     /* Nostr pipeline capture glue (spec #24, sub-issue #31; capture/build
-     * split by spec #96, sub-issue #145). The capture struct is declared
-     * here, at the top of the function (this file compiles under IDO's
-     * C89-only parser -- see the root Makefile's COMPILER=ido default --
-     * which requires every declaration at the start of ITS OWN block, not
-     * necessarily the function's; a lone `int` further below is declared at
-     * the top of its own nested `if` block instead, which is equally
-     * C89-legal). pipelineBuiltEvent and the baked private key used to live
-     * here too, but as of #145 they're needed by
+     * split by spec #96, sub-issues #145/#146). The capture struct is
+     * declared here, at the top of the function (this file compiles under
+     * IDO's C89-only parser -- see the root Makefile's COMPILER=ido default
+     * -- which requires every declaration at the start of ITS OWN block, not
+     * necessarily the function's). The baked private key and the built-event
+     * hand-off used to live here too, but as of #145/#146 they're needed by
      * pipeline_build_pending_star_event_if_captured() as well (a different
-     * function, called later from the no-exit flow's cover frame) so both
+     * function, called later from whichever flow's cover frame) so both
      * moved to file scope above (sPipelineEventPrivkey/sPipelineCapturedStar)
-     * -- see that comment for why. pipelineBuiltEvent stays local: only the
-     * EXIT path below still builds synchronously right here. */
+     * -- see that comment for why. As of #146, EVERY real star grab (exit or
+     * no-exit) only captures here -- this function itself never calls
+     * build_event() again. */
     StarCapture pipelineCapture;
-    BuiltEvent pipelineBuiltEvent;
 
     if (m->health >= 0x100) {
         mario_stop_riding_and_holding(m);
@@ -977,13 +983,12 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
          * reset right alongside it (spec #96, sub-issue #145's acceptance
          * criterion: a key grab requests no build and leaves no valid
          * pending event) so a key grab can also never leave a PRIOR grab's
-         * captured-but-not-yet-built no-exit star sitting around to be
-         * built later by a stale cover-frame call. */
+         * captured-but-not-yet-built star (exit or no-exit, as of #146)
+         * sitting around to be built later by a stale cover-frame call. */
         sPipelinePendingValid = FALSE;
         star_event_scheduler_reset(&sPipelineScheduler);
 
         if (o->behavior != segmented_to_virtual(bhvBowserKey)) {
-            int pipelineBuildOk;
             pipeline_u32 pipelineFrames;
 
             /* format-v3 spec §3.4 (spec #109 sub-issues #112/#113): `frames`
@@ -1018,51 +1023,29 @@ u32 interact_star_or_key(struct MarioState *m, UNUSED u32 interactType, struct O
                                     (pipeline_u8) gPlayer1Controller->rawStickY,
                                     (pipeline_u16) gPlayer1Controller->buttonDown, &pipelineCapture);
 
-            /* Spec #96, sub-issue #145: split capture from build. A NO-EXIT
-             * star (100-coin star, secret-collection sets) only captures
-             * here -- it stashes pipelineCapture into the file-scope
+            /* Spec #96: split capture from build. Sub-issue #145 did this
+             * for NO-EXIT stars (100-coin star, secret-collection sets);
+             * sub-issue #146 removes the LAST grab-frame build_event() call
+             * by doing the exact same thing for EXIT stars too. Every real
+             * star grab -- exit or no-exit alike -- only captures here: it
+             * stashes pipelineCapture into the file-scope
              * sPipelineCapturedStar and marks the scheduler
-             * captured-not-yet-built (star_event_scheduler_capture()) --
-             * and does NOT call build_event() on this (the grab) frame.
-             * The heavy build runs later, once, under cover, at the no-exit
-             * flow's cover frame (general_star_dance_handler's
-             * enable_time_stop() frame, mario_actions_cutscene.c), via
-             * pipeline_build_pending_star_event_if_captured() above. An
-             * EXIT star is UNCHANGED this ticket: it still calls
-             * build_event() synchronously right here, exactly as #31 always
-             * has, and hands off to sPipelinePendingEvent/
-             * sPipelinePendingValid the same way it always has. Either way,
+             * captured-not-yet-built (star_event_scheduler_capture()). It
+             * does NOT call build_event() on this (the grab) frame, for
+             * either flow. The heavy build runs later, exactly once, under
+             * cover: the no-exit flow's enable_time_stop() frame
+             * (general_star_dance_handler, mario_actions_cutscene.c) or the
+             * exit flow's post-fade, static WARP_OP_STAR_EXIT branch of
+             * play_mode_change_level() (level_update.c), both via
+             * pipeline_build_pending_star_event_if_captured() (above) --
+             * which fills sPipelinePendingEvent/sPipelinePendingValid the
+             * same way build_event() called right here used to. Either way,
              * pipeline_take_pending_star_event() (this file, above) and
-             * every one of its two callers (mario_actions_cutscene.c) are
-             * completely unaware of which path filled the hand-off. */
-            if (noExit) {
-                sPipelineCapturedStar = pipelineCapture;
-                star_event_scheduler_capture(&sPipelineScheduler);
-            } else {
-                /* #31 stops here: on success, pipelineBuiltEvent now holds
-                 * the exact bytes the host tool predicts for these capture
-                 * values (see tools/pipeline_test's
-                 * test_capture_matches_host_build_event() host assertion).
-                 * build_event()'s own documented failure cases
-                 * (schnorr_adapter.h/qr_adapter.h) are astronomically
-                 * unlikely for a live, correctly-ranged key and today's
-                 * fixed-size payload (see build_event.h), but the return
-                 * value IS checked here (per build_event.h's own documented
-                 * contract: "out is left entirely untouched" on failure) so
-                 * pipelineBuiltEvent is never left as uninitialized stack
-                 * garbage. */
-                pipelineBuildOk = build_event(&pipelineCapture, sPipelineEventPrivkey, &pipelineBuiltEvent);
-                if (!pipelineBuildOk) {
-                    bzero(&pipelineBuiltEvent, sizeof(pipelineBuiltEvent));
-                } else {
-                    /* Hand off to qr_display's park-time consumer
-                     * (sub-issue #33): the exit course-complete site calls
-                     * pipeline_take_pending_star_event() once the exit
-                     * animation parks, several frames from now. */
-                    sPipelinePendingEvent = pipelineBuiltEvent;
-                    sPipelinePendingValid = TRUE;
-                }
-            }
+             * every one of its callers (mario_actions_cutscene.c) remain
+             * completely unaware of which flow's cover frame filled the
+             * hand-off. */
+            sPipelineCapturedStar = pipelineCapture;
+            star_event_scheduler_capture(&sPipelineScheduler);
         }
 
         // Sandbox seam F: star-collection recording is gated off, so the single
