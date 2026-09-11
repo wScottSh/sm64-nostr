@@ -69,6 +69,60 @@ static pipeline_u8 sQrFrames[PIPELINE_BUILT_FRAME_COUNT][PIPELINE_BUILT_QR_BITMA
 static pipeline_u32 sFrameCount;
 static pipeline_u32 sTick;
 
+/*
+ * VI anti-aliasing workaround (issue #89). ADR-0008.
+ *
+ * The star-capture overlay is a direct CPU framebuffer blit (ADR-0004): it
+ * writes only the 16-bit RGBA5551 COLOR of each pixel. It cannot write the
+ * pixel's full 3-bit VI coverage -- the low two coverage bits live in the
+ * RDP-only "hidden" plane of RDRAM (the CPU reaches only the color LSB) --
+ * so every overlay pixel keeps whatever coverage the RDP left there when it
+ * rendered the 3D scene into this buffer a frame ago.
+ *
+ * The game runs the VI in an anti-aliased/resample mode (OS_VI_*_LAN1,
+ * main.c thread1_idle). That mode's display filter READS coverage: at
+ * pixels the RDP marked partial-coverage -- 3D silhouette edges, e.g. the
+ * top line of a door or the rim of Mario's hat -- the VI blends our overlay
+ * color with its neighbours (and the divot filter takes a median, so only
+ * the extreme, darkest/brightest edge texel survives). The result is thin
+ * slivers of the scene behind bleeding IN FRONT of the QR and its text.
+ *
+ * This is exactly why the in-game HUD and dialog boxes never show it: the
+ * RDP draws THEM, writing full coverage (hidden bits included) so the VI
+ * treats them as opaque. A CPU blit structurally cannot reproduce that.
+ *
+ * So, for the lifetime of the overlay only, we drop the VI to the matching
+ * point-sampled mode (OS_VI_*_LPN1), which ignores coverage and displays the
+ * framebuffer 1:1 -- no neighbour blend, no divot, no resample. The QR and
+ * text become pixel-exact (which also scans better); the only cost is the
+ * paused background losing AA while the code is up. Restored on dismiss.
+ *
+ * The AA vs point-sampled table indices are picked per TV type exactly the
+ * way main.c picks LAN1 (osTvType == TV_TYPE_NTSC ? NTSC : PAL); MPAL falls
+ * through to PAL there, so it does here too. osViSetMode reinstates the mode
+ * table's own feature bits, so we re-apply the two special features
+ * thread1_idle sets globally, to avoid silently changing dither/gamma for
+ * the rest of the game when we toggle back.
+ */
+static int qr_vi_mode_index(int antialiased) {
+#if defined(VERSION_US) || defined(VERSION_SH) || defined(VERSION_CN)
+    if (osTvType == TV_TYPE_NTSC) {
+        return antialiased ? OS_VI_NTSC_LAN1 : OS_VI_NTSC_LPN1;
+    }
+    return antialiased ? OS_VI_PAL_LAN1 : OS_VI_PAL_LPN1;
+#elif defined(VERSION_JP)
+    return antialiased ? OS_VI_NTSC_LAN1 : OS_VI_NTSC_LPN1;
+#else /* VERSION_EU */
+    return antialiased ? OS_VI_PAL_LAN1 : OS_VI_PAL_LPN1;
+#endif
+}
+
+static void qr_vi_set_antialiasing(int antialiased) {
+    osViSetMode(&osViModeTable[qr_vi_mode_index(antialiased)]);
+    osViSetSpecialFeatures(OS_VI_DITHER_FILTER_ON);
+    osViSetSpecialFeatures(OS_VI_GAMMA_OFF);
+}
+
 int qr_display_n64_present(const BuiltEvent *event) {
     pipeline_u32 i, j;
 
@@ -113,6 +167,13 @@ int qr_display_n64_present(const BuiltEvent *event) {
         }
     }
     sTick = 0u;
+
+    /* Overlay is now committed and about to be shown: drop the VI out of its
+     * anti-aliased mode so its coverage-reading filter can't bleed the 3D
+     * scene's edges through our CPU-blitted QR/text (issue #89, see
+     * qr_vi_set_antialiasing's own comment). Paired with the restore in
+     * qr_display_n64_step()'s dismiss branch. */
+    qr_vi_set_antialiasing(0);
     return 1;
 }
 
@@ -143,6 +204,11 @@ int qr_display_n64_step(void) {
         }
         sFrameCount = 0u;
         sTick = 0u;
+
+        /* Overlay dismissed: restore the game's normal anti-aliased VI mode
+         * (issue #89). Symmetric with the point-sampled switch in
+         * qr_display_n64_present(). */
+        qr_vi_set_antialiasing(1);
     }
 
     return dismissed;
