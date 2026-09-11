@@ -42,8 +42,9 @@
  * COMPILE time, not just "the ROM silently never grabs a star", is the
  * loud-not-silent failure this pipeline's own conventions call for. The
  * same discipline applies to the baked event name (spec #109, sub-issue
- * #111; cap raised 15->20, spec #91 sub-issue #126): gen_event_profile.py's
- * own EVENT_NAME_MAX_LEN cap (20) already keeps PIPELINE_EVENT_NAME_LEN
+ * #111; cap raised 15->20, spec #91 sub-issue #126; SHRUNK BACK 20->17,
+ * spec #90 sub-issue #139, which SUPERSEDES #126): gen_event_profile.py's
+ * own EVENT_NAME_MAX_LEN cap (17) already keeps PIPELINE_EVENT_NAME_LEN
  * within PIPELINE_PACK_MAX_NAME_LEN, but this compile-time check catches a
  * future drift between the two loud, not silent. Both caps are
  * independent, per-field budgets of the WIRE pack

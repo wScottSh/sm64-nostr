@@ -76,7 +76,7 @@ panel that prints the ROM's `npub`/`nsec`. From the repo root:
 
 Press Enter to mint a fresh ephemeral per-event key, or paste a 64-char hex
 secret to reuse a prior event's. `-EventName <name>` is REQUIRED (A-Z, 0-9,
-space only, 20 chars max) — an event ROM cannot be built without one; the
+space only, 17 chars max) — an event ROM cannot be built without one; the
 wizard prompts for it if omitted, unless `-Yes` is also given, in which case
 a missing `-EventName` fails the build outright rather than prompting.
 Other flags: `-PrivKey <hex>`, `-Clean`, `-RebuildImage`, `-Yes`

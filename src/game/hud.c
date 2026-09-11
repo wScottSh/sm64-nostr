@@ -35,9 +35,16 @@ struct PowerMeterHUD {
 // When the HUD is rendered this value is 8, full health.
 static s16 sPowerMeterStoredHealth;
 
+// x = 54: center-anchor for this 64px-wide quad, re-anchored from the
+// vanilla 140 to relocate the power meter into the top-left slot the lives
+// counter vacated (spec #90 sub-issue #141). Left edge 54 - 32 = 22 matches
+// the former lives head-glyph's left edge; right edge 54 + 32 = 86 stays
+// clear of the castle/hub event name (capped at 17 chars by spec #90
+// sub-issue #139 to guarantee this). y = 166 is left untouched: the
+// rise (166->200) and hide animations below are entirely y-driven.
 static struct PowerMeterHUD sPowerMeterHUD = {
     POWER_METER_HIDDEN,
-    140,
+    54,
     166,
     1.0,
 };
@@ -268,6 +275,19 @@ void render_hud_mario_lives(void) {
 }
 
 /**
+ * Cosmetic HUD-hide gate (spec #90, sub-issue #140) -- NOT a lettered
+ * sandbox seam, just an always-FALSE predicate guarding the single
+ * render_hud_mario_lives() call site below. Lives no longer matter (seam G,
+ * save_file_lives_are_consumed()), so the counter is hidden too, vacating
+ * the top-left slot. Force-off, not delete: HUD_DISPLAY_FLAG_LIVES
+ * (level_update.h) and render_hud_mario_lives() both stay in the tree,
+ * unreached while this returns FALSE.
+ */
+static s32 hud_lives_counter_is_shown(void) {
+    return FALSE;
+}
+
+/**
  * Renders the top-right HUD corner, which the vanilla star counter used to
  * occupy (spec #75: retire the star counter, repurpose the corner). Mode is
  * decided by one predicate: castle/hub iff gCurrCourseNum == COURSE_NONE
@@ -303,8 +323,11 @@ void render_hud_mario_lives(void) {
  * GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(78), 'X' @ +16, count @ the star
  * counter's own count offset (RECT_FROM_RIGHT_EDGE(78 - 16) + 14; the +14
  * matches the star counter's showX==1 case, since the coin counter always
- * shows its 'X'). No collision with lives (left) or the power meter
- * (bottom-right).
+ * shows its 'X'). No collision with the power meter, now relocated to the
+ * top-left corner the lives counter vacated (spec #90 sub-issue #141:
+ * sPowerMeterHUD.x = 54, right edge x86 -- clears this corner's own
+ * leftmost glyph at absolute x92 by 6px, per spec #90 sub-issue #139's
+ * event-name length cap).
  *
  * The coin counter's old center spot (x168) is repurposed for a red-coin
  * readout: marker glyph @ x168, bare count @ x186 (no "/8" -- an explicit
@@ -475,7 +498,9 @@ void render_hud(void) {
             render_hud_cannon_reticle();
         }
 
-        if (hudDisplayFlags & HUD_DISPLAY_FLAG_LIVES) {
+        // Cosmetic HUD-hide (spec #90, sub-issue #140): hud_lives_counter_is_shown()
+        // always returns FALSE, so render_hud_mario_lives() is unreached.
+        if ((hudDisplayFlags & HUD_DISPLAY_FLAG_LIVES) && hud_lives_counter_is_shown()) {
             render_hud_mario_lives();
         }
 

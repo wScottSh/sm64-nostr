@@ -117,6 +117,8 @@
 # (below) -- ADR-0006's multi-frame transport means there is no combined
 # single-QR-frame ceiling to re-check; the +5 B just yields a (possibly)
 # larger PIPELINE_BUILT_FRAME_COUNT, still whatever build_event.c computes.
+# Spec #90 sub-issue #139 SHRINKS this cap back 20->17 chars, SUPERSEDING
+# #126 (the same three sites move together again, now down by 3 B).
 #
 # Spec #109 sub-issue #111 promotes the event name to a signed on-wire tag,
 # packed onto the wire alongside the per-game tag. Prior to ADR-0006's
@@ -139,9 +141,10 @@
 # Spec #115 sub-issue #117 adds a SECOND, separate binary (WORSTCASE_BIN,
 # worst_case_main.c) built against its own generated event_profile.h, baked
 # with format v3's actual worst-case field widths (WORSTCASE_TAG, 10 B;
-# WORSTCASE_EVENT_NAME, 20 B as of spec #91 sub-issue #126) instead of this
-# file's own small "sm64"/"TEST" fixture -- see worst_case_main.c's own
-# header comment for why this has to be a separate binary
+# WORSTCASE_EVENT_NAME, 17 B as of spec #90 sub-issue #139, superseding
+# #126's 20 B) instead of this file's own small "sm64"/"TEST" fixture --
+# see worst_case_main.c's own header comment for why this has to be a
+# separate binary
 # (PIPELINE_BUILT_PAYLOAD_SIZE/_FRAME_COUNT are
 # fixed compile-time constants per binary, derived from whichever ONE
 # event_profile.h it links) and why this build existing and compiling at
@@ -210,14 +213,15 @@ SECP256K1_BAKED_H_IN   := ../../include/secp256k1_baked.h.in
 SECP256K1_BAKED_H      := $(INC_DIR)/secp256k1_baked.h
 
 # Worst-case tag+name fixture (spec #115, sub-issue #117; NAME cap raised
-# 15->20, spec #91 sub-issue #126): format v3's own actual per-field maxima
+# 15->20, spec #91 sub-issue #126; SHRUNK BACK 20->17, spec #90 sub-issue
+# #139, which SUPERSEDES #126): format v3's own actual per-field maxima
 # (format_descriptor.json's TAG.max_size == 10,
-# gen_event_profile.py's EVENT_NAME_MAX_LEN == 20) -- the exact combination
+# gen_event_profile.py's EVENT_NAME_MAX_LEN == 17) -- the exact combination
 # that used to overflow the now-removed single-QR-frame total-payload
 # ceiling. A SEPARATE build dir/binary from the main pipeline_test above
 # (see worst_case_main.c's own header comment for why).
 WORSTCASE_TAG                  := 0123456789
-WORSTCASE_EVENT_NAME           := ABCDEFGHIJKLMNOPQRST
+WORSTCASE_EVENT_NAME           := ABCDEFGHIJKLMNOPQ
 WORSTCASE_BUILD_DIR            := build-worstcase
 WORSTCASE_INC_DIR              := $(WORSTCASE_BUILD_DIR)/include
 WORSTCASE_EVENT_PROFILE_H      := $(WORSTCASE_INC_DIR)/event_profile.h

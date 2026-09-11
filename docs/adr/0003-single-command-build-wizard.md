@@ -57,6 +57,7 @@ minting-and-overwriting freely is the intended paradigm, not a hazard.
   truncate) and bakes it into `PIPELINE_EVENT_NAME` — display-only, never the
   signed wire. (This ADR's numbers/claims are a point-in-time historical
   record: the cap is later raised to 20 chars by spec #91 sub-issue #126,
-  and the value stops being display-only under format v3, spec #109
-  sub-issue #111 -- see `CONTEXT.md` and `docs/format-v3-spec.md` for the
-  current state.)
+  then shrunk back to 17 chars by spec #90 sub-issue #139 -- which
+  supersedes #126 -- and the value stops being display-only under format
+  v3, spec #109 sub-issue #111 -- see `CONTEXT.md` and
+  `docs/format-v3-spec.md` for the current state.)

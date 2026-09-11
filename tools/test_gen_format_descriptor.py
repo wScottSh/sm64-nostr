@@ -208,7 +208,7 @@ class RealFormatDescriptorJsonTests(unittest.TestCase):
         self.assertIn("PIPELINE_FMT_OFF_NAME_LEN(tagLen)", header)
         self.assertIn("PIPELINE_FMT_OFF_NAME(tagLen)", header)
         self.assertIn("PIPELINE_FMT_OFF_SIG(tagLen, nameLen)", header)
-        self.assertIn("#define PIPELINE_FMT_MAX_SIZE_NAME 20u", header)
+        self.assertIn("#define PIPELINE_FMT_MAX_SIZE_NAME 17u", header)
 
     def test_real_descriptor_json_declares_no_star_coord(self):
         # ADR-0007 / docs/format-v3-spec.md explicitly reject star_coord;
