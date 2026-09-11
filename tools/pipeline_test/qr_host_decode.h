@@ -55,4 +55,19 @@ int qr_host_decode(const unsigned char *qrcode, unsigned char *out, int outCap, 
  */
 int qr_host_decode_alphanumeric(const unsigned char *qrcode, unsigned char *outText, int outCap, int *outTextLen);
 
+/*
+ * qr_host_decode_mixed: the TWO-SEGMENT counterpart of
+ * qr_host_decode_alphanumeric() above (spec #122, sub-issue #123), for QR
+ * bitmaps produced by pipeline_qr_encode_two_segment() (qr_adapter.h) --
+ * #101's ratified `<BASE>#<SEQ>/<TOTAL>/<PAYLOAD>` frames, where the
+ * verbatim `<BASE>#` prefix rides a BYTE segment and the fragment tail
+ * rides ALPHANUMERIC. Decodes both segments in order and concatenates them
+ * into outText[0 : *outTextLen] -- i.e. the exact full URL text
+ * pipeline_url_wrap() produced -- NOT NUL-terminated. outCap is outText's
+ * capacity; if the decoded text would not fit, returns 0 without writing
+ * to outText fully. Returns nonzero (true) and sets *outTextLen on
+ * success.
+ */
+int qr_host_decode_mixed(const unsigned char *qrcode, unsigned char *outText, int outCap, int *outTextLen);
+
 #endif /* QR_HOST_DECODE_H */

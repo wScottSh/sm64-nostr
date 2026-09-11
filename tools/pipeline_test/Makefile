@@ -178,15 +178,20 @@ TEST_PRIVKEY_HEX  := 00000000000000000000000000000000000000000000000000000000000
 TEST_PRIVKEY_FILE := $(BUILD_DIR)/test_privkey.hex
 TEST_CREATED_AT   := 1700000000
 
-# ADR-0006 airgap transport base URL (spec #115, sub-issue #116): the same
-# dev-default host the root Makefile's PIPELINE_URL_BASE defaults to, so
-# this host tool's baked BuiltEvent (PIPELINE_BUILT_PAYLOAD_SIZE 121 B, "sm64"
-# tag + "TEST" name) exercises a realistic multi-frame split (N=2) at the
-# real build_event() seam -- see main.c's test_build_event_multiframe_
+# Airgap transport base URL, per #101's ratified <BASE>#<SEQ>/<TOTAL>/<PAYLOAD>
+# template (spec #115 sub-issue #116, realigned by spec #122 sub-issue
+# #123): deliberately MIXED-case (unlike the root Makefile's own
+# all-lowercase dev default) so this host tool's own KAT/round-trip tests
+# directly exercise the verbatim-base contract -- a build whose base
+# contains uppercase AND lowercase bytes must round-trip with neither
+# folded, proving build_event()/url.h never mangle case. This host tool's
+# baked BuiltEvent (PIPELINE_BUILT_PAYLOAD_SIZE 121 B, "sm64" tag + "TEST"
+# name) still exercises a realistic multi-frame split (N=2) at the real
+# build_event() seam -- see main.c's test_build_event_multiframe_
 # round_trip() for why: ADR-0006 itself observes the honest v3 floor
 # already overflows one frame once URL-wrapped under any realistic domain,
 # so this build's own N is expected to be >1, not a hand-picked worst case.
-TEST_URL_BASE     := SM64NOSTR.PAGES.DEV
+TEST_URL_BASE     := https://Sm64Nostr.Pages.Dev
 
 FORMAT_DESCRIPTOR_JSON := $(PIPELINE_DIR)/format_descriptor.json
 FORMAT_DESCRIPTOR_H    := $(INC_DIR)/format_descriptor.h
@@ -223,12 +228,13 @@ WORSTCASE_BIN := pipeline_test_worstcase
 # Spec #115 sub-issue #119 (the reader page) adds gen_reader_fixture.c and
 # this target: a host-only program (never a ROM path, mirrors
 # tools/reference_event_id.js/fixtures/gen_live_vectors.mjs) that dumps a
-# real build_event() call's actual emitted QR frames (URL text, structurally
-# decoded via qr_host_decode_alphanumeric -- the same decoder the multiframe
-# round-trip test above uses) to reader/test/fixtures/multiframe_fixture.json,
+# real build_event() call's actual emitted QR frames (full <BASE>#<SEQ>/<TOTAL>/
+# <PAYLOAD> URL text, structurally decoded via qr_host_decode_mixed -- the
+# same two-segment decoder the multiframe round-trip test above uses) to
+# reader/test/fixtures/multiframe_fixture.json,
 # the reader page's own reassembly/decode/id-recompute test fixture. Reuses
 # this Makefile's own $(FORMAT_DESCRIPTOR_H)/$(EVENT_PROFILE_H) (same
-# privkey=3/tag "sm64"/name "TEST"/url-base SM64NOSTR.PAGES.DEV baked profile
+# privkey=3/tag "sm64"/name "TEST"/url-base TEST_URL_BASE baked profile
 # main.c's test_build_event_end_to_end() already pins its own oracle values
 # against) so the fixture and that test describe the identical build_event()
 # call. gen_reader_fixture.c self-checks (recomputes id from unpacked wire

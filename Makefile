@@ -282,17 +282,17 @@ PIPELINE_PRIVKEY_FILE         := $(PIPELINE_KEYS_DIR)/event_privkey.hex
 PIPELINE_REGISTRY_FILE        := $(PIPELINE_KEYS_DIR)/registry.md
 PIPELINE_KEY_LABEL            ?= dev-event
 
-# ADR-0006's airgap transport base URL (spec #115, sub-issue #116): a
-# build-time constant every emitted QR frame's URL wraps a fragment around
-# (mirrors PIPELINE_EVENT_NAME's own provisioning immediately below, but
-# with a dev default rather than a fail-closed check -- a build with no
-# real short domain purchased yet (#101) still produces a scannable,
-# structurally valid URL, just one pointed at this placeholder host until
-# the real domain is swapped in with `make PIPELINE_URL_BASE="..."`, no
-# pipeline code change needed). Validated and normalized by
-# gen_event_profile.py's normalize_url_base() (uppercase-folded, restricted
-# to A-Z/0-9/./-).
-PIPELINE_URL_BASE             ?= SM64NOSTR.PAGES.DEV
+# Airgap transport base URL, per #101's ratified <BASE>#<SEQ>/<TOTAL>/<PAYLOAD>
+# template (spec #115 sub-issue #116, realigned by spec #122 sub-issue
+# #123): a build-time constant every emitted QR frame's URL wraps a
+# fragment around (mirrors PIPELINE_EVENT_NAME's own provisioning
+# immediately below, but with a dev default rather than a fail-closed check
+# -- a build with no real short domain purchased yet (#101) still produces
+# a scannable, structurally valid URL, just one pointed at this placeholder
+# host until the real domain is swapped in with `make PIPELINE_URL_BASE="..."`,
+# no pipeline code change needed). Validated by gen_event_profile.py's
+# normalize_url_base() and emitted VERBATIM -- case is never folded.
+PIPELINE_URL_BASE             ?= https://sm64nostr.pages.dev
 PIPELINE_EVENT_PROFILE_H_IN   := include/event_profile.h.in
 PIPELINE_EVENT_PROFILE_H      := $(BUILD_DIR)/include/event_profile.h
 PIPELINE_EVENT_MANIFEST       := $(BUILD_DIR)/include/event_profile.manifest.json
@@ -627,8 +627,9 @@ $(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
 # base32.o/fragment.o/url.o (spec #115, sub-issue #116) are ADR-0006's
 # airgap transport envelope -- the base32 codec, the fragmenter, and the
 # URL wrapper build_event.c's new frame-emission loop calls, sitting behind
-# qr_adapter.c's pipeline_qr_encode_alphanumeric() exactly like pack_
-# adapter.c/qr_adapter.c already sit in front of the C99 ports above. Each
+# qr_adapter.c's pipeline_qr_encode_two_segment() (spec #122, sub-issue
+# #123) exactly like pack_adapter.c/qr_adapter.c already sit in front of
+# the C99 ports above. Each
 # is hand-written C89 (no block-scoped for-loop declarations, no _Bool,
 # no <stdint.h>/<string.h>) and needs no C99, so all three stay in this
 # "pure" list rather than the PIPELINE_C99_PORT_O carve-out.

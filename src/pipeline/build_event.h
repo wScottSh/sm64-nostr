@@ -111,9 +111,12 @@ typedef struct StarCapture {
  * #116): build_event() no longer QR-encodes the packed payload's raw bytes
  * directly. It base32-encodes them (base32.h), splits the base32 text into
  * N URL-wrapped fragments (fragment.h/url.h), and QR-encodes each fragment
- * as an ALPHANUMERIC segment (qr_adapter.h's pipeline_qr_encode_alphanumeric()) --
- * a reversible ENVELOPE around the exact same packed_payload bytes below,
- * never a new format. Every size in this section is a fixed compile-time
+ * as a TWO-SEGMENT QR (qr_adapter.h's pipeline_qr_encode_two_segment() --
+ * a BYTE segment for the verbatim `<BASE>#` prefix, an ALPHANUMERIC segment
+ * for the fragment tail; spec #122, sub-issue #123's realignment to #101's
+ * ratified URL schema) -- a reversible ENVELOPE around the exact same
+ * packed_payload bytes below, never a new format. Every size in this section
+ * is a fixed compile-time
  * constant for THIS build (fixed tag/name lengths, fixed PIPELINE_URL_BASE),
  * exactly like PIPELINE_BUILT_PAYLOAD_SIZE above -- see that macro's own
  * comment for why a decoder handling an ARBITRARY incoming build's frames
@@ -137,46 +140,106 @@ typedef struct StarCapture {
 #define PIPELINE_BUILT_BASE32_LEN (((pipeline_u32)(PIPELINE_BUILT_PAYLOAD_SIZE) * 8u + 4u) / 5u)
 
 /*
- * Usable ALPHANUMERIC-mode character capacity of a version 7, ECC MEDIUM
- * QR Code: duplicates qr_adapter.h's PIPELINE_QR_ALNUM_MAX_CHARS (178, see
- * that header's own derivation comment) for the identical circular-include
- * reason PIPELINE_BUILT_QR_VERSION/PIPELINE_BUILT_QR_BITMAP_SIZE above
- * duplicate qr_adapter.h's other constants instead of #including it (qr_
- * adapter.h itself #includes this file). build_event.c's own compile-time
- * check (pipeline_build_event_qr_alnum_max_check) keeps the two from
+ * Data-codeword capacity of a version 7, ECC MEDIUM QR Code: duplicates
+ * qr_adapter.h's PIPELINE_QR_DATA_CODEWORDS (124, see that header's own
+ * derivation comment) for the identical circular-include reason
+ * PIPELINE_BUILT_QR_VERSION/PIPELINE_BUILT_QR_BITMAP_SIZE above duplicate
+ * qr_adapter.h's other constants instead of #including it (qr_adapter.h
+ * itself #includes this file). build_event.c's own compile-time check
+ * (pipeline_build_event_qr_data_codewords_check) keeps the two from
  * silently drifting.
+ *
+ * Needed here, rather than the older single-segment PIPELINE_QR_ALNUM_MAX_CHARS
+ * ceiling (spec #122, sub-issue #123 -- #101's ratified
+ * `<BASE>#<SEQ>/<TOTAL>/<PAYLOAD>` template): every frame's URL is now
+ * QR-encoded as TWO segments (qr_adapter.h's pipeline_qr_encode_two_segment()) --
+ * a BYTE segment for the verbatim `<BASE>#` prefix (which can legally
+ * contain lowercase letters and other bytes outside the QR alphanumeric
+ * charset) and an ALPHANUMERIC segment for the `/`-delimited
+ * SEQ/TOTAL/PAYLOAD fragment tail -- so the per-frame character budget can
+ * no longer be expressed purely in ALPHANUMERIC-mode characters; it must
+ * instead be derived from the raw data-bit budget the two segments share.
  */
-#define PIPELINE_BUILT_QR_ALNUM_MAX_CHARS 178
+#define PIPELINE_BUILT_QR_DATA_CODEWORDS 124
+
+/* Fixed per-segment bit overhead (4-bit mode indicator + the mode's own
+ * character-count field width) at versions 1-9 (this build is pinned to
+ * version 7, PIPELINE_BUILT_QR_VERSION above): BYTE mode's 8-bit count,
+ * ALPHANUMERIC mode's 9-bit count -- the QR spec's own fixed header widths
+ * (qrcodegen.c's numCharCountBits()/alphanumericCharCountBits()), not a
+ * value this build derives. Hand-duplicated constants, like every other
+ * value in this section -- build_event.c's own compile-time checks
+ * (pipeline_build_event_byte_seg_header_bits_check/
+ * pipeline_build_event_alnum_seg_header_bits_check) cross-check both
+ * against qr_adapter.h's own independently-derived single-segment
+ * ceilings (PIPELINE_QR_MAX_PAYLOAD_BYTES/PIPELINE_QR_ALNUM_MAX_CHARS) so
+ * neither can silently drift. */
+#define PIPELINE_BUILT_BYTE_SEG_HEADER_BITS 12u
+#define PIPELINE_BUILT_ALNUM_SEG_HEADER_BITS 13u
 
 /*
  * The build-time base URL every frame's URL wraps a fragment around (spec
- * #115, sub-issue #116; mirrors PIPELINE_EVENT_NAME's own build-time
+ * #115 sub-issue #116, realigned to #101's ratified schema by spec #122
+ * sub-issue #123; mirrors PIPELINE_EVENT_NAME's own build-time
  * provisioning, event_profile.h.in's own comment): baked into the
  * generated event_profile.h by gen_event_profile.py's --url-base
  * (Makefile's PIPELINE_URL_BASE, defaulted -- unlike PIPELINE_EVENT_NAME,
  * PIPELINE_URL_BASE is never fail-closed; a dev placeholder host is always
- * a legal build). Deliberately NOT given a second, hand-duplicated
- * #ifndef fallback here: this header already #includes event_profile.h
- * above, so PIPELINE_URL_BASE/PIPELINE_URL_BASE_LEN are always defined by
- * the time this line is reached (the generator template always emits
- * them, unconditionally, exactly like PIPELINE_EVENT_NAME_LEN) -- a
- * fallback would silently paper over a stale/hand-edited generated
+ * a legal build), and emitted VERBATIM -- never uppercased or otherwise
+ * mangled (url.h's pipeline_url_wrap()). Deliberately NOT given a second,
+ * hand-duplicated #ifndef fallback here: this header already #includes
+ * event_profile.h above, so PIPELINE_URL_BASE/PIPELINE_URL_BASE_LEN are
+ * always defined by the time this line is reached (the generator template
+ * always emits them, unconditionally, exactly like PIPELINE_EVENT_NAME_LEN) --
+ * a fallback would silently paper over a stale/hand-edited generated
  * header instead of failing loudly, the opposite of this pipeline's own
  * "loud, not silent" convention.
  */
 
-/* The fixed per-fragment character budget (header + chunk) once the fixed
- * URL prefix -- scheme + this build's own PIPELINE_URL_BASE + the path
- * separator -- is subtracted from the QR's raw alphanumeric capacity, and
- * the chunk-only budget once fragment.h's fixed header width is subtracted
- * from THAT. build_event.c's own compile-time check
+/* The BYTE segment every frame carries: this build's own verbatim
+ * PIPELINE_URL_BASE plus the literal PIPELINE_URL_FRAGMENT_SEP ("#")
+ * fragment join -- spec #122's ratified template. */
+#define PIPELINE_BUILT_URL_BYTE_SEG_LEN \
+    ((pipeline_u32)PIPELINE_URL_BASE_LEN + (pipeline_u32)PIPELINE_URL_FRAGMENT_SEP_LEN)
+
+/* The ALPHANUMERIC-mode raw bit budget left for the SEQ/TOTAL/PAYLOAD
+ * fragment tail once both segments' fixed header bits and the BYTE
+ * segment's own data bits (8 bits/byte) are subtracted from the QR's total
+ * raw data-bit capacity. Signed `long` arithmetic throughout (mirroring
+ * this section's own prior discipline) so an over-long PIPELINE_URL_BASE
+ * can never wrap an unsigned subtraction into a huge positive value and
+ * masquerade as a valid budget. */
+#define PIPELINE_BUILT_ALNUM_BUDGET_BITS \
+    ((long)(PIPELINE_BUILT_QR_DATA_CODEWORDS) * 8L \
+     - (long)PIPELINE_BUILT_BYTE_SEG_HEADER_BITS \
+     - 8L * (long)PIPELINE_BUILT_URL_BYTE_SEG_LEN \
+     - (long)PIPELINE_BUILT_ALNUM_SEG_HEADER_BITS)
+
+/* ALPHANUMERIC mode packs 2 characters per 11 bits (a lone trailing
+ * character costs 6 bits) -- the same packing qrcodegen.c's
+ * qrcodegen_encodeAlphanumeric()/qrcodegen_encodeTwoSegments() use.
+ * Converts a raw bit budget into the equivalent maximum character count. */
+#define PIPELINE_ALNUM_CHARS_FOR_BITS(bits) \
+    ((pipeline_u32)(2L * ((bits) / 11L) + (((bits) % 11L) >= 6L ? 1L : 0L)))
+
+/* The exact bits needed to carry PIPELINE_FRAGMENT_HEADER_LEN + 1 alnum
+ * characters (the header plus at least one base32 payload character) --
+ * computed with the same odd/even packing formula above, never a bare
+ * magic-number bit count, so this stays self-consistent with
+ * PIPELINE_FRAGMENT_HEADER_LEN's own value if that ever changes. */
+#define PIPELINE_BUILT_MIN_ALNUM_BUDGET_BITS \
+    (11L * (((long)PIPELINE_FRAGMENT_HEADER_LEN + 1L) / 2L) + \
+     ((((long)PIPELINE_FRAGMENT_HEADER_LEN + 1L) % 2L) != 0L ? 6L : 0L))
+
+/* This build's own fixed per-fragment character budget (header + chunk),
+ * derived from the shared two-segment bit budget above (spec #122; see
+ * this section's own comment for why this is no longer a pure-ALPHANUMERIC
+ * character ceiling). build_event.c's own compile-time check
  * (pipeline_build_event_fragment_budget_check) fails loudly, not silently,
  * if a longer PIPELINE_URL_BASE ever leaves no room for even one base32
  * character per fragment. */
-#define PIPELINE_BUILT_URL_PREFIX_LEN \
-    (PIPELINE_URL_SCHEME_LEN + (pipeline_u32)PIPELINE_URL_BASE_LEN + PIPELINE_URL_PATH_SEP_LEN)
 #define PIPELINE_BUILT_FRAGMENT_BUDGET \
-    ((pipeline_u32)PIPELINE_BUILT_QR_ALNUM_MAX_CHARS - PIPELINE_BUILT_URL_PREFIX_LEN)
+    PIPELINE_ALNUM_CHARS_FOR_BITS(PIPELINE_BUILT_ALNUM_BUDGET_BITS)
 #define PIPELINE_BUILT_FRAGMENT_CHUNK_LEN \
     (PIPELINE_BUILT_FRAGMENT_BUDGET - (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN)
 
@@ -190,11 +253,13 @@ typedef struct StarCapture {
     ((((pipeline_u32)PIPELINE_BUILT_BASE32_LEN) + (PIPELINE_BUILT_FRAGMENT_CHUNK_LEN) - 1u) / \
      (PIPELINE_BUILT_FRAGMENT_CHUNK_LEN))
 
-/* Every frame is QR-encoded from a full URL (scheme + base URL + path sep +
- * fragment), which is exactly the alphanumeric budget the fragment sizing
- * above was derived from -- so the QR's own ALNUM_MAX_CHARS ceiling is also
- * this build's per-frame URL length ceiling. */
-#define PIPELINE_BUILT_URL_MAX_LEN ((pipeline_u32)PIPELINE_BUILT_QR_ALNUM_MAX_CHARS)
+/* Every frame's full URL text is exactly the BYTE segment
+ * (PIPELINE_BUILT_URL_BYTE_SEG_LEN, "<BASE>#") followed by the ALPHANUMERIC
+ * fragment (up to PIPELINE_BUILT_FRAGMENT_BUDGET chars) -- the two pieces
+ * the per-frame budget above was derived from, so their sum is this
+ * build's exact per-frame URL length ceiling. */
+#define PIPELINE_BUILT_URL_MAX_LEN \
+    ((pipeline_u32)PIPELINE_BUILT_URL_BYTE_SEG_LEN + (pipeline_u32)PIPELINE_BUILT_FRAGMENT_BUDGET)
 
 /*
  * The pipeline's real output (spec #24, sub-issue #30; format v2 self-

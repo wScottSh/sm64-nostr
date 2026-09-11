@@ -15,19 +15,22 @@
  * (pipeline_pack(), pipeline_qr_encode()). A payload whose base32 text fits
  * one frame's budget is the N=1 case (a single static QR); when it does
  * not, N>1 fragments are produced, each carrying a fragment header (its
- * own 0-based index and the total frame count, both in the QR alphanumeric
- * charset -- see transport_contract.h) ahead of its slice of the base32
- * text. Fragments reassemble in ANY order (each carries its own index);
- * pipeline_fragment_parse_header() is the read side of that same header,
- * used by this build's own host round-trip test and, independently
- * ported, by ticket #119's reader page.
+ * own 0-based index and the total frame count -- `/`-delimited
+ * (PIPELINE_URL_FIELD_SEP), per spec #122's ratified <SEQ>/<TOTAL>/<PAYLOAD>
+ * template -- both in the QR alphanumeric charset, see transport_contract.h)
+ * ahead of its slice of the base32 text. Fragments reassemble in ANY order
+ * (each carries its own index); pipeline_fragment_parse_header() is the
+ * read side of that same header, used by this build's own host round-trip
+ * test and, independently ported, by ticket #119/#123's reader page.
  *
  * perFrameBudget here is the TOTAL per-fragment character budget (header +
- * chunk), not the QR's raw alphanumeric capacity -- the caller (build_event.c)
- * is responsible for first subtracting the fixed URL prefix
- * (PIPELINE_URL_SCHEME + the build's own PIPELINE_URL_BASE + the path
- * separator) from the QR's real alphanumeric budget, since every fragment
- * is wrapped in a complete URL before being QR-encoded (url.h).
+ * chunk) riding the QR's ALPHANUMERIC segment -- not the QR's raw
+ * alphanumeric capacity as a whole: the caller (build_event.c) is
+ * responsible for first subtracting the bit cost of the separate BYTE
+ * segment every frame's verbatim `<BASE>#` prefix now rides (spec #122;
+ * qr_adapter.h's pipeline_qr_encode_two_segment()) from the QR's total data
+ * bit budget, since a frame's full URL text is `<BASE>#` + this fragment,
+ * QR-encoded as two segments, never one (url.h).
  */
 
 #include "build_event.h"
@@ -50,9 +53,11 @@ pipeline_u32 pipeline_fragment_count(pipeline_u32 base32Len, pipeline_u32 perFra
  * pipeline_fragment_build: writes fragment number frameIndex (0-based) of
  * frameCount total -- frameCount MUST equal pipeline_fragment_count(base32Len,
  * perFrameBudget), a caller contract this function does not re-derive --
- * into out, as PIPELINE_FRAGMENT_HEADER_LEN header bytes (frameIndex then
- * frameCount, each base36, uppercase) followed by this fragment's slice of
- * base32Text[0 : base32Len] (frameIndex * chunkLen .. capped at base32Len).
+ * into out, as PIPELINE_FRAGMENT_HEADER_LEN header bytes (frameIndex, then
+ * PIPELINE_URL_FIELD_SEP, then frameCount, each base36 uppercase, then
+ * another PIPELINE_URL_FIELD_SEP -- e.g. "00/02/") followed by this
+ * fragment's slice of base32Text[0 : base32Len] (frameIndex * chunkLen ..
+ * capped at base32Len).
  * out must be at least perFrameBudget bytes. Writes *outLen (<=
  * perFrameBudget) on success and returns nonzero (true). Returns 0
  * (false) -- writing nothing -- if perFrameBudget/frameCount/frameIndex
@@ -68,9 +73,10 @@ int pipeline_fragment_build(const pipeline_u8 *base32Text, pipeline_u32 base32Le
  * pipeline_fragment_parse_header: reads fragment[0 : PIPELINE_FRAGMENT_HEADER_LEN]
  * (the header pipeline_fragment_build() wrote) back into *frameIndexOut/
  * *frameCountOut. Returns nonzero (true) on success. Returns 0 (false) --
- * writing nothing -- if fragmentLen is shorter than the header, either
- * field contains a non-base36 byte, the decoded count is 0, or the decoded
- * index is >= the decoded count (a structurally invalid header). The
+ * writing nothing -- if fragmentLen is shorter than the header, either of
+ * the two PIPELINE_URL_FIELD_SEP separator bytes is missing/wrong, either
+ * base36 field contains a non-base36 byte, the decoded count is 0, or the
+ * decoded index is >= the decoded count (a structurally invalid header). The
  * fragment's chunk bytes are fragment[PIPELINE_FRAGMENT_HEADER_LEN :
  * fragmentLen]; this function does not copy them out, since a caller
  * already holds fragment[] and can slice it directly.

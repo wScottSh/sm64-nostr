@@ -95,8 +95,11 @@ int pipeline_fragment_build(const pipeline_u8 *base32Text, pipeline_u32 base32Le
     chunkLen = end - start;
 
     encode_base36_field(frameIndex, (pipeline_u32)PIPELINE_FRAGMENT_INDEX_LEN, out);
+    out[PIPELINE_FRAGMENT_INDEX_LEN] = (pipeline_u8)PIPELINE_URL_FIELD_SEP[0];
     encode_base36_field(frameCount, (pipeline_u32)PIPELINE_FRAGMENT_COUNT_LEN,
-                       out + PIPELINE_FRAGMENT_INDEX_LEN);
+                       out + PIPELINE_FRAGMENT_INDEX_LEN + (pipeline_u32)PIPELINE_URL_FIELD_SEP_LEN);
+    out[(pipeline_u32)PIPELINE_FRAGMENT_INDEX_LEN + (pipeline_u32)PIPELINE_URL_FIELD_SEP_LEN +
+        (pipeline_u32)PIPELINE_FRAGMENT_COUNT_LEN] = (pipeline_u8)PIPELINE_URL_FIELD_SEP[0];
     for (i = 0; i < chunkLen; i++) {
         out[(pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN + i] = base32Text[start + i];
     }
@@ -107,16 +110,24 @@ int pipeline_fragment_build(const pipeline_u8 *base32Text, pipeline_u32 base32Le
 int pipeline_fragment_parse_header(const pipeline_u8 *fragment, pipeline_u32 fragmentLen,
                                     pipeline_u32 *frameIndexOut, pipeline_u32 *frameCountOut)
 {
+    pipeline_u8 sepByte = (pipeline_u8)PIPELINE_URL_FIELD_SEP[0];
+    pipeline_u32 countFieldStart = (pipeline_u32)PIPELINE_FRAGMENT_INDEX_LEN + (pipeline_u32)PIPELINE_URL_FIELD_SEP_LEN;
     pipeline_u32 idx;
     pipeline_u32 cnt;
 
     if (fragmentLen < (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN) {
         return 0;
     }
+    if (fragment[PIPELINE_FRAGMENT_INDEX_LEN] != sepByte) {
+        return 0;
+    }
+    if (fragment[countFieldStart + (pipeline_u32)PIPELINE_FRAGMENT_COUNT_LEN] != sepByte) {
+        return 0;
+    }
     if (!decode_base36_field(fragment, (pipeline_u32)PIPELINE_FRAGMENT_INDEX_LEN, &idx)) {
         return 0;
     }
-    if (!decode_base36_field(fragment + PIPELINE_FRAGMENT_INDEX_LEN,
+    if (!decode_base36_field(fragment + countFieldStart,
                             (pipeline_u32)PIPELINE_FRAGMENT_COUNT_LEN, &cnt)) {
         return 0;
     }

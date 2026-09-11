@@ -181,6 +181,18 @@
  * build_event()-seam keystone round-trip (natural order, any order,
  * missing-fragment-is-incomplete) -- see each test's own header comment.
  *
+ * Spec #122 sub-issue #123 realigns the above to #101's ratified
+ * `<BASE>#<SEQ>/<TOTAL>/<PAYLOAD>` URL schema: every frame is now QR-encoded
+ * as TWO segments (pipeline_qr_encode_two_segment()) -- a BYTE segment for
+ * the verbatim `<BASE>#` prefix and an ALPHANUMERIC segment for the
+ * `/`-delimited fragment tail -- decoded via qr_host_decode_mixed() rather
+ * than qr_host_decode_alphanumeric(). pipeline_url_strip()/stripUrl() are
+ * retired in favor of the host-agnostic pipeline_url_extract_fragment()
+ * (no baseUrl argument, no host comparison at all): see
+ * test_url_wrap_and_extract_fragment() (renamed from
+ * test_url_wrap_and_strip()) for the inverted "rejects a URL for a
+ * different base" contract.
+ *
  * Spec #115 sub-issue #118 adds test_qr_cycle_frame_index()
  * (../../src/game/qr_cycle.h/.c -- the star-capture overlay's frame-
  * cycling PURE core, compiled a second time here exactly like qr_render.c/
@@ -253,25 +265,27 @@ static pipeline_u32 compute_built_event_frame_url(const BuiltEvent *event, pipel
 
 /*
  * reassemble_built_event: the "opened webpage" half of ADR-0006's transport
- * (spec #115, sub-issue #116), exercised at the HOST level for this host
- * tool's own baked BuiltEvent shape (PIPELINE_BUILT_FRAME_COUNT frames,
- * PIPELINE_URL_BASE base URL). For each of useCount frame indices named by
- * frameOrder[] (or natural order 0..useCount-1 if frameOrder is NULL):
- * decodes the QR (qr_host_decode_alphanumeric), strips the known base URL
- * (pipeline_url_strip), parses the fragment header (pipeline_fragment_
+ * (spec #115, sub-issue #116; realigned to #101's ratified, host-agnostic
+ * URL schema by spec #122 sub-issue #123), exercised at the HOST level for
+ * this host tool's own baked BuiltEvent shape (PIPELINE_BUILT_FRAME_COUNT
+ * frames). For each of useCount frame indices named by frameOrder[] (or
+ * natural order 0..useCount-1 if frameOrder is NULL): decodes the two-
+ * segment QR (qr_host_decode_mixed), extracts the fragment with NO base-URL
+ * comparison at all (pipeline_url_extract_fragment -- host-agnostic by
+ * construction), parses the fragment header (pipeline_fragment_
  * parse_header), and copies its chunk into base32Text at the header's own
- * index -- so frames can be fed in ANY order and still land correctly.
- * Returns nonzero (true) and de-base32's the reassembled text into
- * rawOut/rawLenOut ONLY if every index 0..PIPELINE_BUILT_FRAME_COUNT-1 was
- * seen at least once; returns 0 (false) -- writing nothing to rawOut -- if
- * any frame fails to decode/strip/parse, or the set is incomplete (a
- * missing fragment reports incomplete, never a wrong/partial event, per
- * spec #115's own acceptance criterion).
+ * index -- so frames can be fed in ANY order, wrapped around ANY base, and
+ * still land correctly. Returns nonzero (true) and de-base32's the
+ * reassembled text into rawOut/rawLenOut ONLY if every index
+ * 0..PIPELINE_BUILT_FRAME_COUNT-1 was seen at least once; returns 0
+ * (false) -- writing nothing to rawOut -- if any frame fails to
+ * decode/extract/parse, or the set is incomplete (a missing fragment
+ * reports incomplete, never a wrong/partial event, per spec #115's own
+ * acceptance criterion).
  */
 static int reassemble_built_event(const BuiltEvent *event, const int *frameOrder, pipeline_u32 useCount,
                                    pipeline_u8 *rawOut, pipeline_u32 rawCap, pipeline_u32 *rawLenOut)
 {
-    static const pipeline_u8 kUrlBase[] = PIPELINE_URL_BASE;
     pipeline_u8 base32Text[PIPELINE_BUILT_BASE32_LEN];
     int seen[PIPELINE_BUILT_FRAME_COUNT];
     pipeline_u32 seenCount;
@@ -293,13 +307,12 @@ static int reassemble_built_event(const BuiltEvent *event, const int *frameOrder
         if (frameIdx < 0 || frameIdx >= (int)PIPELINE_BUILT_FRAME_COUNT) {
             return 0;
         }
-        if (!qr_host_decode_alphanumeric(event->qr_bitmaps[frameIdx], urlText,
-                                          (int)sizeof(urlText), &urlTextLen)) {
+        if (!qr_host_decode_mixed(event->qr_bitmaps[frameIdx], urlText,
+                                   (int)sizeof(urlText), &urlTextLen)) {
             return 0;
         }
-        if (!pipeline_url_strip((const pipeline_u8 *)urlText, (pipeline_u32)urlTextLen,
-                                 kUrlBase, (pipeline_u32)PIPELINE_URL_BASE_LEN,
-                                 fragment, (pipeline_u32)sizeof(fragment), &fragmentLen)) {
+        if (!pipeline_url_extract_fragment((const pipeline_u8 *)urlText, (pipeline_u32)urlTextLen,
+                                            fragment, (pipeline_u32)sizeof(fragment), &fragmentLen)) {
             return 0;
         }
         if (!pipeline_fragment_parse_header(fragment, fragmentLen, &idx, &cnt)) {
@@ -1004,7 +1017,7 @@ static void test_qr_render_blit_round_trips_through_decode(void)
         }
     }
 
-    decodeOk = qr_host_decode_alphanumeric(reconstructed, decoded, (int) sizeof(decoded), &decodedLen);
+    decodeOk = qr_host_decode_mixed(reconstructed, decoded, (int) sizeof(decoded), &decodedLen);
 
     /* Frame 0 now carries a URL-wrapped fragment (ADR-0006, spec #115
      * sub-issue #116), not raw payload bytes -- recompute the expected
@@ -1196,7 +1209,7 @@ static void test_qr_render_overlay_paint(void) {
                 }
             }
         }
-        decodeOk = qr_host_decode_alphanumeric(reconstructed, decoded, (int) sizeof(decoded), &decodedLen);
+        decodeOk = qr_host_decode_mixed(reconstructed, decoded, (int) sizeof(decoded), &decodedLen);
         expectedUrlLen = compute_built_event_frame_url(&event, 0u, expectedUrl);
 
         check(decodeOk != 0 && (pipeline_u32)decodedLen == expectedUrlLen
@@ -1525,8 +1538,13 @@ static void test_qr_alphanumeric_round_trip_and_rejections(void)
     int decodedLen = -1;
     int encodeOk, decodeOk;
 
-    /* A realistic URL-shaped string (odd character count) round-trips
-     * exactly. */
+    /* A generic alphanumeric-charset string (odd character count) round-trips
+     * exactly. This exercises pipeline_qr_encode_alphanumeric() as the
+     * still-real, independently useful single-segment seam it remains
+     * (qr_adapter.h's own comment) -- build_event.c's own per-frame URLs
+     * are no longer single-segment ALPHANUMERIC as of spec #122's
+     * <BASE>#<SEQ>/<TOTAL>/<PAYLOAD> two-segment schema (see
+     * pipeline_qr_encode_two_segment() / qr_host_decode_mixed() instead). */
     {
         static const char url[] = "HTTPS://SM64NOSTR.PAGES.DEV/0102ABCDEFGHIJKLMNOP";
         int len = (int)(sizeof(url) - 1);
@@ -1578,6 +1596,117 @@ static void test_qr_alphanumeric_round_trip_and_rejections(void)
         encodeOk = pipeline_qr_encode_alphanumeric(badText, 8u, qrcode);
         check(encodeOk == 0, "QR alphanumeric encode rejects a non-alphanumeric-charset byte (lowercase)");
         check(qrcode[0] == 0, "rejected alphanumeric encode (bad charset) leaves the invalid-size sentinel");
+    }
+}
+
+/*
+ * pipeline_qr_encode_two_segment()/qr_host_decode_mixed() round trip and
+ * rejections (spec #122, sub-issue #123): the BYTE-then-ALPHANUMERIC
+ * two-segment encoder every real per-frame URL now rides
+ * (build_event.c), exercised directly here at its own boundaries --
+ * mirrors test_qr_alphanumeric_round_trip_and_rejections()'s own
+ * round-trip/over-budget/bad-charset shape, so this new encoder gets the
+ * SAME "loud, not silent" rejection coverage the existing single-segment
+ * encoders already have, not just the happy-path coverage build_event()'s
+ * own N=1/multiframe tests exercise incidentally.
+ */
+static void test_qr_two_segment_round_trip_and_rejections(void)
+{
+    pipeline_u8 byteData[32];
+    pipeline_u8 alnumText[PIPELINE_QR_ALNUM_MAX_CHARS];
+    pipeline_u8 qrcode[PIPELINE_QR_BUFFER_LEN];
+    unsigned char decoded[32 + PIPELINE_QR_ALNUM_MAX_CHARS];
+    int decodedLen = -1;
+    int encodeOk, decodeOk;
+    int i;
+
+    /* A verbatim, MIXED-CASE byte prefix (deliberately containing bytes
+     * outside the QR alphanumeric charset -- lowercase letters and a
+     * literal '#', spec #122's own join separator) plus a legal
+     * alphanumeric tail round-trips exactly, byte-for-byte, case
+     * preserved. */
+    {
+        static const pipeline_u8 kByteData[] = "https://Example.Test#";
+        pipeline_u32 byteLen = (pipeline_u32)(sizeof(kByteData) - 1);
+        fill_alnum_pattern(alnumText, 11);
+        memcpy(byteData, kByteData, byteLen);
+        encodeOk = pipeline_qr_encode_two_segment(byteData, byteLen, alnumText, 11u, qrcode);
+        check(encodeOk != 0, "QR two-segment encode succeeds for a mixed-case BYTE prefix + odd-length ALPHANUMERIC tail");
+        decodeOk = qr_host_decode_mixed(qrcode, decoded, (int)sizeof(decoded), &decodedLen);
+        check(decodeOk != 0 && (pipeline_u32)decodedLen == byteLen + 11u &&
+              memcmp(decoded, byteData, (size_t)byteLen) == 0 &&
+              memcmp(decoded + byteLen, alnumText, 11u) == 0,
+              "QR two-segment round-trip recovers the exact BYTE prefix (case preserved) and ALPHANUMERIC tail");
+    }
+
+    /* Exact combined max budget round-trips, with an empty (0-byte, still
+     * structurally legal) BYTE segment: the ALPHANUMERIC segment then gets
+     * the maximum character count the shared data-bit budget allows once
+     * BOTH segments' fixed 4-bit-mode + character-count header bits are
+     * subtracted -- computed via build_event.h's own
+     * PIPELINE_ALNUM_CHARS_FOR_BITS() bit-to-character formula (the SAME
+     * one PIPELINE_BUILT_FRAGMENT_BUDGET derives from), never a hand-picked
+     * magic character count that could silently drift from the real
+     * shared budget. This is necessarily SMALLER than the older
+     * single-segment PIPELINE_QR_ALNUM_MAX_CHARS(178) ceiling, since a
+     * two-segment QR pays a second segment's mode+count header on top. */
+    {
+        long maxAlnumBudgetBits = (long)PIPELINE_QR_DATA_CODEWORDS * 8L
+            - (long)PIPELINE_BUILT_BYTE_SEG_HEADER_BITS
+            - (long)PIPELINE_BUILT_ALNUM_SEG_HEADER_BITS; /* byteLen == 0 */
+        pipeline_u32 maxAlnumChars = PIPELINE_ALNUM_CHARS_FOR_BITS(maxAlnumBudgetBits);
+
+        fill_alnum_pattern(alnumText, (int)maxAlnumChars);
+        encodeOk = pipeline_qr_encode_two_segment(byteData, 0u, alnumText, maxAlnumChars, qrcode);
+        check(encodeOk != 0, "QR two-segment encode succeeds with an empty BYTE segment and the "
+                             "shared bit budget's own max ALPHANUMERIC character count");
+        decodeOk = qr_host_decode_mixed(qrcode, decoded, (int)sizeof(decoded), &decodedLen);
+        check(decodeOk != 0 && (pipeline_u32)decodedLen == maxAlnumChars &&
+              memcmp(decoded, alnumText, (size_t)maxAlnumChars) == 0,
+              "QR two-segment round-trip is byte-exact at that shared max budget");
+
+        /* One ALPHANUMERIC character over that same shared budget is
+         * cleanly rejected -- no truncation, no silently-oversized QR. */
+        {
+            pipeline_u8 overBudget[PIPELINE_QR_ALNUM_MAX_CHARS + 1];
+            pipeline_u32 overLen = maxAlnumChars + 1u;
+            fill_alnum_pattern(overBudget, (int)overLen);
+            memset(qrcode, 0xFF, sizeof(qrcode));
+            encodeOk = pipeline_qr_encode_two_segment(byteData, 0u, overBudget, overLen, qrcode);
+            check(encodeOk == 0, "QR two-segment encode rejects one ALPHANUMERIC character over the shared budget");
+            check(qrcode[0] == 0, "rejected two-segment encode (over budget) leaves the invalid-size sentinel");
+        }
+    }
+
+    /* A byte outside the alphanumeric charset in the ALPHANUMERIC segment
+     * (lowercase) is rejected, not silently coerced -- the BYTE segment
+     * itself is unconstrained (any byte value is legal there), so this
+     * pins that the charset check is scoped to the ALPHANUMERIC half
+     * only. */
+    {
+        pipeline_u8 badAlnum[8];
+        fill_alnum_pattern(badAlnum, 8);
+        badAlnum[0] = (pipeline_u8)'h'; /* lowercase -- outside the QR alphanumeric charset */
+        memset(qrcode, 0xFF, sizeof(qrcode));
+        encodeOk = pipeline_qr_encode_two_segment(byteData, 0u, badAlnum, 8u, qrcode);
+        check(encodeOk == 0, "QR two-segment encode rejects a non-alphanumeric-charset byte in the ALPHANUMERIC segment");
+        check(qrcode[0] == 0, "rejected two-segment encode (bad charset) leaves the invalid-size sentinel");
+    }
+
+    /* Every byte value (0-255) is legal in the BYTE segment -- unlike the
+     * ALPHANUMERIC segment, it is never charset-checked. */
+    {
+        pipeline_u8 anyBytes[16];
+        for (i = 0; i < 16; i++) {
+            anyBytes[i] = (pipeline_u8)(i * 17); /* spans low/high/non-ASCII byte values */
+        }
+        fill_alnum_pattern(alnumText, 4);
+        encodeOk = pipeline_qr_encode_two_segment(anyBytes, 16u, alnumText, 4u, qrcode);
+        check(encodeOk != 0, "QR two-segment encode accepts arbitrary (non-ASCII-inclusive) BYTE-segment content");
+        decodeOk = qr_host_decode_mixed(qrcode, decoded, (int)sizeof(decoded), &decodedLen);
+        check(decodeOk != 0 && (pipeline_u32)decodedLen == 20u &&
+              memcmp(decoded, anyBytes, 16u) == 0 && memcmp(decoded + 16, alnumText, 4u) == 0,
+              "QR two-segment round-trip recovers arbitrary BYTE-segment content byte-for-byte");
     }
 }
 
@@ -1704,9 +1833,21 @@ static void test_fragment_boundaries_and_header_round_trip(void)
     /* A structurally invalid header (index >= count) is rejected. */
     {
         pipeline_u8 badHeader[6];
-        memcpy(badHeader, "ZZ01AB", 6); /* index "ZZ" (1295) >= count "01" (1) */
+        memcpy(badHeader, "ZZ/01/", 6); /* index "ZZ" (1295) >= count "01" (1) */
         check(pipeline_fragment_parse_header(badHeader, 6u, &idx, &cnt) == 0,
               "pipeline_fragment_parse_header rejects a header whose index >= its own count");
+    }
+    /* A header missing (or with a wrong byte at) either '/' field separator
+     * is rejected -- never guessed at (spec #122's ratified <SEQ>/<TOTAL>/
+     * <PAYLOAD> template requires both literal separators). */
+    {
+        pipeline_u8 badSep[6];
+        memcpy(badSep, "00X02/", 6); /* wrong byte where the first '/' belongs */
+        check(pipeline_fragment_parse_header(badSep, 6u, &idx, &cnt) == 0,
+              "pipeline_fragment_parse_header rejects a header with a wrong/missing first '/' separator");
+        memcpy(badSep, "00/02X", 6); /* wrong byte where the second '/' belongs */
+        check(pipeline_fragment_parse_header(badSep, 6u, &idx, &cnt) == 0,
+              "pipeline_fragment_parse_header rejects a header with a wrong/missing second '/' separator");
     }
 
     /* Rejects a bad request: frameIndex >= frameCount. */
@@ -1715,45 +1856,67 @@ static void test_fragment_boundaries_and_header_round_trip(void)
 }
 
 /*
- * URL wrap/strip tests (spec #115, sub-issue #116): pipeline_url_wrap()/
- * pipeline_url_strip() are pure functions producing/consuming exactly
- * HTTPS://<base>/<fragment>, all-uppercase, path-based.
+ * URL wrap/extract tests (spec #115, sub-issue #116; realigned to #101's
+ * ratified schema by spec #122, sub-issue #123): pipeline_url_wrap()/
+ * pipeline_url_extract_fragment() are pure functions producing/consuming
+ * exactly <BASE>#<fragment> -- the base emitted VERBATIM (mixed case
+ * round-trips unchanged), joined with a literal '#'. extract_fragment
+ * takes no baseUrl argument at all and performs no host comparison
+ * whatsoever: this is the inverted "rejects a URL for a different base"
+ * contract -- a mismatched/different base must still extract identically.
  */
-static void test_url_wrap_and_strip(void)
+static void test_url_wrap_and_extract_fragment(void)
 {
-    static const pipeline_u8 baseUrl[] = "EXAMPLE.TEST";
+    /* Deliberately mixed-case: proves pipeline_url_wrap() never uppercases
+     * or otherwise mangles the base (spec #122's own verbatim-case
+     * acceptance criterion). */
+    static const pipeline_u8 baseUrl[] = "https://Example.Test";
     pipeline_u32 baseUrlLen = (pipeline_u32)(sizeof(baseUrl) - 1);
-    static const pipeline_u8 fragment[] = "0102ABCDEF";
+    static const pipeline_u8 fragment[] = "01/02/ABCDEF";
     pipeline_u32 fragmentLen = (pipeline_u32)(sizeof(fragment) - 1);
     pipeline_u8 url[128];
     pipeline_u32 urlLen;
-    pipeline_u8 stripped[64];
-    pipeline_u32 strippedLen = 0;
+    pipeline_u8 extracted[64];
+    pipeline_u32 extractedLen = 0;
 
     urlLen = pipeline_url_wrap(baseUrl, baseUrlLen, fragment, fragmentLen, url, (pipeline_u32)sizeof(url));
-    check(urlLen == (pipeline_u32)(8 + 12 + 1 + 10) &&
-          memcmp(url, "HTTPS://EXAMPLE.TEST/0102ABCDEF", (size_t)urlLen) == 0,
-          "pipeline_url_wrap produces the exact expected all-uppercase path-based URL");
+    check(urlLen == baseUrlLen + 1u + fragmentLen &&
+          memcmp(url, "https://Example.Test#01/02/ABCDEF", (size_t)urlLen) == 0,
+          "pipeline_url_wrap produces the exact expected <BASE>#<fragment> URL, base verbatim (mixed case)");
 
-    check(pipeline_url_strip(url, urlLen, baseUrl, baseUrlLen, stripped, (pipeline_u32)sizeof(stripped),
-                              &strippedLen) != 0 &&
-          strippedLen == fragmentLen && memcmp(stripped, fragment, fragmentLen) == 0,
-          "pipeline_url_strip recovers the exact original fragment");
+    check(pipeline_url_extract_fragment(url, urlLen, extracted, (pipeline_u32)sizeof(extracted),
+                                         &extractedLen) != 0 &&
+          extractedLen == fragmentLen && memcmp(extracted, fragment, fragmentLen) == 0,
+          "pipeline_url_extract_fragment recovers the exact original fragment");
 
-    /* A URL wrapped around a DIFFERENT base is rejected, not silently
-     * mis-stripped. */
+    /* Host-agnostic, by construction: a URL wrapped around a COMPLETELY
+     * DIFFERENT base -- even a bare host:port with no domain at all --
+     * still extracts the identical fragment, since extract_fragment takes
+     * no baseUrl argument and performs no host comparison whatsoever
+     * (spec #122's own inverted "rejects a URL for a different base"
+     * acceptance criterion). */
     {
-        static const pipeline_u8 wrongBase[] = "OTHER.TEST";
-        check(pipeline_url_strip(url, urlLen, wrongBase, (pipeline_u32)(sizeof(wrongBase) - 1),
-                                  stripped, (pipeline_u32)sizeof(stripped), &strippedLen) == 0,
-              "pipeline_url_strip rejects a URL whose base doesn't match the expected one");
+        static const pipeline_u8 differentBaseUrl[] = "https://21.0.0.4:8443";
+        pipeline_u8 differentUrl[128];
+        pipeline_u32 differentUrlLen;
+        pipeline_u8 extractedFromDifferent[64];
+        pipeline_u32 extractedFromDifferentLen = 0;
+
+        differentUrlLen = pipeline_url_wrap(differentBaseUrl, (pipeline_u32)(sizeof(differentBaseUrl) - 1),
+                                             fragment, fragmentLen, differentUrl, (pipeline_u32)sizeof(differentUrl));
+        check(pipeline_url_extract_fragment(differentUrl, differentUrlLen, extractedFromDifferent,
+                                             (pipeline_u32)sizeof(extractedFromDifferent),
+                                             &extractedFromDifferentLen) != 0 &&
+              extractedFromDifferentLen == fragmentLen &&
+              memcmp(extractedFromDifferent, fragment, fragmentLen) == 0,
+              "pipeline_url_extract_fragment recovers the identical fragment from a URL wrapped around "
+              "a COMPLETELY DIFFERENT base -- host-independence, not a rejection");
     }
     {
-        pipeline_u8 truncated[4];
-        memcpy(truncated, url, 4);
-        check(pipeline_url_strip(truncated, 4u, baseUrl, baseUrlLen, stripped, (pipeline_u32)sizeof(stripped),
-                                  &strippedLen) == 0,
-              "pipeline_url_strip rejects a URL shorter than the expected prefix");
+        pipeline_u8 noHash[] = "https://Example.Test/no-fragment-separator-here";
+        check(pipeline_url_extract_fragment(noHash, (pipeline_u32)(sizeof(noHash) - 1), extracted,
+                                             (pipeline_u32)sizeof(extracted), &extractedLen) == 0,
+              "pipeline_url_extract_fragment rejects a URL with no '#' fragment separator at all");
     }
 }
 
@@ -1775,8 +1938,13 @@ static void test_url_wrap_and_strip(void)
 static void test_transport_envelope_full_chain_n_equals_one(void)
 {
     static const pipeline_u8 kPayload[] = { 0x01, 0x02, 0x03, 0x04, 0x05 };
-    static const pipeline_u8 kBaseUrl[] = "EXAMPLE.TEST";
+    /* Deliberately mixed-case, like test_url_wrap_and_extract_fragment()
+     * above: proves the whole chain -- not just pipeline_url_wrap() in
+     * isolation -- round-trips a verbatim base through a real two-segment
+     * QR encode/decode. */
+    static const pipeline_u8 kBaseUrl[] = "https://Example.Test";
     pipeline_u32 baseUrlLen = (pipeline_u32)(sizeof(kBaseUrl) - 1);
+    pipeline_u32 byteSegLen = baseUrlLen + (pipeline_u32)PIPELINE_URL_FRAGMENT_SEP_LEN;
     pipeline_u8 base32Text[32];
     pipeline_u32 base32Len;
     pipeline_u32 frameCount;
@@ -1789,13 +1957,13 @@ static void test_transport_envelope_full_chain_n_equals_one(void)
     unsigned char decodedUrl[128];
     int decodedUrlLen = -1;
     int decodeOk;
-    pipeline_u8 strippedFragment[64];
-    pipeline_u32 strippedFragmentLen = 0;
+    pipeline_u8 extractedFragment[64];
+    pipeline_u32 extractedFragmentLen = 0;
     pipeline_u32 idx, cnt;
     pipeline_u8 recovered[16];
     pipeline_u32 recoveredLen = 0;
-    int stripOk, parseOk, base32DecodeOk;
-    /* Generous on purpose: header (4) + this payload's whole base32
+    int extractOk, parseOk, base32DecodeOk;
+    /* Generous on purpose: header (6) + this payload's whole base32
      * length fits in a single fragment, forcing the N=1 branch. */
     const pipeline_u32 perFrameBudget = 100u;
 
@@ -1813,26 +1981,28 @@ static void test_transport_envelope_full_chain_n_equals_one(void)
     urlLen = pipeline_url_wrap(kBaseUrl, baseUrlLen, fragment, fragmentLen, url, (pipeline_u32)sizeof(url));
     check(urlLen != 0, "transport envelope: N=1 fragment wraps into a URL");
 
-    encodeOk = pipeline_qr_encode_alphanumeric(url, urlLen, qrcode);
-    check(encodeOk != 0, "transport envelope: N=1 URL QR-encodes in ALPHANUMERIC mode");
+    /* Two-segment QR encode (spec #122): the verbatim "<BASE>#" prefix
+     * rides BYTE, the fragment tail rides ALPHANUMERIC. */
+    encodeOk = pipeline_qr_encode_two_segment(url, byteSegLen, url + byteSegLen, urlLen - byteSegLen, qrcode);
+    check(encodeOk != 0, "transport envelope: N=1 URL QR-encodes as two segments (BYTE base+'#', ALPHANUMERIC tail)");
 
-    decodeOk = qr_host_decode_alphanumeric(qrcode, decodedUrl, (int)sizeof(decodedUrl), &decodedUrlLen);
+    decodeOk = qr_host_decode_mixed(qrcode, decodedUrl, (int)sizeof(decodedUrl), &decodedUrlLen);
     check(decodeOk != 0 && (pipeline_u32)decodedUrlLen == urlLen && memcmp(decodedUrl, url, (size_t)urlLen) == 0,
-          "transport envelope: N=1 QR decodes back to the exact URL");
+          "transport envelope: N=1 two-segment QR decodes back to the exact URL");
 
-    stripOk = pipeline_url_strip((const pipeline_u8 *)decodedUrl, (pipeline_u32)decodedUrlLen,
-                                  kBaseUrl, baseUrlLen, strippedFragment, (pipeline_u32)sizeof(strippedFragment),
-                                  &strippedFragmentLen);
-    check(stripOk != 0 && strippedFragmentLen == fragmentLen &&
-          memcmp(strippedFragment, fragment, fragmentLen) == 0,
-          "transport envelope: N=1 URL strips back to the exact fragment");
+    extractOk = pipeline_url_extract_fragment((const pipeline_u8 *)decodedUrl, (pipeline_u32)decodedUrlLen,
+                                               extractedFragment, (pipeline_u32)sizeof(extractedFragment),
+                                               &extractedFragmentLen);
+    check(extractOk != 0 && extractedFragmentLen == fragmentLen &&
+          memcmp(extractedFragment, fragment, fragmentLen) == 0,
+          "transport envelope: N=1 URL extracts back to the exact fragment (host-agnostic, no baseUrl argument)");
 
-    parseOk = pipeline_fragment_parse_header(strippedFragment, strippedFragmentLen, &idx, &cnt);
+    parseOk = pipeline_fragment_parse_header(extractedFragment, extractedFragmentLen, &idx, &cnt);
     check(parseOk != 0 && idx == 0u && cnt == 1u,
           "transport envelope: N=1 fragment header parses to index 0 of 1 (the degenerate single-frame case)");
 
-    base32DecodeOk = pipeline_base32_decode(strippedFragment + PIPELINE_FRAGMENT_HEADER_LEN,
-                                             strippedFragmentLen - (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN,
+    base32DecodeOk = pipeline_base32_decode(extractedFragment + PIPELINE_FRAGMENT_HEADER_LEN,
+                                             extractedFragmentLen - (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN,
                                              recovered, (pipeline_u32)sizeof(recovered), &recoveredLen);
     check(base32DecodeOk != 0 && recoveredLen == (pipeline_u32)sizeof(kPayload) &&
           memcmp(recovered, kPayload, sizeof(kPayload)) == 0,
@@ -3694,9 +3864,10 @@ int main(void)
     test_qr_round_trip_representative_sizes();
     test_qr_rejects_over_budget_cleanly();
     test_qr_alphanumeric_round_trip_and_rejections();
+    test_qr_two_segment_round_trip_and_rejections();
     test_base32_known_answer_vectors();
     test_fragment_boundaries_and_header_round_trip();
-    test_url_wrap_and_strip();
+    test_url_wrap_and_extract_fragment();
     test_transport_envelope_full_chain_n_equals_one();
     test_build_event_multiframe_round_trip();
     test_sha256_known_answer_vectors();

@@ -71,6 +71,17 @@ int pipeline_qr_encode_alphanumeric(const pipeline_u8 *text, pipeline_u32 textLe
                                          PIPELINE_QR_MASK, 0);
 }
 
+int pipeline_qr_encode_two_segment(const pipeline_u8 *byteData, pipeline_u32 byteLen,
+                                    const pipeline_u8 *alnumText, pipeline_u32 alnumLen,
+                                    pipeline_u8 out[PIPELINE_QR_BUFFER_LEN])
+{
+    qr_u8 tempBuffer[PIPELINE_QR_BUFFER_LEN];
+
+    return qrcodegen_encodeTwoSegments(byteData, (int)byteLen, alnumText, (int)alnumLen, out, tempBuffer,
+                                        PIPELINE_QR_ECC, PIPELINE_QR_VERSION, PIPELINE_QR_VERSION,
+                                        PIPELINE_QR_MASK, 0);
+}
+
 int pipeline_qr_get_size(const pipeline_u8 qrcode[PIPELINE_QR_BUFFER_LEN])
 {
     return qrcodegen_getSize(qrcode);
