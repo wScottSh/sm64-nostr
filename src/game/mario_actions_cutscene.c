@@ -1266,7 +1266,12 @@ s32 act_death_exit(struct MarioState *m) {
 #if ENABLE_RUMBLE
         queue_rumble_data(5, 80);
 #endif
-        m->numLives--;
+        // Sandbox seam G: force-off, not delete. The vanilla decrement stays
+        // in the tree but is unreached while save_file_lives_are_consumed()
+        // returns FALSE (save_file.c).
+        if (save_file_lives_are_consumed()) {
+            m->numLives--;
+        }
         // restore 7.75 units of health
         m->healCounter = 31;
     }
@@ -1282,7 +1287,11 @@ s32 act_unused_death_exit(struct MarioState *m) {
 #else
         play_sound(SOUND_MARIO_OOOF2, m->marioObj->header.gfx.cameraToObject);
 #endif
-        m->numLives--;
+        // Sandbox seam G: force-off, not delete (kept for symmetry with the
+        // reachable death-exit actions even though this action is unused).
+        if (save_file_lives_are_consumed()) {
+            m->numLives--;
+        }
         // restore 7.75 units of health
         m->healCounter = 31;
     }
@@ -1301,7 +1310,10 @@ s32 act_falling_death_exit(struct MarioState *m) {
 #if ENABLE_RUMBLE
         queue_rumble_data(5, 80);
 #endif
-        m->numLives--;
+        // Sandbox seam G: force-off, not delete.
+        if (save_file_lives_are_consumed()) {
+            m->numLives--;
+        }
         // restore 7.75 units of health
         m->healCounter = 31;
     }
@@ -1348,7 +1360,10 @@ s32 act_special_death_exit(struct MarioState *m) {
 #if ENABLE_RUMBLE
         queue_rumble_data(5, 80);
 #endif
-        m->numLives--;
+        // Sandbox seam G: force-off, not delete.
+        if (save_file_lives_are_consumed()) {
+            m->numLives--;
+        }
         m->healCounter = 31;
     }
     // show Mario
