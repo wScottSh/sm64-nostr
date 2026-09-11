@@ -12,3 +12,7 @@
 # for that directory). Regenerate before testing (`npm test` already does
 # this via its own "pretest" script) or before deploying this page.
 /generated/
+
+# Self-signed cert generated on demand by serve-debug.mjs for the phone-facing
+# HTTPS spin-up of debug.html -- a local dev artifact, never committed.
+/.debug-certs/
