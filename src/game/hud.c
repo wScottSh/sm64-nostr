@@ -268,6 +268,19 @@ void render_hud_mario_lives(void) {
 }
 
 /**
+ * Cosmetic HUD-hide gate (spec #90, sub-issue #140) -- NOT a lettered
+ * sandbox seam, just an always-FALSE predicate guarding the single
+ * render_hud_mario_lives() call site below. Lives no longer matter (seam G,
+ * save_file_lives_are_consumed()), so the counter is hidden too, vacating
+ * the top-left slot. Force-off, not delete: HUD_DISPLAY_FLAG_LIVES
+ * (level_update.h) and render_hud_mario_lives() both stay in the tree,
+ * unreached while this returns FALSE.
+ */
+static s32 hud_lives_counter_is_shown(void) {
+    return FALSE;
+}
+
+/**
  * Renders the top-right HUD corner, which the vanilla star counter used to
  * occupy (spec #75: retire the star counter, repurpose the corner). Mode is
  * decided by one predicate: castle/hub iff gCurrCourseNum == COURSE_NONE
@@ -475,7 +488,9 @@ void render_hud(void) {
             render_hud_cannon_reticle();
         }
 
-        if (hudDisplayFlags & HUD_DISPLAY_FLAG_LIVES) {
+        // Cosmetic HUD-hide (spec #90, sub-issue #140): hud_lives_counter_is_shown()
+        // always returns FALSE, so render_hud_mario_lives() is unreached.
+        if ((hudDisplayFlags & HUD_DISPLAY_FLAG_LIVES) && hud_lives_counter_is_shown()) {
             render_hud_mario_lives();
         }
 
