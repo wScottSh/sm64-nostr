@@ -21,6 +21,7 @@ extern const LevelScript level_intro_mario_head_regular[];
 extern const LevelScript level_intro_mario_head_dizzy[];
 extern const LevelScript level_intro_entry_4[];
 extern const LevelScript script_intro_L1[];
+extern const LevelScript script_intro_bypass_file_select[];
 extern const LevelScript script_intro_L2[];
 extern const LevelScript script_intro_L3[];
 extern const LevelScript script_intro_L4[];

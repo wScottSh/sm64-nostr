@@ -18,7 +18,7 @@
 .PARAMETER EventName
     REQUIRED human-readable event identity (spec #75, sub-issue #76), shown
     locally in the castle HUD corner -- an event ROM cannot be built without
-    one. A-Z, 0-9, and space only (case-folded to upper), 20 chars max;
+    one. A-Z, 0-9, and space only (case-folded to upper), 17 chars max;
     gen_event_profile.py validates and rejects (never truncates) inside the
     container. Prompted for interactively if omitted (unless -Yes).
 
@@ -162,7 +162,7 @@ Write-Stage 4 'Event name'
 if (-not $EventName -and -not $Yes) {
     Write-Step "Every event ROM must state, honestly and locally, which event"
     Write-Step "it was built for -- this is shown in the castle HUD corner."
-    Write-Step "A-Z, 0-9, and space only (case-folded to upper), 20 chars max."
+    Write-Step "A-Z, 0-9, and space only (case-folded to upper), 17 chars max."
     $EventName = Read-Host "  event name (e.g. SUMMER JAM 2026)"
 }
 if (-not $EventName -or -not $EventName.Trim()) {
@@ -171,7 +171,7 @@ No -EventName supplied. An event ROM cannot be built without one (spec #75,
 sub-issue #76) -- the build refuses to produce a nameless binary.
 
 Pass one, e.g.: .\build.ps1 -EventName "SUMMER JAM 2026"
-(A-Z, 0-9, space only after case-folding; 20 chars max -- the actual
+(A-Z, 0-9, space only after case-folding; 17 chars max -- the actual
 charset/length gate runs inside the container via gen_event_profile.py and
 will FATAL out with a clear reason if this value doesn't pass it.)
 "@

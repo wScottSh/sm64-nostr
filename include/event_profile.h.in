@@ -70,9 +70,10 @@
  * (gen_event_profile.py; no default, the Makefile's PIPELINE_EVENT_NAME
  * fails closed with a $(error) before this script ever runs, mirroring the
  * PIPELINE_PRIVKEY_FILE check). Uppercase-folded (a-z->A-Z), restricted to
- * A-Z/0-9/space, and capped at 20 chars (raised from 15 by spec #91 sub-issue
- * #126; over-length is a build FATAL, never a silent truncation) -- see
- * gen_event_profile.py's normalize_event_name().
+ * A-Z/0-9/space, and capped at 17 chars (raised 15->20 by spec #91
+ * sub-issue #126, then shrunk back 20->17 by spec #90 sub-issue #139,
+ * which SUPERSEDES #126; over-length is a build FATAL, never a silent
+ * truncation) -- see gen_event_profile.py's normalize_event_name().
  *
  * ON-WIRE, SIGNED (format v3): this value is rendered locally by the castle
  * HUD corner (render_hud) AND sourced by build_event() -- event_id.c's

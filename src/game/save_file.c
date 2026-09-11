@@ -592,6 +592,24 @@ void save_file_set_cannon_unlocked(void) {
     gSaveFileModified = TRUE;
 }
 
+/**
+ * Sandbox seam G: always-FALSE lives-consumption predicate, substituted for
+ * the bare m->numLives-- decrement in the reachable death-exit landing
+ * actions (act_death_exit, act_falling_death_exit, act_special_death_exit,
+ * mario_actions_cutscene.c) plus the unused act_unused_death_exit for
+ * symmetry. Mechanism is block the decrement, not freeze-at-constant, not
+ * game-over interception. With lives never consumed, the two
+ * m->numLives == 0 game-over predicates (level_update.c) never fire, so
+ * Game Over is suppressed transitively -- no second gate is added. The
+ * death animation, death warp, and painting boot all run entirely upstream
+ * of the decrement and are untouched; 1-up increments are untouched too.
+ * Force-off, not delete: the vanilla decrements stay in the tree, unreached
+ * while this predicate returns FALSE, matching seams D/E/F.
+ */
+s32 save_file_lives_are_consumed(void) {
+    return FALSE;
+}
+
 void save_file_set_cap_pos(s16 x, s16 y, s16 z) {
     struct SaveFile *saveFile = &gSaveBuffer.files[gCurrSaveFileNum - 1][0];
 

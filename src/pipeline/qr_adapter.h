@@ -25,7 +25,7 @@
  * against the OLD v1 payload (75 B), to isolate it from the wire-format
  * change; sub-issue #54 then landed format v2 itself (112-122 B), and
  * spec #109/sub-issue #110 has since landed format v3's NAME_LEN/NAME
- * field on top (113-138 B), so this symbol's geometry/mask choice is now
+ * field on top (113-140 B), so this symbol's geometry/mask choice is now
  * shared by all three (docs/qr-handoff-spec.md,
  * docs/research/qr-density-tradeoffs.md, docs/format-v3-spec.md). A near-
  * max-length tag+name build no longer needs to fit any one QR symbol's
@@ -88,7 +88,7 @@
  * This is the real over-budget boundary a single pipeline_qr_encode() call
  * rejects against (qr_adapter.c) -- PER CALL, PER SYMBOL geometry, not a
  * build-wide total-payload cap: format v3's packed payload
- * (PIPELINE_BUILT_PAYLOAD_SIZE, 113-138 B depending on this build's own
+ * (PIPELINE_BUILT_PAYLOAD_SIZE, 113-140 B depending on this build's own
  * tag/name lengths) is no longer QR-encoded directly via this BYTE-mode
  * path or bounded by this constant at all (ADR-0006's multi-frame
  * transport, spec #115, sub-issue #117, retired that ceiling -- the packed
