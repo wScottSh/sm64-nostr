@@ -104,22 +104,26 @@ EVENT_NAME_ALLOWED_CHARS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
 )
 
-# Length cap (spec #75, sub-issue #76; raised 15->20, spec #91 sub-issue
-# #126): chosen to match format_descriptor.json's own NAME.max_size (the
-# wire budget), not derived independently from the HUD -- main() below fails
+# Length cap (spec #75, sub-issue #76; raised 15->20 by spec #91 sub-issue
+# #126; SHRUNK BACK 20->17 by spec #90 sub-issue #139, which SUPERSEDES
+# #126): 17 is #133's ratified cap decision for spec #90's lives-removal /
+# power-meter-relocation work -- #133 ratifies relocating the power meter
+# into the old lives-counter slot in the same top-left HUD corner (not yet
+# implemented on this branch as of #139; sPowerMeterHUD's own x/y are still
+# their pre-#133 values in src/game/hud.c), and picks 17 (not 20) as the
+# ceiling that keeps the event name clear of that eventual relocated meter.
+# Chosen to match format_descriptor.json's own NAME.max_size (the wire
+# budget), not derived independently from the HUD -- main() below fails
 # closed if the two ever drift apart (see the NAME max-size check next to
-# the existing TAG one), rather than hand-trusting the two constants stay in
-# sync. At 20 chars, render_hud_top_right_corner()'s fixed 12px-per-char,
+# the existing TAG one), rather than hand-trusting the two constants stay
+# in sync. At 17 chars, render_hud_top_right_corner()'s fixed 12px-per-char,
 # right-aligned draw (src/game/hud.c, anchored at
 # GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(24) as of spec #91 sub-issue #125)
-# starts at x = 296 - 240 = 56 -- still comfortably right of TEXRECT_MIN_X
+# starts at x = 296 - 204 = 92 -- still comfortably right of TEXRECT_MIN_X
 # (10, src/game/print.h) and within the ~24-glyph practical HUD-text budget
-# (docs/research/hud-glyph-inventory.md), so a 20-char name never clips, but
-# it now runs left of the power meter's own x=108 left edge (a different
-# screen row, so no visual collision, just no longer clear of it
-# horizontally). Overflow is REJECTED, never truncated -- see
-# normalize_event_name().
-EVENT_NAME_MAX_LEN = 20
+# (docs/research/hud-glyph-inventory.md). Overflow is REJECTED, never
+# truncated -- see normalize_event_name().
+EVENT_NAME_MAX_LEN = 17
 
 # ADR-0006's airgap transport base URL, realigned to #101's ratified URL
 # schema by spec #122 (sub-issue #123): emitted VERBATIM (case preserved --
