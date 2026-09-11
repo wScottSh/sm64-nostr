@@ -6,7 +6,7 @@ Ubiquitous language for the **airgapped Nostr QR leaderboard** work (ticket [#4]
 
 - **The pipeline** — the one **deep module** of the feature: `(StarCapture, key) → bytes` (packed payload + QR bitmap). Pure — touches no `MarioState`, no globals, no N64 headers/timers — so it builds and runs off-device. Its **interface is the test surface**.
 
-- **StarCapture** — the plain-old-data struct that *is* the pipeline's input seam: `{course, act, coins, frames, nonce16, keyId}`. The game **glue** fills it at the grab site (`interact_star_or_key`, `interaction.c:873`) from scattered N64 state (course/act globals, `m->numCoins`, `starIndex`) and hashes the content **nonce** in the glue. Nothing N64-specific crosses into the pipeline except this struct.
+- **StarCapture** — the plain-old-data struct that *is* the pipeline's input seam: `{course, act, coins, frames, nonce16, keyId}`. The game **glue** fills it at the grab site (`interact_star_or_key`, `interaction.c:881`) from scattered N64 state (course/act globals, `m->numCoins`, `starIndex`) and hashes the content **nonce** in the glue. Nothing N64-specific crosses into the pipeline except this struct.
 
 - **Glue** — the thin game-side code either side of the pipeline seam: the grab-site capture (fills `StarCapture`) and the renderer (consumes the QR bitmap). Deliberately shallow; carries no crypto or format logic.
 
