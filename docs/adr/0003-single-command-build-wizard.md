@@ -55,4 +55,8 @@ minting-and-overwriting freely is the intended paradigm, not a hazard.
   `PIPELINE_EVENT_NAME`; `gen_event_profile.py` inside the container does the
   real charset/length validation (A-Z, 0-9, space; 15 chars max; reject, never
   truncate) and bakes it into `PIPELINE_EVENT_NAME` — display-only, never the
-  signed wire.
+  signed wire. (This ADR's numbers/claims are a point-in-time historical
+  record: the cap is later raised to 20 chars by spec #91 sub-issue #126,
+  and the value stops being display-only under format v3, spec #109
+  sub-issue #111 -- see `CONTEXT.md` and `docs/format-v3-spec.md` for the
+  current state.)

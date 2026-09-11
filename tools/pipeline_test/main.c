@@ -443,8 +443,8 @@ static void test_build_event_end_to_end(void)
      * bearing for build_event() itself: as of ADR-0006's multi-frame
      * transport (spec #115, sub-issue #117), the packed payload is never
      * QR-encoded directly, and there is no total-payload ceiling -- format
-     * v3's own worst case (TAG_LEN=10, NAME_LEN=15, 138 B) builds and
-     * reassembles too, just as more frames (see
+     * v3's own worst case (TAG_LEN=10, NAME_LEN=20, 143 B as of spec #91
+     * sub-issue #126) builds and reassembles too, just as more frames (see
      * test_build_event_multiframe_round_trip() below). */
     check(PIPELINE_BUILT_PAYLOAD_SIZE == 121u,
           "build_event's packed_payload size is 121 B (113 + 4-byte \"sm64\" tag + 4-byte \"TEST\" name)");
@@ -619,8 +619,9 @@ static void test_build_event_end_to_end(void)
  * sub-issue #110's own acceptance criteria for NAME_LEN and the v2->v3
  * FORMAT_TAG cutover): FORMAT_TAG != 0x03 rejected (in particular the old
  * v2 value 0x02, sub-issue #110's own explicit acceptance criterion);
- * TAG_LEN > 10 rejected; NAME_LEN > 15 rejected; wrong total length
- * rejected; TAG_LEN/NAME_LEN at their 0 and max legal boundaries accepted,
+ * TAG_LEN > 10 rejected; NAME_LEN > 20 rejected (raised from 15, spec #91
+ * sub-issue #126); wrong total length rejected; TAG_LEN/NAME_LEN at their
+ * 0 and max legal boundaries accepted,
  * one past each max rejected. Exercises pipeline_pack()/pipeline_unpack()
  * directly (the internal seam both build_event() and a real companion
  * decoder are built on), not build_event() itself, since these are almost
@@ -664,18 +665,19 @@ static void test_pipeline_unpack_boundary_and_rejections(void)
           memcmp(unpackedPubkey, pubkey, PIPELINE_FMT_SIZE_PUBKEY) == 0 && memcmp(unpackedSig, sig, PIPELINE_FMT_SIZE_SIG) == 0,
           "TAG_LEN=NAME_LEN=0 payload round-trips every other field exactly");
 
-    /* TAG_LEN == 10, NAME_LEN == 15 (maximum legal boundary for both): accepted. */
+    /* TAG_LEN == 10, NAME_LEN == 20 (maximum legal boundary for both,
+     * NAME_LEN raised 15->20 by spec #91 sub-issue #126): accepted. */
     packedLen = pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"0123456789", 10,
-                               (const pipeline_u8 *)"FIFTEEN CHAR!!!", 15, sig, packed);
-    check(packedLen == PIPELINE_FMT_FIXED_SIZE + 10u + 15u,
-          "pipeline_pack with TAG_LEN=10, NAME_LEN=15 writes exactly PIPELINE_FMT_FIXED_SIZE+10+15 bytes");
+                               (const pipeline_u8 *)"TWENTY CHAR NAME XYZ", 20, sig, packed);
+    check(packedLen == PIPELINE_FMT_FIXED_SIZE + 10u + 20u,
+          "pipeline_pack with TAG_LEN=10, NAME_LEN=20 writes exactly PIPELINE_FMT_FIXED_SIZE+10+20 bytes");
     rc = pipeline_unpack(packed, packedLen, &unpackedCapture, &unpackedCreatedAt, unpackedPubkey,
                           unpackedTag, &unpackedTagLen, unpackedName, &unpackedNameLen, unpackedSig);
     check(rc == PIPELINE_UNPACK_OK && unpackedTagLen == 10 &&
           memcmp(unpackedTag, "0123456789", 10) == 0,
           "pipeline_unpack accepts the TAG_LEN=10 boundary payload and round-trips the tag bytes exactly");
-    check(unpackedNameLen == 15 && memcmp(unpackedName, "FIFTEEN CHAR!!!", 15) == 0,
-          "pipeline_unpack accepts the NAME_LEN=15 boundary payload and round-trips the name bytes exactly");
+    check(unpackedNameLen == 20 && memcmp(unpackedName, "TWENTY CHAR NAME XYZ", 20) == 0,
+          "pipeline_unpack accepts the NAME_LEN=20 boundary payload and round-trips the name bytes exactly");
 
     /* TAG_LEN == 11: pipeline_pack() itself refuses (defensive, since no
      * real build ever asks for this); hand-craft the wire bytes directly to
@@ -695,24 +697,25 @@ static void test_pipeline_unpack_boundary_and_rejections(void)
               "pipeline_unpack rejects TAG_LEN=11 (one past the v7-MEDIUM boundary) even with a length-matched buffer");
     }
 
-    /* NAME_LEN == 16: pipeline_pack() itself refuses (defensive, mirroring
+    /* NAME_LEN == 21: pipeline_pack() itself refuses (defensive, mirroring
      * TAG_LEN's own over-budget refusal); hand-craft the wire bytes
      * directly to prove pipeline_unpack() independently rejects a
-     * 16-byte name (PIPELINE_PACK_MAX_NAME_LEN is 15). */
+     * 21-byte name (PIPELINE_PACK_MAX_NAME_LEN is 20, raised from 15 by
+     * spec #91 sub-issue #126). */
     check(pipeline_pack(&capture, 1700000000u, pubkey, (const pipeline_u8 *)"", 0,
-                         (const pipeline_u8 *)"SIXTEEN CHARS!!!", 16, sig, packed) == 0,
-          "pipeline_pack itself refuses nameLen=16 (over PIPELINE_PACK_MAX_NAME_LEN)");
+                         (const pipeline_u8 *)"TWENTY CHAR NAME XYZ!", 21, sig, packed) == 0,
+          "pipeline_pack itself refuses nameLen=21 (over PIPELINE_PACK_MAX_NAME_LEN)");
     {
         pipeline_u8 handCrafted[PIPELINE_PACK_MAX_SIZE];
-        pipeline_u32 handLen = PIPELINE_FMT_FIXED_SIZE + 16u;
+        pipeline_u32 handLen = PIPELINE_FMT_FIXED_SIZE + 21u;
         memset(handCrafted, 0, sizeof(handCrafted));
         handCrafted[PIPELINE_FMT_OFF_FORMAT_TAG] = (pipeline_u8)PIPELINE_FMT_TAG_VALUE;
         handCrafted[PIPELINE_FMT_OFF_TAG_LEN] = 0;
-        handCrafted[PIPELINE_FMT_OFF_NAME_LEN(0)] = 16;
+        handCrafted[PIPELINE_FMT_OFF_NAME_LEN(0)] = 21;
         rc = pipeline_unpack(handCrafted, handLen, &unpackedCapture, &unpackedCreatedAt, unpackedPubkey,
                               unpackedTag, &unpackedTagLen, unpackedName, &unpackedNameLen, unpackedSig);
         check(rc == PIPELINE_UNPACK_ERR_NAME_TOO_LONG,
-              "pipeline_unpack rejects NAME_LEN=16 (one past the max) even with a length-matched buffer");
+              "pipeline_unpack rejects NAME_LEN=21 (one past the max) even with a length-matched buffer");
     }
 
     /* FORMAT_TAG != 0x03 is rejected -- in particular the old format v2

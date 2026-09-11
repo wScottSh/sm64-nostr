@@ -110,6 +110,9 @@ version discriminator advances. A decoder MUST reject unknown tags rather than g
 - `PIPELINE_EVENT_NAME` now enters the signed event and the wire; its validation
   (charset A-Z/0-9/space, ≤15 chars) already exists and is unchanged, but its
   "never reaches the wire" contract in `gen_event_profile.py` is retired by v3.
+  (The ≤15 cap itself is later raised to ≤20 by spec #91, sub-issue #126; see
+  `docs/format-v3-spec.md` for the current figure -- this ADR's numbers are a
+  point-in-time historical record, not re-edited here.)
 - The signed content shape and the packed-wire layout both change, so
   `src/pipeline/event_id.c` (serialization), `src/pipeline/format_descriptor.json`
   (+ its generator and pack/unpack), and the capture glue all move together to v3 in

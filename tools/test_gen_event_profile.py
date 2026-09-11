@@ -56,26 +56,26 @@ class NormalizeEventNameTests(unittest.TestCase):
     def test_folds_mixed_case(self):
         self.assertEqual(gep.normalize_event_name("Summer Jam 2026"), "SUMMER JAM 2026")
 
-    def test_accepts_exactly_15_chars(self):
-        name = "SUMMER JAM 2026"  # exactly 15 chars
-        self.assertEqual(len(name), 15)
+    def test_accepts_exactly_20_chars(self):
+        name = "SUMMER JAM 2026 XYZW"  # exactly 20 chars
+        self.assertEqual(len(name), 20)
         self.assertEqual(gep.normalize_event_name(name), name)
 
-    def test_rejects_16_chars_not_truncated(self):
-        name = "SUMMER JAM 20266"  # 16 chars, one over the cap
-        self.assertEqual(len(name), 16)
+    def test_rejects_21_chars_not_truncated(self):
+        name = "SUMMER JAM 2026 XYZWV"  # 21 chars, one over the cap
+        self.assertEqual(len(name), 21)
         with self.assertRaises(ValueError) as ctx:
             gep.normalize_event_name(name)
         msg = str(ctx.exception)
-        self.assertIn("16", msg)
-        self.assertIn("15", msg)
+        self.assertIn("21", msg)
+        self.assertIn("20", msg)
         # Never truncated: the original, untruncated value is quoted back.
         self.assertIn(name, msg)
 
-    def test_rejects_16_chars_after_folding(self):
+    def test_rejects_21_chars_after_folding(self):
         # Folding never changes length, but confirm the cap is enforced on
         # the FOLDED string, not just the raw input length.
-        name = "summer jam 20266"
+        name = "summer jam 2026 xyzwv"
         with self.assertRaises(ValueError):
             gep.normalize_event_name(name)
 
@@ -214,13 +214,13 @@ class GenEventProfileCliTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.out_path))
 
     def test_valid_event_name_emits_header_defines(self):
-        name = "summer jam 2026"
-        self.assertEqual(len(name), 15)  # exercise the exact-cap boundary
+        name = "summer jam 2026 xyzw"
+        self.assertEqual(len(name), 20)  # exercise the exact-cap boundary
         result = self.run_script(["--event-name", name])
         self.assertEqual(result.returncode, 0, result.stderr)
         with open(self.out_path) as f:
             header = f.read()
-        self.assertIn('#define PIPELINE_EVENT_NAME "SUMMER JAM 2026"', header)
+        self.assertIn('#define PIPELINE_EVENT_NAME "SUMMER JAM 2026 XYZW"', header)
         self.assertIn(
             "#define PIPELINE_EVENT_NAME_LEN (sizeof(PIPELINE_EVENT_NAME) - 1)",
             header,

@@ -104,14 +104,22 @@ EVENT_NAME_ALLOWED_CHARS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
 )
 
-# Length cap (spec #75, sub-issue #76): power-meter left edge (x=108) to the
-# vanilla TV-safe right margin at the fixed 12px-per-char HUD pitch. Overflow
-# is REJECTED, never truncated -- see normalize_event_name(). This also
-# happens to equal format_descriptor.json's NAME.max_size (15 B) as of format
-# v3 -- main() below fails closed if that ever drifts (see the NAME max-size
-# check next to the existing TAG one), rather than hand-trusting the two
-# constants stay in sync.
-EVENT_NAME_MAX_LEN = 15
+# Length cap (spec #75, sub-issue #76; raised 15->20, spec #91 sub-issue
+# #126): chosen to match format_descriptor.json's own NAME.max_size (the
+# wire budget), not derived independently from the HUD -- main() below fails
+# closed if the two ever drift apart (see the NAME max-size check next to
+# the existing TAG one), rather than hand-trusting the two constants stay in
+# sync. At 20 chars, render_hud_top_right_corner()'s fixed 12px-per-char,
+# right-aligned draw (src/game/hud.c, anchored at
+# GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(24) as of spec #91 sub-issue #125)
+# starts at x = 296 - 240 = 56 -- still comfortably right of TEXRECT_MIN_X
+# (10, src/game/print.h) and within the ~24-glyph practical HUD-text budget
+# (docs/research/hud-glyph-inventory.md), so a 20-char name never clips, but
+# it now runs left of the power meter's own x=108 left edge (a different
+# screen row, so no visual collision, just no longer clear of it
+# horizontally). Overflow is REJECTED, never truncated -- see
+# normalize_event_name().
+EVENT_NAME_MAX_LEN = 20
 
 # ADR-0006's airgap transport base URL, realigned to #101's ratified URL
 # schema by spec #122 (sub-issue #123): emitted VERBATIM (case preserved --
@@ -380,17 +388,17 @@ def main():
         )
         return 1
 
-    # EVENT_NAME_MAX_LEN is the HUD font's own glyph-budget cap (see its own
-    # comment above), which happens to equal the wire's NAME.max_size -- this
-    # is the fail-closed guard against that drifting silently (format v3,
-    # spec #109 sub-issue #111): if a future wire-format change shrinks
-    # NAME.max_size below what the HUD cap allows, a name normalize_event_name()
-    # accepts could overflow pipeline_pack()'s own runtime check, surfacing
-    # only as a confusing pack failure rather than this precise cause.
+    # EVENT_NAME_MAX_LEN (see its own comment above) is meant to equal the
+    # wire's NAME.max_size exactly -- this is the fail-closed guard against
+    # that drifting silently (format v3, spec #109 sub-issue #111): if a
+    # future wire-format change shrinks NAME.max_size below
+    # EVENT_NAME_MAX_LEN, a name normalize_event_name() accepts could
+    # overflow pipeline_pack()'s own runtime check, surfacing only as a
+    # confusing pack failure rather than this precise cause.
     if EVENT_NAME_MAX_LEN > name_max_size:
         sys.stderr.write(
             "gen_event_profile.py: FATAL: EVENT_NAME_MAX_LEN (%d) exceeds "
-            "format_descriptor.json's NAME.max_size (%d) -- the HUD's own "
+            "format_descriptor.json's NAME.max_size (%d) -- the script's own "
             "event-name length cap must never allow a name pipeline_pack() "
             "cannot fit onto the wire\n" % (EVENT_NAME_MAX_LEN, name_max_size)
         )
