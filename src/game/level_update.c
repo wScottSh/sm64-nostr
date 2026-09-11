@@ -29,6 +29,8 @@
 #include "course_table.h"
 #include "rumble_init.h"
 
+#include "qr_pending_star_event.h"
+
 #define PLAY_MODE_NORMAL 0
 #define PLAY_MODE_PAUSED 2
 #define PLAY_MODE_CHANGE_AREA 3
@@ -912,6 +914,27 @@ void initiate_delayed_warp(void) {
     s32 destWarpNode;
 
     if (sDelayedWarpOp != WARP_OP_NONE && --sDelayedWarpTimer == 0) {
+        /* Nostr pipeline deferred build, exit flow (spec #96, sub-issue
+         * #146): NOT here. This frame's own render (render_game(), area.c)
+         * still has one more visible fade quad left to draw -- the 32-frame
+         * WARP_TRANSITION_FADE_INTO_MARIO transition play_transition()
+         * (below) armed is driven by screen_transition.c's OWN counter
+         * (sTransitionColorFadeCount), incremented once per RENDER call, not
+         * by sDelayedWarpTimer; that render-side counter only reaches its
+         * "fade complete, pauseRendering=TRUE" state at the END of THIS
+         * SAME frame's still-pending render_game() call -- and even that
+         * final render still draws the fade's own closing keyhole (a small,
+         * static WarpTransitionData::endTexRadius-sized Mario-face quad,
+         * TRANS_TYPE_CLAMP; it does not shrink all the way to a point).
+         * Calling the deferred build here -- during THIS frame's update,
+         * before that render runs -- would run it one frame too early,
+         * stalling on a frame where the fade animation ITSELF is still
+         * mid-motion (a visibly moving keyhole). The right cover frame is
+         * play_mode_change_level()'s own first call, one frame later -- see
+         * its own comment on the WARP_OP_STAR_EXIT branch for exactly what
+         * is on screen there (the fade's now-static final frame, not yet
+         * cleared to black) and why that is still the correct frame to
+         * stall on. */
         reset_dialog_render_state();
 
         if (gDebugLevelSelect && (sDelayedWarpOp & WARP_OP_TRIGGERS_LEVEL_SELECT)) {
@@ -1183,6 +1206,80 @@ s32 play_mode_change_level(void) {
     }
 
     if (--sTransitionTimer == -1) {
+        /* Nostr pipeline deferred build, exit flow (spec #96, sub-issue
+         * #146). This is the exit flow's cover frame -- NOT literally
+         * black yet at the instant this code runs, but the first frame at
+         * which nothing is animating, which is what actually matters for
+         * "no visible hitch". Exact picture: sCurrPlayMode switches to
+         * PLAY_MODE_CHANGE_LEVEL (routing update_level() here instead of
+         * play_mode_normal()) on the same frame initiate_delayed_warp()
+         * commits to the level change, which is also the frame whose OWN
+         * render_game() call (area.c) draws the 32-frame WARP_TRANSITION_
+         * FADE_INTO_MARIO fade's LAST frame -- a small Mario-face quad that
+         * has shrunk all the way down to WarpTransitionData's endTexRadius
+         * (16px, its smallest size; earlier fade frames are visibly larger
+         * and still shrinking) -- and sets gWarpTransition.pauseRendering =
+         * TRUE at the end of that same render (the transition type's low
+         * bit is set for FADE_INTO_* transitions). This function's very
+         * first call happens
+         * on the NEXT frame -- sTransitionTimer starts this call at 0
+         * (WARP_TYPE_CHANGE_LEVEL warps never call level_set_transition in
+         * initiate_delayed_warp's default case, so it's still whatever
+         * play_mode_normal left it at) and the decrement immediately below
+         * takes it to -1, firing this whole branch on that very first call.
+         * At THIS point in that frame's update, pauseRendering is already
+         * TRUE but that frame's own render -- the first one to actually
+         * call clear_framebuffer() with the transition's black color
+         * instead of drawing anything -- has not happened yet; the
+         * currently-displayed framebuffer is still the previous frame's
+         * static final-keyhole image. So during the 1-2 frames this
+         * deferred build stalls on, the screen either holds that already-
+         * static keyhole a little longer or is already the black clear --
+         * either way nothing is moving, which is what makes the stall
+         * invisible; it is emphatically NOT the case that literal black is
+         * already on screen the instant this code runs. One frame earlier,
+         * in initiate_delayed_warp (see its own comment above), the fade
+         * animation itself is still mid-motion (a visibly shrinking
+         * keyhole) -- THAT is the frame that must never be stalled on, and
+         * this one is the first frame after it stops moving. Gating to
+         * WARP_OP_STAR_EXIT is a correctness requirement, not just
+         * documentation-locality: play_mode_change_level() is the generic
+         * change-level handler for EVERY level-changing warp (death,
+         * credits, doors, ...), and sDelayedWarpOp is not yet reset to
+         * WARP_OP_NONE at this point (that happens later, in init_level()),
+         * so an unguarded call here would also fire on those other warps.
+         * It would still be a harmless no-op for a normal grab (nothing to
+         * build for any of them), with one documented exception: a GRAND
+         * star grab (interact_star_or_key's grandStar branch) captures here
+         * too but goes straight to ACT_JUMBO_STAR_CUTSCENE, which never
+         * reaches general_star_dance_handler and never itself triggers
+         * WARP_OP_STAR_EXIT (that op has exactly one trigger site, gated
+         * behind the non-grand exit-star dance's own timer-80 case) -- so a
+         * captured-but-never-built grand-star capture CAN be left sitting in
+         * the scheduler's CAPTURED phase indefinitely. Left ungated, some
+         * LATER, unrelated level-changing warp reaching this same branch
+         * would wrongly poll and build that stale capture at completely the
+         * wrong cover frame. The WARP_OP_STAR_EXIT gate prevents that: it is
+         * only ever satisfied by a FRESH real exit-star grab, whose own
+         * interact_star_or_key call already re-captured (superseding any
+         * earlier grand-star leftover) immediately before setting the
+         * dance action that eventually reaches here. The no-exit flow's own
+         * cover frame is completely different (general_star_dance_handler's
+         * enable_time_stop() frame, mario_actions_cutscene.c) and calls the
+         * SAME function there; either way the result lands in the same
+         * sPipelinePendingEvent/sPipelinePendingValid hand-off
+         * star_exit_show_qr()'s pipeline_take_pending_star_event() reads,
+         * several frames from now, once the level has reloaded (the exit
+         * warp's own per-course destination, per WarpNode -- typically back
+         * into the castle) and Mario has landed. A build_event() failure here
+         * (astronomically unlikely, see build_event.h) leaves that hand-off
+         * invalid, so star_exit_show_qr()'s existing fallback (no QR, flow
+         * resumes) degrades exactly as it always has -- just discovered
+         * here, under cover, instead of at grab. */
+        if (sDelayedWarpOp == WARP_OP_STAR_EXIT) {
+            pipeline_build_pending_star_event_if_captured();
+        }
+
         gHudDisplay.flags = HUD_DISPLAY_NONE;
         sTransitionTimer = 0;
         sTransitionUpdate = NULL;
