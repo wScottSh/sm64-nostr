@@ -27,8 +27,9 @@ Canonical serialization (NIP-01), the exact 6-element array the cabinet hashes f
   - `["t","sm64"]` — per-game tag (`gen_event_profile.py --tag`, default `sm64`),
     on-wire (as v2's `TAG`).
   - `["n","<EVENT NAME>"]` — **new in v3**: the promoted `PIPELINE_EVENT_NAME`
-    (charset A-Z/0-9/space, ≤15 chars; `gen_event_profile.py` normalization
-    unchanged). Signed and on-wire; filterable (single-letter key `n`). Retires the
+    (charset A-Z/0-9/space, ≤20 chars as of spec #91 sub-issue #126, raised
+    from ≤15; `gen_event_profile.py` normalization otherwise unchanged).
+    Signed and on-wire; filterable (single-letter key `n`). Retires the
     "never reaches the wire" contract at `tools/gen_event_profile.py:42-51,82-83`.
 - **content** = the run facts, fixed key order (legible star identity kept):
 

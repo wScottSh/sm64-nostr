@@ -17,8 +17,9 @@
  * Format v3 packs the whole self-contained event onto the wire: capture's
  * run fields, CREATED_AT (u32 BE unix seconds), PUBKEY (32 B x-only),
  * TAG_LEN + TAG (0..10 ASCII bytes, the per-game `t` tag), NAME_LEN + NAME
- * (0..15 ASCII bytes, the event-name `n` tag value), and the 64-byte
- * Schnorr signature. `id` is never packed -- the companion recomputes it.
+ * (0..20 ASCII bytes, raised from 0..15 by spec #91 sub-issue #126, the
+ * event-name `n` tag value), and the 64-byte Schnorr signature. `id` is
+ * never packed -- the companion recomputes it.
  * TAG and NAME are the two variable-length fields, in that order, so:
  *   - pipeline_pack()'s output length varies with tagLen/nameLen (the
  *     caller's own build-time lengths); out must be at least

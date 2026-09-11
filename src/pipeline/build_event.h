@@ -73,8 +73,9 @@ typedef struct StarCapture {
 
 /* This build's own packed payload size: format v3's wire layout supports a
  * variable-length per-game tag (0..10 B) and a variable-length event name
- * (0..15 B), but any ONE ROM build only ever bakes and packs its own single
- * tag (PIPELINE_EVENT_TAG_1_VALUE) and single event name (PIPELINE_EVENT_
+ * (0..20 B, raised from 0..15 B by spec #91 sub-issue #126), but any ONE
+ * ROM build only ever bakes and packs its own single tag
+ * (PIPELINE_EVENT_TAG_1_VALUE) and single event name (PIPELINE_EVENT_
  * NAME), both fixed at compile time (PIPELINE_EVENT_TAG_1_LEN,
  * PIPELINE_EVENT_NAME_LEN) -- so PIPELINE_BUILT_PAYLOAD_SIZE below is itself
  * a fixed compile-time constant for this build, derived from the SAME

@@ -14,7 +14,7 @@
     { "name": "TAG_LEN",    "size": 1 },
     { "name": "TAG",        "var_len": true, "len_field": "TAG_LEN", "max_size": 10, "encoding": "ascii" },
     { "name": "NAME_LEN",   "size": 1 },
-    { "name": "NAME",       "var_len": true, "len_field": "NAME_LEN", "max_size": 15, "encoding": "ascii" },
+    { "name": "NAME",       "var_len": true, "len_field": "NAME_LEN", "max_size": 20, "encoding": "ascii" },
     { "name": "SIG",        "size": 64, "encoding": "hex" }
   ]
 }

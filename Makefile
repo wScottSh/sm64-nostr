@@ -344,8 +344,9 @@ endif
 # (PIPELINE_QR_MAX_PAYLOAD_BYTES) and failed the build at compile time
 # (build_event.c's now-removed pipeline_build_event_payload_fits_qr_check).
 # That combined single-frame ceiling is gone: PIPELINE_EVENT_NAME (up to
-# gen_event_profile.py's own EVENT_NAME_MAX_LEN, 15 chars, the HUD glyph
-# budget) and --tag (up to format_descriptor.json's own TAG.max_size, 10 B)
+# gen_event_profile.py's own EVENT_NAME_MAX_LEN, 20 chars as of spec #91
+# sub-issue #126 -- the wire's NAME.max_size, not an independent HUD-derived
+# figure) and --tag (up to format_descriptor.json's own TAG.max_size, 10 B)
 # are each enforced independently; a longer combination simply produces
 # more QR frames (build_event.c's base32/fragment/URL section), never a
 # compile error.
