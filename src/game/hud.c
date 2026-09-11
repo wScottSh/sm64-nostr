@@ -285,10 +285,13 @@ void render_hud_mario_lives(void) {
  * #111) this same value is ALSO folded into the signed NIP-01 ["n",...] tag
  * and packed onto the QR wire -- see event_profile.h.in's own comment --
  * so this render is no longer the value's only consumer, just its local,
- * human-facing one. Right-aligned, growing left, anchored to
- * the vanilla star counter's own right edge
- * (GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(48)) so names of differing lengths
- * share a fixed right edge and never clip. The origin_x subtraction uses
+ * human-facing one. Right-aligned, growing left, anchored at
+ * GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(24) -- 24px (two glyph advances) to
+ * the right of the vanilla star counter's own right edge
+ * (GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(48), this render's original anchor)
+ * so the name reads as properly placed rather than shoved left (spec #91,
+ * sub-issue #125). Names of differing lengths still share this fixed right
+ * edge and never clip. The origin_x subtraction uses
  * PIPELINE_EVENT_NAME_LEN * 12 -- the HUD font's fixed 12px advance per
  * glyph, verified in print.c's render_textrect -- so this constant-folds at
  * build time; render_hud itself stays dumb, a single print_text call.
@@ -313,7 +316,7 @@ void render_hud_mario_lives(void) {
  */
 void render_hud_top_right_corner(void) {
     if (gCurrCourseNum == COURSE_NONE) {
-        print_text(GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(48) - PIPELINE_EVENT_NAME_LEN * 12,
+        print_text(GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(24) - PIPELINE_EVENT_NAME_LEN * 12,
                    HUD_TOP_Y, PIPELINE_EVENT_NAME);
     } else {
         print_text(GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(78), HUD_TOP_Y, "+"); // 'Coin' glyph
