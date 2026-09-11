@@ -281,6 +281,18 @@ PIPELINE_KEYS_DIR             := keys
 PIPELINE_PRIVKEY_FILE         := $(PIPELINE_KEYS_DIR)/event_privkey.hex
 PIPELINE_REGISTRY_FILE        := $(PIPELINE_KEYS_DIR)/registry.md
 PIPELINE_KEY_LABEL            ?= dev-event
+
+# ADR-0006's airgap transport base URL (spec #115, sub-issue #116): a
+# build-time constant every emitted QR frame's URL wraps a fragment around
+# (mirrors PIPELINE_EVENT_NAME's own provisioning immediately below, but
+# with a dev default rather than a fail-closed check -- a build with no
+# real short domain purchased yet (#101) still produces a scannable,
+# structurally valid URL, just one pointed at this placeholder host until
+# the real domain is swapped in with `make PIPELINE_URL_BASE="..."`, no
+# pipeline code change needed). Validated and normalized by
+# gen_event_profile.py's normalize_url_base() (uppercase-folded, restricted
+# to A-Z/0-9/./-).
+PIPELINE_URL_BASE             ?= SM64NOSTR.PAGES.DEV
 PIPELINE_EVENT_PROFILE_H_IN   := include/event_profile.h.in
 PIPELINE_EVENT_PROFILE_H      := $(BUILD_DIR)/include/event_profile.h
 PIPELINE_EVENT_MANIFEST       := $(BUILD_DIR)/include/event_profile.manifest.json
@@ -324,18 +336,19 @@ endif
 # normalize_event_name() -- this check only catches the unset/empty case
 # before that script is ever invoked.
 #
-# NOTE (format v3, spec #109 sub-issue #111): the event name is now a
-# signed, packed-onto-the-wire field (NAME_LEN+NAME, alongside the per-game
-# TAG_LEN+TAG), sharing the single v7-MEDIUM QR symbol's 122 B ceiling
-# (PIPELINE_QR_MAX_PAYLOAD_BYTES) with the fixed 113 B spine and the tag --
-# gen_event_profile.py's own EVENT_NAME_MAX_LEN (15 chars, the HUD glyph
-# budget) is looser than what actually fits under this ceiling once the
-# tag's length is added in (e.g. the default "sm64" 4-byte tag leaves only
-# 5 B of that combined budget for the name). An over-budget combination
-# fails LOUD, at compile time (build_event.c's own
-# pipeline_build_event_payload_fits_qr_check), not silently -- shorten
-# PIPELINE_EVENT_NAME or --tag if you hit it. ADR-0006's multi-frame
-# transport is the intended future fix for this ceiling; out of scope here.
+# NOTE (format v3, spec #109 sub-issue #111): the event name is a signed,
+# packed-onto-the-wire field (NAME_LEN+NAME, alongside the per-game
+# TAG_LEN+TAG). Prior to ADR-0006's multi-frame transport (spec #115,
+# sub-issue #117), a default "sm64" tag plus any event name over ~5 chars
+# overflowed the single v7-MEDIUM QR symbol's 122 B ceiling
+# (PIPELINE_QR_MAX_PAYLOAD_BYTES) and failed the build at compile time
+# (build_event.c's now-removed pipeline_build_event_payload_fits_qr_check).
+# That combined single-frame ceiling is gone: PIPELINE_EVENT_NAME (up to
+# gen_event_profile.py's own EVENT_NAME_MAX_LEN, 15 chars, the HUD glyph
+# budget) and --tag (up to format_descriptor.json's own TAG.max_size, 10 B)
+# are each enforced independently; a longer combination simply produces
+# more QR frames (build_event.c's base32/fragment/URL section), never a
+# compile error.
 ifeq ($(filter clean distclean print-% pipeline-test,$(MAKECMDGOALS)),)
   ifeq ($(strip $(PIPELINE_EVENT_NAME)),)
     $(error PIPELINE_EVENT_NAME is unset/empty: the Nostr pipeline requires a human-readable event name to build (spec #75, sub-issue #76) -- an event ROM must state, honestly and locally, which event it was built for. Pass one on the command line, e.g. make PIPELINE_EVENT_NAME="JAM". The build refuses to produce a nameless binary)
@@ -610,7 +623,16 @@ $(PIPELINE_C99_PORT_O): CFLAGS := $(PIPELINE_C99_CFLAGS)
 # but, like schnorr_adapter.c, only calls its one-shot pipeline_sha256()
 # wrapper and contains no C99-only constructs, so it stays in this "pure"
 # list too.
-PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o $(PIPELINE_C99_PORT_O)
+#
+# base32.o/fragment.o/url.o (spec #115, sub-issue #116) are ADR-0006's
+# airgap transport envelope -- the base32 codec, the fragmenter, and the
+# URL wrapper build_event.c's new frame-emission loop calls, sitting behind
+# qr_adapter.c's pipeline_qr_encode_alphanumeric() exactly like pack_
+# adapter.c/qr_adapter.c already sit in front of the C99 ports above. Each
+# is hand-written C89 (no block-scoped for-loop declarations, no _Bool,
+# no <stdint.h>/<string.h>) and needs no C99, so all three stay in this
+# "pure" list rather than the PIPELINE_C99_PORT_O carve-out.
+PIPELINE_ROM_OBJS := $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/build_event.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/pack_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/qr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/event_id.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/schnorr_adapter.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/capture.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/base32.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/fragment.o $(BUILD_DIR)/$(PIPELINE_SRC_DIR)/url.o $(PIPELINE_C99_PORT_O)
 
 # NOTE: the generated pipeline headers (format_descriptor.h, event_profile.h,
 # secp256k1_baked.h) that pack_adapter.o/build_event.o/event_id.o/
@@ -642,7 +664,7 @@ $(BUILD_DIR)/src/game/hud.o: $(PIPELINE_EVENT_PROFILE_H)
 # recipe (see stamp_rom_registry.py), so a shipped .z64 is always traceable.
 $(PIPELINE_EVENT_PROFILE_H): $(PIPELINE_EVENT_PROFILE_H_IN) $(PIPELINE_PRIVKEY_FILE) $(GEN_EVENT_PROFILE_PY) $(TOOLS_DIR)/nostr_secp256k1.py
 	$(call print,Generating event profile:,$<,$@)
-	$(V)$(PYTHON) $(GEN_EVENT_PROFILE_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_EVENT_PROFILE_H_IN) --out $@ --label $(PIPELINE_KEY_LABEL) --manifest $(PIPELINE_EVENT_MANIFEST) --event-name "$(PIPELINE_EVENT_NAME)"
+	$(V)$(PYTHON) $(GEN_EVENT_PROFILE_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_EVENT_PROFILE_H_IN) --out $@ --label $(PIPELINE_KEY_LABEL) --manifest $(PIPELINE_EVENT_MANIFEST) --event-name "$(PIPELINE_EVENT_NAME)" --url-base "$(PIPELINE_URL_BASE)"
 
 # Format descriptor header: single source of truth for the packed QR
 # payload's field layout, rendered from src/pipeline/format_descriptor.json.

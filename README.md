@@ -20,9 +20,13 @@ operational, not cryptographic: the per-event signing key is injected at build t
 and the binary is never distributed. See `CONTEXT.md` for the domain glossary and the design decisions behind all
 of this.
 
-Scope of this repo is the **ROM only**. The reader (a generic phone camera scans the plaintext-URL QR →
-the website behind the URL re-publishes) and the leaderboard (aggregation, display) are separate,
-out-of-scope efforts. See ADR-0005.
+Scope of this repo was originally the **ROM only** (ADR-0005), with the reader (a generic phone camera scans the
+plaintext-URL QR → the website behind the URL re-publishes) and the leaderboard (aggregation, display) called out
+as separate, out-of-scope efforts. **Superseded in part by spec #115, sub-issue #119** (flagged, not silently
+overridden, per this repo's own ADR-conflict convention): the reader's source now lives in this repo too, under
+`reader/` — a static site (no build step beyond generating its shared wire-format contract, see that directory's
+own files) that a stock phone camera opens directly. The leaderboard remains a genuinely separate, out-of-scope
+effort. See ADR-0005/ADR-0006.
 
 ## The pipeline
 

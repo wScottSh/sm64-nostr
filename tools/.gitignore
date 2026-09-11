@@ -9,6 +9,8 @@
 /vadpcm_enc
 /pipeline_test/pipeline_test
 /pipeline_test/pipeline_test.exe
+/pipeline_test/gen_reader_fixture
+/pipeline_test/gen_reader_fixture.exe
 # Ad hoc `npm install` target for the one-off independent-oracle scripts
 # (reference_event_id.js, verify_schnorr_reference.js) -- deliberately not
 # committed/vendored, since these are one-off oracle runs, not a build

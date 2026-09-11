@@ -225,7 +225,17 @@ static void deinterleave(const qhd_u8 *codewords, int rawCodewords, int numBlock
     (void)dataCodewords;
 }
 
-int qr_host_decode(const unsigned char *qrcode, unsigned char *out, int outCap, int *outLen)
+/*
+ * Shared structural preamble (spec #115, sub-issue #116): everything up to
+ * "recovered raw data codewords, mask-unapplied and de-interleaved" is
+ * identical regardless of which segment mode produced the bits -- only the
+ * final bitstream interpretation (BYTE vs. ALPHANUMERIC) differs. Factored
+ * out so qr_host_decode()/qr_host_decode_alphanumeric() share it instead of
+ * duplicating the qrsize/table/format-bits/zigzag/de-interleave dance.
+ * Returns nonzero (true) and fills dataBytes[0 : PIPELINE_QR_DATA_CODEWORDS]
+ * on success; returns 0 (false) on any structural mismatch.
+ */
+static int decodeToDataBytes(const unsigned char *qrcode, qhd_u8 dataBytes[PIPELINE_QR_DATA_CODEWORDS])
 {
     int qrsize = pipeline_qr_get_size(qrcode);
     int version = PIPELINE_QR_VERSION;
@@ -233,8 +243,6 @@ int qr_host_decode(const unsigned char *qrcode, unsigned char *out, int outCap, 
     int rawCodewords, dataCodewords, numBlocks, blockEccLen;
     enum qrcodegen_Mask mask;
     qhd_u8 codewords[qrcodegen_BUFFER_LEN_FOR_VERSION(PIPELINE_QR_VERSION)];
-    qhd_u8 dataBytes[PIPELINE_QR_DATA_CODEWORDS];
-    int bitPos, mode, numChars, i;
 
     if (qrsize != PIPELINE_QR_MODULE_SIZE) {
         return 0;
@@ -262,6 +270,17 @@ int qr_host_decode(const unsigned char *qrcode, unsigned char *out, int outCap, 
     }
     readCodewordsZigzag(qrcode, qrsize, mask, codewords, rawCodewords);
     deinterleave(codewords, rawCodewords, numBlocks, blockEccLen, dataCodewords, dataBytes);
+    return 1;
+}
+
+int qr_host_decode(const unsigned char *qrcode, unsigned char *out, int outCap, int *outLen)
+{
+    qhd_u8 dataBytes[PIPELINE_QR_DATA_CODEWORDS];
+    int bitPos, mode, numChars, i;
+
+    if (!decodeToDataBytes(qrcode, dataBytes)) {
+        return 0;
+    }
 
     // Parse the bitstream: 4-bit mode indicator, then an 8-bit byte-mode
     // character count (versions 1-9), then numChars data bytes -- exactly
@@ -280,7 +299,7 @@ int qr_host_decode(const unsigned char *qrcode, unsigned char *out, int outCap, 
         numChars = (numChars << 1) | bit;
         bitPos++;
     }
-    if (numChars > outCap || (bitPos + numChars * 8) > dataCodewords * 8) {
+    if (numChars > outCap || (bitPos + numChars * 8) > PIPELINE_QR_DATA_CODEWORDS * 8) {
         return 0;
     }
     for (i = 0; i < numChars; i++) {
@@ -294,5 +313,86 @@ int qr_host_decode(const unsigned char *qrcode, unsigned char *out, int outCap, 
         out[i] = (unsigned char)byteVal;
     }
     *outLen = numChars;
+    return 1;
+}
+
+/*
+ * QR Model 2's fixed 45-character alphanumeric charset (spec #115,
+ * sub-issue #116), in encoding order (index 0-44) -- the QR spec's own
+ * table, duplicated here rather than shared, for the identical reason the
+ * ECC_CODEWORDS_PER_BLOCK/NUM_ERROR_CORRECTION_BLOCKS tables above are
+ * duplicated instead of reaching into qrcodegen.c's file-static internals
+ * (see this file's own header comment): a real-world QR reader would
+ * equally have to know this fixed spec table itself, not reach into this
+ * project's encoder.
+ */
+static const char ALPHANUMERIC_CHARSET[45] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+#define ALPHANUMERIC_CHARSET_LEN 45
+
+// Returns the bit width of the ALPHANUMERIC character-count field at the
+// given version (9/11/13 for versions 1-9/10-26/27-40 -- mirrors
+// qrcodegen.c's own alphanumericCharCountBits(), duplicated for the same
+// file-static-hiding reason as the charset table above).
+static int alphanumericCharCountBits(int version)
+{
+    static const int temp[] = { 9, 11, 13 };
+    return temp[(version + 7) / 17];
+}
+
+int qr_host_decode_alphanumeric(const unsigned char *qrcode, unsigned char *outText, int outCap, int *outTextLen)
+{
+    qhd_u8 dataBytes[PIPELINE_QR_DATA_CODEWORDS];
+    int bitPos, mode, ccbits, numChars, i;
+
+    if (!decodeToDataBytes(qrcode, dataBytes)) {
+        return 0;
+    }
+
+    bitPos = 0;
+    mode = (dataBytes[0] >> 4) & 0xF;
+    if (mode != 0x2 /* qrcodegen_Mode_ALPHANUMERIC */) {
+        return 0;
+    }
+    bitPos += 4;
+
+    ccbits = alphanumericCharCountBits(PIPELINE_QR_VERSION);
+    numChars = 0;
+    for (i = 0; i < ccbits; i++) {
+        int bit = (dataBytes[bitPos >> 3] >> (7 - (bitPos & 7))) & 1;
+        numChars = (numChars << 1) | bit;
+        bitPos++;
+    }
+
+    if (numChars > outCap) {
+        return 0;
+    }
+    {
+        long bitsNeeded = 11L * (numChars / 2) + (numChars % 2 != 0 ? 6 : 0);
+        if ((long)bitPos + bitsNeeded > (long)PIPELINE_QR_DATA_CODEWORDS * 8L) {
+            return 0;
+        }
+    }
+
+    for (i = 0; i + 1 < numChars; i += 2) {
+        int b, v = 0;
+        for (b = 0; b < 11; b++) {
+            int bit = (dataBytes[bitPos >> 3] >> (7 - (bitPos & 7))) & 1;
+            v = (v << 1) | bit;
+            bitPos++;
+        }
+        outText[i]     = (unsigned char)ALPHANUMERIC_CHARSET[v / ALPHANUMERIC_CHARSET_LEN];
+        outText[i + 1] = (unsigned char)ALPHANUMERIC_CHARSET[v % ALPHANUMERIC_CHARSET_LEN];
+    }
+    if (numChars % 2 != 0) {
+        int b, v = 0;
+        for (b = 0; b < 6; b++) {
+            int bit = (dataBytes[bitPos >> 3] >> (7 - (bitPos & 7))) & 1;
+            v = (v << 1) | bit;
+            bitPos++;
+        }
+        outText[numChars - 1] = (unsigned char)ALPHANUMERIC_CHARSET[v];
+    }
+
+    *outTextLen = numChars;
     return 1;
 }

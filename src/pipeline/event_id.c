@@ -163,7 +163,8 @@ pipeline_u32 pipeline_event_serialize_from_fields(const pipeline_u8 pubkey[PIPEL
     offset = append_udec(out, offset, cap, createdAt);
     offset = append_str(out, offset, cap, ",");
     offset = append_udec(out, offset, cap, (pipeline_u32)PIPELINE_EVENT_KIND);
-    /* TAG_0 is always the format-v2-pinned constant PIPELINE_EVENT_TAG0_VALUE
+    /* TAG_0 is always the wire-format-pinned (identical across v2 and v3)
+     * constant PIPELINE_EVENT_TAG0_VALUE
      * ("ag-lb", never a parameter -- see this function's header comment in
      * event_id.h and PIPELINE_EVENT_KIND/PIPELINE_EVENT_TAG_KEY/
      * PIPELINE_EVENT_TAG0_VALUE's own definitions there, the single source

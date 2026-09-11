@@ -25,11 +25,15 @@
  * against the OLD v1 payload (75 B), to isolate it from the wire-format
  * change; sub-issue #54 then landed format v2 itself (112-122 B), and
  * spec #109/sub-issue #110 has since landed format v3's NAME_LEN/NAME
- * field on top (113-138 B; a near-max-length tag+name build exceeds this
- * single-symbol ceiling, see PIPELINE_QR_MAX_PAYLOAD_BYTES's own comment
- * below), so this symbol's geometry/mask choice is now shared by all three
- * (docs/qr-handoff-spec.md, docs/research/qr-density-tradeoffs.md,
- * docs/format-v3-spec.md).
+ * field on top (113-138 B), so this symbol's geometry/mask choice is now
+ * shared by all three (docs/qr-handoff-spec.md,
+ * docs/research/qr-density-tradeoffs.md, docs/format-v3-spec.md). A near-
+ * max-length tag+name build no longer needs to fit any one QR symbol's
+ * capacity at all: ADR-0006's multi-frame transport (spec #115, sub-issue
+ * #117) retired the total-payload ceiling this comment used to describe --
+ * see PIPELINE_QR_MAX_PAYLOAD_BYTES's own comment below for what that
+ * constant still means (a per-call BYTE-mode encode budget, not a build-
+ * wide cap).
  *
  * getNumDataCodewords(7, MEDIUM) = getNumRawDataModules(7)/8 -
  * ECC_CODEWORDS_PER_BLOCK[MEDIUM][7] * NUM_ERROR_CORRECTION_BLOCKS[MEDIUM][7]
@@ -78,22 +82,44 @@
  * payload + terminator/padding): 124 bytes. See the file header comment. */
 #define PIPELINE_QR_DATA_CODEWORDS 124
 
-/* Usable BYTE-mode payload capacity after the mandatory 4-bit mode
- * indicator + 8-bit character count header: 122 bytes. See the derivation
- * in the file header comment above. This is the real over-budget boundary
- * payloads are rejected against. This build's own format v3 payload
- * (113 B fixed spine + TAG_LEN + NAME_LEN -- e.g. 121 B for the 4-byte
- * "sm64" tag and a 4-byte event name; the name is a required, signed,
- * on-wire field as of sub-issue #111, never zero-length -- see
- * build_event.h's PIPELINE_BUILT_PAYLOAD_SIZE comment) sits comfortably
- * under it; format v3's own worst case (TAG_LEN=10, NAME_LEN=15,
- * PIPELINE_FMT_MAX_TOTAL_SIZE = 138 B) exceeds this single-symbol ceiling
- * -- capacity is no longer meant to bound field widths (docs/format-v3-spec.md
- * §2, ADR-0006's multi-frame transport is the intended answer for a
- * near-max-length tag+name build), so any ONE build's actual packed size
- * must stay <= this ceiling, which the compile-time fits-QR guard
- * (build_event.c, `<=`) enforces per-build. */
+/* Usable BYTE-mode payload capacity of a single version 7, ECC MEDIUM QR
+ * symbol, after the mandatory 4-bit mode indicator + 8-bit character count
+ * header: 122 bytes. See the derivation in the file header comment above.
+ * This is the real over-budget boundary a single pipeline_qr_encode() call
+ * rejects against (qr_adapter.c) -- PER CALL, PER SYMBOL geometry, not a
+ * build-wide total-payload cap: format v3's packed payload
+ * (PIPELINE_BUILT_PAYLOAD_SIZE, 113-138 B depending on this build's own
+ * tag/name lengths) is no longer QR-encoded directly via this BYTE-mode
+ * path or bounded by this constant at all (ADR-0006's multi-frame
+ * transport, spec #115, sub-issue #117, retired that ceiling -- the packed
+ * payload is base32-encoded, fragmented, and URL-wrapped into N
+ * ALPHANUMERIC-mode frames instead; see PIPELINE_QR_ALNUM_MAX_CHARS below
+ * and build_event.c). pipeline_qr_encode() itself (BYTE mode) remains a
+ * real, independently useful seam -- exercised directly by the host test
+ * tool's own round-trip tests -- so this constant and its rejection
+ * boundary stay exactly as they always were for that one call. */
 #define PIPELINE_QR_MAX_PAYLOAD_BYTES 122
+
+/*
+ * Usable ALPHANUMERIC-mode character capacity of a version 7, ECC MEDIUM QR
+ * Code (spec #115, sub-issue #116 -- ADR-0006's airgap transport wraps
+ * every fragment as a plaintext URL, which rides this denser mode rather
+ * than BYTE): after the mandatory 4-bit mode indicator + 9-bit alphanumeric
+ * character-count header (versions 1-9), 992 - 13 = 979 data bits remain.
+ * Alphanumeric mode packs 2 characters per 11 bits (a lone trailing
+ * character costs 6 bits): floor(979 / 11) = 89 pairs uses exactly 979
+ * bits (89*11 == 979) with 0 bits left over for a trailing single
+ * character (which would need 6 more), so the maximum is exactly 89*2 =
+ * 178 characters -- confirmed empirically against this exact encoder: 178
+ * chars round-trips, 179 is cleanly rejected. This bounds the URL text
+ * (scheme + PIPELINE_URL_BASE + path separator + fragment) build_event.c
+ * QR-encodes per frame, not the packed-payload byte budget above (a
+ * different mode, a different ceiling, and per ADR-0006 no longer a total-
+ * payload ceiling at all -- see this header's own comment on
+ * PIPELINE_QR_MAX_PAYLOAD_BYTES for why that one stays BYTE-mode-only and
+ * per-call, not a build-wide total).
+ */
+#define PIPELINE_QR_ALNUM_MAX_CHARS 178
 
 /*
  * pipeline_qr_encode: encodes payload[0 : payloadLen] as a fixed-version-7/
@@ -108,6 +134,22 @@
  */
 int pipeline_qr_encode(const pipeline_u8 *payload, pipeline_u32 payloadLen,
                         pipeline_u8 out[PIPELINE_QR_BUFFER_LEN]);
+
+/*
+ * pipeline_qr_encode_alphanumeric: encodes text[0 : textLen] as a fixed-
+ * version-7/ECC-MEDIUM, ALPHANUMERIC-mode QR Code, with the same single
+ * fixed mask (PIPELINE_QR_MASK) as pipeline_qr_encode() above, into out.
+ * text must contain only the QR alphanumeric charset (0-9, A-Z, space,
+ * $ % * + - . / :) -- ADR-0006's URL-wrapped fragment text (url.h) always
+ * does, by construction.
+ *
+ * Returns nonzero (true) on success. Returns 0 (false) -- writing nothing
+ * usable to out -- if textLen exceeds PIPELINE_QR_ALNUM_MAX_CHARS or text
+ * contains a non-alphanumeric-charset byte. Callers must check the return
+ * value.
+ */
+int pipeline_qr_encode_alphanumeric(const pipeline_u8 *text, pipeline_u32 textLen,
+                                     pipeline_u8 out[PIPELINE_QR_BUFFER_LEN]);
 
 /* Thin pass-throughs to qrcodegen_getSize/qrcodegen_getModule, so callers
  * outside src/pipeline never need to name those functions directly -- note

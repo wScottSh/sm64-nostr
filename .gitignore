@@ -85,3 +85,9 @@ __pycache__/
 /tools/pipeline_test/build/
 /tools/pipeline_test/pipeline_test
 /tools/pipeline_test/pipeline_test.exe
+
+# Worst-case tag+name host test binary/generated headers (spec #115,
+# sub-issue #117) -- see tools/pipeline_test/Makefile's own comment.
+/tools/pipeline_test/build-worstcase/
+/tools/pipeline_test/pipeline_test_worstcase
+/tools/pipeline_test/pipeline_test_worstcase.exe

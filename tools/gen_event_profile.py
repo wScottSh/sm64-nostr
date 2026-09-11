@@ -113,6 +113,22 @@ EVENT_NAME_ALLOWED_CHARS = frozenset(
 # constants stay in sync.
 EVENT_NAME_MAX_LEN = 15
 
+# ADR-0006's airgap transport base URL (spec #115, sub-issue #116):
+# uppercase-folded (mirroring EVENT_NAME_ALLOWED_CHARS' own fold-then-check
+# shape), restricted to A-Z, 0-9, `.`, and `-` -- a domain-name-shaped
+# charset, all of which is already inside the QR alphanumeric charset
+# (0-9 A-Z space $ % * + - . / :) untouched, so url.h never needs to
+# re-validate it. No length cap here: build_event.c's own compile-time
+# pipeline_build_event_fragment_budget_check is the real, loud-not-silent
+# guard against a PIPELINE_URL_BASE too long to leave room for even one
+# base32 character per QR frame.
+URL_BASE_ALLOWED_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")
+
+# Dev default (never fail-closed, unlike --event-name): a build with no
+# real short domain purchased yet (#101) still produces a scannable,
+# structurally valid URL pointed at this placeholder host.
+URL_BASE_DEFAULT = "SM64NOSTR.PAGES.DEV"
+
 # Path to the single JSON source of truth for the wire layout (spec #52,
 # sub-issue #54; format v3 NAME field, spec #109 sub-issue #110) -- this
 # script reads TAG's and NAME's own "max_size" from there rather than
@@ -192,6 +208,34 @@ def normalize_event_name(raw):
     return folded
 
 
+def normalize_url_base(raw):
+    """Validate and normalize --url-base (spec #115, sub-issue #116):
+    uppercase-fold a-z->A-Z, then accept only A-Z/0-9/./-, mirroring
+    normalize_event_name()'s own shape. Returns the normalized string, or
+    raises ValueError naming the offending character -- never silently
+    drops a bad character. Length is NOT capped here (see
+    URL_BASE_ALLOWED_CHARS' own comment for why); an over-long value fails
+    at C compile time instead, in build_event.c's own guard.
+    """
+    if not raw or not raw.strip():
+        raise ValueError(
+            "--url-base must not be empty or all-whitespace -- every emitted "
+            "QR frame's URL wraps a fragment around this base URL"
+        )
+
+    folded = "".join(ch.upper() if "a" <= ch <= "z" else ch for ch in raw)
+
+    for ch in folded:
+        if ch not in URL_BASE_ALLOWED_CHARS:
+            raise ValueError(
+                "--url-base %r contains %r, outside the allowed A-Z, 0-9, "
+                "'.', '-' charset (checked after uppercase-folding a-z->A-Z) "
+                "-- this character is rejected, never silently dropped" % (raw, ch)
+            )
+
+    return folded
+
+
 def resolve_commit_sha(explicit):
     if explicit:
         return explicit
@@ -233,6 +277,16 @@ def main():
     )
     ap.add_argument("--commit", default=None)
     ap.add_argument("--created-at", type=int, default=None)
+    ap.add_argument(
+        "--url-base",
+        default=URL_BASE_DEFAULT,
+        help="ADR-0006 airgap transport base URL (spec #115, sub-issue #116); "
+        "build-time constant every emitted QR frame's URL wraps a fragment "
+        "around. Defaults to %r (a dev placeholder host) -- never fail-closed, "
+        "unlike --event-name; swap in the real short domain (#101) once "
+        "purchased, no pipeline code change needed. Uppercase-folded, "
+        "restricted to A-Z/0-9/./- after folding." % URL_BASE_DEFAULT,
+    )
     ap.add_argument(
         "--tag",
         default="sm64",
@@ -313,6 +367,12 @@ def main():
         sys.stderr.write("gen_event_profile.py: FATAL: %s\n" % e)
         return 1
 
+    try:
+        url_base = normalize_url_base(args.url_base)
+    except ValueError as e:
+        sys.stderr.write("gen_event_profile.py: FATAL: %s\n" % e)
+        return 1
+
     pubkey_hex = pubkey_bytes.hex()
     npub = secp.npub_from_xonly_pubkey(pubkey_bytes)
     created_at = args.created_at if args.created_at is not None else int(time.time())
@@ -331,6 +391,7 @@ def main():
         .replace("@PRIVKEY_BYTES@", privkey_bytes_literal)
         .replace("@GAME_TAG@", args.tag)
         .replace("@EVENT_NAME@", event_name)
+        .replace("@URL_BASE@", url_base)
     )
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
@@ -342,6 +403,7 @@ def main():
         {
             "label": args.label,
             "event_name": event_name,
+            "url_base": url_base,
             "pubkey_hex": pubkey_hex,
             "npub": npub,
             "created_at": created_at,

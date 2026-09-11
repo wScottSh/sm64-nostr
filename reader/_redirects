@@ -1,0 +1,13 @@
+# Cloudflare Pages SPA fallback (spec #115, sub-issue #119). Every emitted
+# frame's URL is HTTPS://<PIPELINE_URL_BASE>/<fragment> (transport_contract.h) --
+# a path with no matching static file, since the "page" the URL is
+# addressing is always index.html, not a real per-fragment resource. This
+# rewrite makes ANY path under this site's root resolve to index.html (still
+# HTTP 200, not a redirect a phone's camera-triggered browser navigation
+# would otherwise show as a dead link), so opening any single frame's URL
+# boots the reader page exactly as ADR-0006/spec #115's acceptance criteria
+# require. PIPELINE_URL_BASE's own dev default (SM64NOSTR.PAGES.DEV) is a
+# literal Cloudflare Pages domain, which is what this file's format targets;
+# swapping to a different host (a real domain, #101) may need an equivalent
+# rewrite rule in that host's own config instead.
+/* /index.html 200

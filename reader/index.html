@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>sm64-nostr airgap reader</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font:16px/1.4 system-ui, sans-serif; background:#111; color:#eee; }
+  header { padding:12px 16px; background:#1b1b1b; border-bottom:1px solid #333; }
+  header h1 { font-size:16px; margin:0 0 4px; }
+  header p { margin:0; color:#aaa; font-size:13px; }
+  main { padding:16px; max-width:720px; margin:0 auto; }
+  .card { background:#1b1b1b; border:1px solid #333; border-radius:10px; padding:16px; margin:0 0 16px; }
+  button { font:inherit; padding:12px 18px; border-radius:8px; border:0; background:#3b82f6; color:#fff; cursor:pointer; }
+  a { color:#60a5fa; }
+  #video { width:100%; border-radius:8px; background:#000; }
+  .stat { font-variant-numeric:tabular-nums; }
+  .ok { color:#34d399; } .bad { color:#f87171; } .warn { color:#fbbf24; }
+  .frames { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .frames span { min-width:26px; height:26px; padding:0 4px; display:grid; place-items:center; border-radius:6px; background:#374151; font-size:12px; }
+  .frames span.got { background:#059669; }
+  pre { white-space:pre-wrap; word-break:break-all; background:#0d0d0d; padding:10px; border-radius:6px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>sm64-nostr airgap reader</h1>
+  <p>Opened from a star-grab QR (spec #115, ADR-0005/ADR-0006). Decodes and broadcasts only -- it
+     reconstructs nothing signed.</p>
+</header>
+<main>
+  <div class="card">
+    <p id="status" class="warn">Tap Start to grab the camera (a user gesture is required).</p>
+    <button id="start">Start camera</button>
+    <video id="video" playsinline muted style="display:none"></video>
+    <div id="progress" style="display:none">
+      <p class="stat">Frames captured: <span id="got" class="ok">0</span> / <span id="tot">?</span></p>
+      <div class="frames" id="grid"></div>
+    </div>
+    <div id="done" style="display:none">
+      <p class="ok"><b>&#10003; Reassembled and broadcast.</b></p>
+      <pre id="result"></pre>
+    </div>
+    <div id="err" style="display:none"><p class="bad" id="errText"></p></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"
+        integrity="sha384-b5Ya4Bq3qCyz39m2ISh+4DxjAIljdeFwK/BsXLuj9gugaNwAcj/ia15fxNZL9Nlx"
+        crossorigin="anonymous"></script>
+<script type="module">
+/*
+ * DEPLOY NOTE (spec #115, sub-issue #119): './generated/transport_contract.js'
+ * below does not exist in this directory as checked into git -- like the
+ * ROM build's own generated format_descriptor.h/event_profile.h, it is a
+ * GENERATED, gitignored artifact (reader/.gitignore), never hand-edited or
+ * committed, so it can never drift from the single-source
+ * transport_contract.h/event_id.h/format_descriptor.json it's rendered
+ * from. Before serving this directory from anywhere (a local static
+ * server, Cloudflare Pages, gh-pages, ...), run `npm run build` (or
+ * `npm run generate`) in this directory to produce it -- `npm test`'s own
+ * "pretest" script already does this before running reader/test/, so a
+ * green test run always implies this file exists, but a bare static-file
+ * deploy of reader/ with no build step will 404 on this import and the
+ * page will not function at all.
+ */
+import { reassembleFrames, base32Decode, decodeToBroadcastEvent, buildRelayMessage,
+         parseFragmentHeader, stripUrl } from './reader.js';
+import { TRANSPORT_CONTRACT } from './generated/transport_contract.js';
+
+/*
+ * Relay this reader broadcasts to (spec #115, sub-issue #119: "broadcasts
+ * to a configured relay"; relay selection/verification is downstream,
+ * ADR-0005, out of this ticket's scope, so this is a plain build-time
+ * constant, not user-overridable -- an overridable relay would let a
+ * crafted link redirect the broadcast).
+ */
+const RELAY_URL = 'wss://relay.damus.io';
+
+// This reader's own base URL (transport_contract.h's URL template is
+// HTTPS://<PIPELINE_URL_BASE>/<fragment> -- PIPELINE_URL_BASE is always
+// uppercase and has no path component, so this reader's own host,
+// uppercased, is exactly the baseUrl every scanned frame's URL was wrapped
+// around). See url.h's own pipeline_url_strip() contract, which stripUrl()
+// in reader.js ports. This assumes the deployed host is reached at EXACTLY
+// PIPELINE_URL_BASE (the build-time constant baked into the cabinet's
+// frames) -- a preview/staging subdomain or a "www." prefix would compute
+// a different BASE_URL here and every frame would be silently dropped as
+// "not our prefix" (see FRAME_URL_PREFIX below); production deploys must
+// serve this page at that exact host.
+const BASE_URL = location.host.toUpperCase();
+const FRAME_URL_PREFIX = TRANSPORT_CONTRACT.PIPELINE_URL_SCHEME + BASE_URL
+  + TRANSPORT_CONTRACT.PIPELINE_URL_PATH_SEP;
+
+const statusEl = document.getElementById('status');
+const video = document.getElementById('video');
+const canvas = document.createElement('canvas');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+const scannedUrls = new Set();
+let raf = null;
+
+function setError(msg) {
+  statusEl.className = 'bad';
+  statusEl.textContent = msg;
+  document.getElementById('err').style.display = 'block';
+  document.getElementById('errText').textContent = msg;
+}
+
+/*
+ * scanIndex: this URL's own fragment-header index, via the SAME
+ * stripUrl()/parseFragmentHeader() the real reassembler uses -- never a
+ * hand-inlined re-parse of the wire format. Returns null for a URL that
+ * doesn't parse (camera noise, or a bootstrap open with no fragment at
+ * all), so callers can ignore it rather than crash the scan loop.
+ */
+function scanIndex(url) {
+  try {
+    return parseFragmentHeader(stripUrl(url, BASE_URL)).index;
+  } catch {
+    return null;
+  }
+}
+
+function renderGrid(count) {
+  if (!count) return;
+  const grid = document.getElementById('grid');
+  if (grid.children.length !== count) {
+    grid.innerHTML = '';
+    for (let i = 0; i < count; i++) {
+      const s = document.createElement('span');
+      s.textContent = i;
+      grid.appendChild(s);
+    }
+    document.getElementById('tot').textContent = count;
+  }
+  let got = 0;
+  for (const url of scannedUrls) {
+    const idx = scanIndex(url);
+    if (idx !== null && grid.children[idx]) {
+      grid.children[idx].classList.add('got');
+      got++;
+    }
+  }
+  document.getElementById('got').textContent = got;
+}
+
+/*
+ * addScannedUrl: records url (if it's a well-formed frame for THIS base
+ * URL) and checks for completion. Shared by the N=1 bootstrap-from-location
+ * path below and the camera scan loop's tick(), so both go through the
+ * identical reassembleFrames()/renderGrid() logic.
+ */
+function addScannedUrl(url) {
+  if (scannedUrls.has(url)) {
+    return false;
+  }
+  scannedUrls.add(url);
+  try {
+    const { complete, count } = reassembleFrames([...scannedUrls], BASE_URL);
+    renderGrid(count);
+    return complete;
+  } catch (e) {
+    // reassembleFrames() throws when the accumulated set is internally
+    // inconsistent (an interleaved-broadcast collision -- see that
+    // function's own header comment on what it can/can't detect). We
+    // cannot tell whether the JUST-scanned url or something already in
+    // scannedUrls is the stale half of that collision, so keeping the old
+    // set and only dropping the new url risks wedging permanently if the
+    // CRT has moved on to a different star's frames mid-scan. Instead,
+    // reset entirely and start a fresh accumulation seeded with only this
+    // url -- guaranteeing forward progress (a real single scan can never
+    // be internally inconsistent with itself) at the cost of restarting
+    // the grid if this really was just one garbled frame.
+    scannedUrls.clear();
+    scannedUrls.add(url);
+    document.getElementById('grid').innerHTML = ''; // force a fresh grid on the next renderGrid() call
+    try {
+      const fresh = reassembleFrames([...scannedUrls], BASE_URL);
+      renderGrid(fresh.count);
+      return fresh.complete;
+    } catch {
+      return false; // even a single fresh scan somehow doesn't parse -- keep looking
+    }
+  }
+}
+
+async function broadcast(event) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(RELAY_URL);
+    const timeout = setTimeout(() => { ws.close(); reject(new Error('relay publish timed out')); }, 10000);
+    ws.onopen = () => ws.send(buildRelayMessage(event));
+    ws.onmessage = (msg) => {
+      try {
+        const parsed = JSON.parse(msg.data);
+        // NIP-01: ["OK", <event id>, <true|false>, <message>] -- a
+        // relay-assigned id match with a FALSE accepted flag is a
+        // rejection (e.g. "invalid: bad sig"), never success.
+        if (parsed[0] === 'OK' && parsed[1] === event.id) {
+          clearTimeout(timeout);
+          ws.close();
+          if (parsed[2] === true) {
+            resolve(parsed);
+          } else {
+            reject(new Error(`relay rejected the event: ${parsed[3] ?? '(no message)'}`));
+          }
+        }
+      } catch { /* not our OK frame; keep waiting */ }
+    };
+    ws.onerror = (e) => { clearTimeout(timeout); reject(e); };
+  });
+}
+
+async function finish() {
+  cancelAnimationFrame(raf);
+  (video.srcObject?.getTracks() || []).forEach((t) => t.stop());
+  document.getElementById('start').style.display = 'none';
+
+  const { complete, base32Text } = reassembleFrames([...scannedUrls], BASE_URL);
+  if (!complete) return; // shouldn't happen: callers only reach finish() once complete
+
+  const packedBytes = base32Decode(base32Text);
+  const event = decodeToBroadcastEvent(packedBytes);
+
+  document.getElementById('progress').style.display = 'none';
+  document.getElementById('done').style.display = 'block';
+  document.getElementById('result').textContent = `id: ${event.id}\n\n` + JSON.stringify(event, null, 2);
+
+  try {
+    await broadcast(event);
+    document.getElementById('result').textContent += '\n\nbroadcast OK to ' + RELAY_URL;
+  } catch (e) {
+    document.getElementById('result').textContent += '\n\nbroadcast FAILED: ' + e;
+  }
+}
+
+function tick() {
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+    if (code && code.data && code.data.startsWith(FRAME_URL_PREFIX)) {
+      if (addScannedUrl(code.data)) {
+        return finish();
+      }
+    }
+  }
+  raf = requestAnimationFrame(tick);
+}
+
+async function startCamera() {
+  try {
+    if (!location.protocol.startsWith('https') && location.hostname !== 'localhost') {
+      setError('Not HTTPS -- getUserMedia will be blocked. Serve this over HTTPS.');
+      return;
+    }
+    statusEl.textContent = 'Requesting camera...';
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    video.srcObject = stream;
+    await video.play();
+    video.style.display = 'block';
+    document.getElementById('start').style.display = 'none';
+    document.getElementById('progress').style.display = 'block';
+    statusEl.className = 'ok';
+    statusEl.textContent = 'Camera live. Point it at the cycling QR.';
+    tick();
+  } catch (e) {
+    setError(`getUserMedia FAILED: ${e.name} -- ${e.message}`);
+  }
+}
+
+document.getElementById('start').onclick = startCamera;
+
+/*
+ * ADR-0006's N=1 path: "no camera-permission prompt or active hold" --
+ * whichever single frame's URL a stock camera opened THIS page from
+ * (location.pathname) is itself the first (and, for N=1, only) fragment.
+ * Reconstruct that URL and feed it through the exact same addScannedUrl()
+ * path a camera scan would, BEFORE ever touching getUserMedia: if it
+ * alone completes the set (the common N=1 case), finish immediately with
+ * zero camera grant. For N>1 it seeds one fragment for free and the Start
+ * button (a real camera scan) is still needed for the rest. A bootstrap
+ * open with no fragment in the path (e.g. someone navigating to the bare
+ * site root) fails to parse and is silently ignored here -- the ordinary
+ * Start-camera flow still works.
+ */
+(function bootstrapFromLocation() {
+  // Reuse FRAME_URL_PREFIX (scheme + host + PATH_SEP) rather than re-joining
+  // the pieces, so the path separator stays single-sourced; location.pathname
+  // always begins with "/", which slice(1) drops to avoid doubling PATH_SEP.
+  const openedUrl = FRAME_URL_PREFIX + location.pathname.slice(1);
+  if (!openedUrl.startsWith(FRAME_URL_PREFIX)) return;
+  if (addScannedUrl(openedUrl)) {
+    statusEl.className = 'ok';
+    statusEl.textContent = 'Single-frame payload -- broadcasting with no camera needed.';
+    finish();
+  } else if (scannedUrls.size > 0) {
+    statusEl.textContent = 'Captured 1 frame from this link. Tap Start to scan the rest.';
+    document.getElementById('progress').style.display = 'block';
+  }
+})();
+</script>
+</body>
+</html>

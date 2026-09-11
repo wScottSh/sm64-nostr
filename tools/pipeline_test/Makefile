@@ -112,14 +112,32 @@
 # must be present or gen_event_profile.py now refuses to run.
 #
 # Spec #109 sub-issue #111 promotes the event name to a signed on-wire tag,
-# packed onto the wire alongside the per-game tag within the SAME v7-MEDIUM
-# single-QR-symbol budget (PIPELINE_QR_MAX_PAYLOAD_BYTES, 122 B -- ADR-0006's
-# multi-frame transport that lifts this ceiling is out of scope for #109;
-# see build_event.c's own compile-time fits-QR check). With TAG_1_VALUE
-# fixed at "sm64" (4 B) here, the value below was shortened from the
-# pre-#111 "HOST TEST" (9 B) to "TEST" (4 B) so 113 (FIXED_SIZE) + 4 (TAG) +
-# 4 (NAME) = 121 B stays under that ceiling -- purely a host-test fixture
-# choice, not a wire-format constant.
+# packed onto the wire alongside the per-game tag. Prior to ADR-0006's
+# multi-frame transport (spec #115, sub-issue #117), both fields shared the
+# SAME v7-MEDIUM single-QR-symbol budget (PIPELINE_QR_MAX_PAYLOAD_BYTES,
+# 122 B), which is why the fixture value below was shortened from the
+# pre-#111 "HOST TEST" (9 B) to "TEST" (4 B) -- that combined single-frame
+# ceiling is now retired (build_event.c's fits-QR compile-time check is
+# gone; a longer tag+name combination just emits more frames), so "TEST"
+# stays purely a small, readable host-test fixture choice, not a
+# ceiling-driven one.
+#
+# Spec #115 sub-issue #118 adds ../../src/game/qr_cycle.c -- the star-
+# capture overlay's frame-cycling PURE core (the (frameCount, tick) ->
+# frameIndex selector). Compiled here unmodified, exactly like qr_render.c/
+# qr_display.c above; the N64 shell half (qr_display_n64.c's cycling glue)
+# is deliberately excluded for the same <ultra64.h> reason qr_render_n64.c/
+# qr_display_n64.c already are.
+#
+# Spec #115 sub-issue #117 adds a SECOND, separate binary (WORSTCASE_BIN,
+# worst_case_main.c) built against its own generated event_profile.h, baked
+# with format v3's actual worst-case field widths (WORSTCASE_TAG, 10 B;
+# WORSTCASE_EVENT_NAME, 15 B) instead of this file's own small "sm64"/
+# "TEST" fixture -- see worst_case_main.c's own header comment for why this
+# has to be a separate binary (PIPELINE_BUILT_PAYLOAD_SIZE/_FRAME_COUNT are
+# fixed compile-time constants per binary, derived from whichever ONE
+# event_profile.h it links) and why this build existing and compiling at
+# all is the sub-issue #117 regression lock.
 
 CC           := gcc
 PYTHON       := python3
@@ -148,7 +166,9 @@ SRCS := main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c $(P
         $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c qr_host_decode.c \
         $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c \
         $(PIPELINE_DIR)/secp256k1.c $(PIPELINE_DIR)/schnorr_adapter.c \
-        $(PIPELINE_DIR)/capture.c $(GAME_DIR)/qr_render.c $(GAME_DIR)/qr_display.c
+        $(PIPELINE_DIR)/capture.c $(GAME_DIR)/qr_render.c $(GAME_DIR)/qr_display.c \
+        $(GAME_DIR)/qr_cycle.c \
+        $(PIPELINE_DIR)/base32.c $(PIPELINE_DIR)/fragment.c $(PIPELINE_DIR)/url.c
 BIN  := pipeline_test
 
 # BIP-340 test vector 0 (privkey=3): a fixed, published known-answer key,
@@ -158,6 +178,16 @@ TEST_PRIVKEY_HEX  := 00000000000000000000000000000000000000000000000000000000000
 TEST_PRIVKEY_FILE := $(BUILD_DIR)/test_privkey.hex
 TEST_CREATED_AT   := 1700000000
 
+# ADR-0006 airgap transport base URL (spec #115, sub-issue #116): the same
+# dev-default host the root Makefile's PIPELINE_URL_BASE defaults to, so
+# this host tool's baked BuiltEvent (PIPELINE_BUILT_PAYLOAD_SIZE 121 B, "sm64"
+# tag + "TEST" name) exercises a realistic multi-frame split (N=2) at the
+# real build_event() seam -- see main.c's test_build_event_multiframe_
+# round_trip() for why: ADR-0006 itself observes the honest v3 floor
+# already overflows one frame once URL-wrapped under any realistic domain,
+# so this build's own N is expected to be >1, not a hand-picked worst case.
+TEST_URL_BASE     := SM64NOSTR.PAGES.DEV
+
 FORMAT_DESCRIPTOR_JSON := $(PIPELINE_DIR)/format_descriptor.json
 FORMAT_DESCRIPTOR_H    := $(INC_DIR)/format_descriptor.h
 EVENT_PROFILE_H_IN     := ../../include/event_profile.h.in
@@ -166,9 +196,62 @@ EVENT_MANIFEST         := $(BUILD_DIR)/event_profile.manifest.json
 SECP256K1_BAKED_H_IN   := ../../include/secp256k1_baked.h.in
 SECP256K1_BAKED_H      := $(INC_DIR)/secp256k1_baked.h
 
-.PHONY: all test clean
+# Worst-case tag+name fixture (spec #115, sub-issue #117): format v3's own
+# actual per-field maxima (format_descriptor.json's TAG.max_size == 10,
+# gen_event_profile.py's EVENT_NAME_MAX_LEN == 15) -- the exact combination
+# that used to overflow the now-removed single-QR-frame total-payload
+# ceiling. A SEPARATE build dir/binary from the main pipeline_test above
+# (see worst_case_main.c's own header comment for why).
+WORSTCASE_TAG                  := 0123456789
+WORSTCASE_EVENT_NAME           := ABCDEFGHIJKLMNO
+WORSTCASE_BUILD_DIR            := build-worstcase
+WORSTCASE_INC_DIR              := $(WORSTCASE_BUILD_DIR)/include
+WORSTCASE_EVENT_PROFILE_H      := $(WORSTCASE_INC_DIR)/event_profile.h
+WORSTCASE_FORMAT_DESCRIPTOR_H  := $(WORSTCASE_INC_DIR)/format_descriptor.h
+WORSTCASE_SECP256K1_BAKED_H    := $(WORSTCASE_INC_DIR)/secp256k1_baked.h
+WORSTCASE_MANIFEST             := $(WORSTCASE_BUILD_DIR)/event_profile.manifest.json
+WORSTCASE_SRCS := worst_case_main.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c \
+        $(PIPELINE_DIR)/pack_adapter.c $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c \
+        $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c \
+        $(PIPELINE_DIR)/secp256k1.c $(PIPELINE_DIR)/schnorr_adapter.c \
+        $(PIPELINE_DIR)/base32.c $(PIPELINE_DIR)/fragment.c $(PIPELINE_DIR)/url.c
+# No -DPIPELINE_SECP256K1_OP_COUNT here (unlike CFLAGS above): worst_case_main.c
+# never reads the op-count proxy counters, so this binary has no use for them.
+WORSTCASE_CFLAGS := -std=gnu99 -Wall -Wextra -I $(SRC_DIR) -I $(PIPELINE_DIR) -I $(WORSTCASE_INC_DIR)
+WORSTCASE_BIN := pipeline_test_worstcase
 
-all: test
+# Spec #115 sub-issue #119 (the reader page) adds gen_reader_fixture.c and
+# this target: a host-only program (never a ROM path, mirrors
+# tools/reference_event_id.js/fixtures/gen_live_vectors.mjs) that dumps a
+# real build_event() call's actual emitted QR frames (URL text, structurally
+# decoded via qr_host_decode_alphanumeric -- the same decoder the multiframe
+# round-trip test above uses) to reader/test/fixtures/multiframe_fixture.json,
+# the reader page's own reassembly/decode/id-recompute test fixture. Reuses
+# this Makefile's own $(FORMAT_DESCRIPTOR_H)/$(EVENT_PROFILE_H) (same
+# privkey=3/tag "sm64"/name "TEST"/url-base SM64NOSTR.PAGES.DEV baked profile
+# main.c's test_build_event_end_to_end() already pins its own oracle values
+# against) so the fixture and that test describe the identical build_event()
+# call. gen_reader_fixture.c self-checks (recomputes id from unpacked wire
+# fields, verifies the unpacked sig against it) before printing anything, so
+# a fixture whose id/sig don't verify can never be written.
+READER_FIXTURE_SRCS := gen_reader_fixture.c $(PIPELINE_DIR)/build_event.c $(PIPELINE_DIR)/port_stub_c99.c \
+        $(PIPELINE_DIR)/pack_adapter.c $(PIPELINE_DIR)/qrcodegen.c $(PIPELINE_DIR)/qr_adapter.c qr_host_decode.c \
+        $(PIPELINE_DIR)/sha256.c $(PIPELINE_DIR)/event_id.c \
+        $(PIPELINE_DIR)/secp256k1.c $(PIPELINE_DIR)/schnorr_adapter.c \
+        $(PIPELINE_DIR)/base32.c $(PIPELINE_DIR)/fragment.c $(PIPELINE_DIR)/url.c
+READER_FIXTURE_BIN := gen_reader_fixture
+READER_FIXTURE_OUT := ../../reader/test/fixtures/multiframe_fixture.json
+
+$(READER_FIXTURE_BIN): $(READER_FIXTURE_SRCS) $(FORMAT_DESCRIPTOR_H) $(EVENT_PROFILE_H) $(SECP256K1_BAKED_H)
+	$(CC) $(CFLAGS) -o $@ $(READER_FIXTURE_SRCS)
+
+reader-fixture: $(READER_FIXTURE_BIN)
+	@mkdir -p $(dir $(READER_FIXTURE_OUT))
+	./$(READER_FIXTURE_BIN) > $(READER_FIXTURE_OUT)
+
+.PHONY: all test worstcase-test reader-fixture clean
+
+all: test worstcase-test
 
 $(TEST_PRIVKEY_FILE):
 	@mkdir -p $(BUILD_DIR)
@@ -180,7 +263,7 @@ $(FORMAT_DESCRIPTOR_H): $(FORMAT_DESCRIPTOR_JSON) $(TOOLS_DIR)/gen_format_descri
 
 $(EVENT_PROFILE_H): $(EVENT_PROFILE_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_event_profile.py $(TOOLS_DIR)/nostr_secp256k1.py
 	@mkdir -p $(INC_DIR)
-	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat --manifest $(EVENT_MANIFEST) --commit host-test --created-at $(TEST_CREATED_AT) --event-name "TEST"
+	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat --manifest $(EVENT_MANIFEST) --commit host-test --created-at $(TEST_CREATED_AT) --event-name "TEST" --url-base "$(TEST_URL_BASE)"
 
 $(SECP256K1_BAKED_H): $(SECP256K1_BAKED_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_secp256k1_baked.py $(TOOLS_DIR)/nostr_secp256k1.py
 	@mkdir -p $(INC_DIR)
@@ -192,5 +275,23 @@ $(BIN): $(SRCS) $(FORMAT_DESCRIPTOR_H) $(EVENT_PROFILE_H) $(SECP256K1_BAKED_H)
 test: $(BIN)
 	./$(BIN)
 
+$(WORSTCASE_FORMAT_DESCRIPTOR_H): $(FORMAT_DESCRIPTOR_JSON) $(TOOLS_DIR)/gen_format_descriptor.py
+	@mkdir -p $(WORSTCASE_INC_DIR)
+	$(PYTHON) $(TOOLS_DIR)/gen_format_descriptor.py --json $(FORMAT_DESCRIPTOR_JSON) --out $@
+
+$(WORSTCASE_EVENT_PROFILE_H): $(EVENT_PROFILE_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_event_profile.py $(TOOLS_DIR)/nostr_secp256k1.py
+	@mkdir -p $(WORSTCASE_INC_DIR)
+	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $@ --label host-kat-worstcase --manifest $(WORSTCASE_MANIFEST) --commit host-test --created-at $(TEST_CREATED_AT) --event-name "$(WORSTCASE_EVENT_NAME)" --tag "$(WORSTCASE_TAG)" --url-base "$(TEST_URL_BASE)"
+
+$(WORSTCASE_SECP256K1_BAKED_H): $(SECP256K1_BAKED_H_IN) $(TEST_PRIVKEY_FILE) $(TOOLS_DIR)/gen_secp256k1_baked.py $(TOOLS_DIR)/nostr_secp256k1.py
+	@mkdir -p $(WORSTCASE_INC_DIR)
+	$(PYTHON) $(TOOLS_DIR)/gen_secp256k1_baked.py --privkey $(TEST_PRIVKEY_FILE) --template $(SECP256K1_BAKED_H_IN) --out $@
+
+$(WORSTCASE_BIN): $(WORSTCASE_SRCS) $(WORSTCASE_FORMAT_DESCRIPTOR_H) $(WORSTCASE_EVENT_PROFILE_H) $(WORSTCASE_SECP256K1_BAKED_H)
+	$(CC) $(WORSTCASE_CFLAGS) -o $@ $(WORSTCASE_SRCS)
+
+worstcase-test: $(WORSTCASE_BIN)
+	./$(WORSTCASE_BIN)
+
 clean:
-	$(RM) -r $(BIN) $(BUILD_DIR)
+	$(RM) -r $(BIN) $(BUILD_DIR) $(WORSTCASE_BIN) $(WORSTCASE_BUILD_DIR) $(READER_FIXTURE_BIN)

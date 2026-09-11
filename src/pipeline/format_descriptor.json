@@ -1,5 +1,5 @@
 {
-  "_comment": "Machine-readable format descriptor for the packed QR payload (spec #109, sub-issue #110, format v3; supersedes format v2 from spec #52, sub-issue #54). Single source of truth: tools/gen_format_descriptor.py renders this into a C header consumed identically by the ROM pack adapter (src/pipeline/pack_adapter.c) and the host unpack adapter (tools/pipeline_test), so the two can never disagree on the wire layout. Format v3 (FORMAT_TAG 0x03) adds a second length-prefixed variable-length field, NAME_LEN/NAME (mirroring TAG_LEN/TAG), carrying the signed event-name tag value, ahead of the existing SIG. No other field widths change from v2, and `id` is still never packed -- the companion recomputes it. gen_format_descriptor.py now supports N variable-length fields in sequence (removing v2's at-most-one hard-fail): TAG's start offset is fixed, but NAME's start offset depends on TAG's runtime length (TAG_LEN), and SIG's start offset depends on both TAG_LEN and NAME_LEN -- see PIPELINE_FMT_OFF_SIG(tagLen, nameLen) in the generated header.",
+  "_comment": "Machine-readable format descriptor for the packed QR payload (spec #109, sub-issue #110, format v3; supersedes format v2 from spec #52, sub-issue #54). Single source of truth: tools/gen_format_descriptor.py renders this into a C header consumed identically by the ROM pack adapter (src/pipeline/pack_adapter.c) and the host unpack adapter (tools/pipeline_test), so the two can never disagree on the wire layout. Format v3 (FORMAT_TAG 0x03) adds a second length-prefixed variable-length field, NAME_LEN/NAME (mirroring TAG_LEN/TAG), carrying the signed event-name tag value, ahead of the existing SIG. No other field widths change from v2, and `id` is still never packed -- the reader recomputes it. gen_format_descriptor.py now supports N variable-length fields in sequence (removing v2's at-most-one hard-fail): TAG's start offset is fixed, but NAME's start offset depends on TAG's runtime length (TAG_LEN), and SIG's start offset depends on both TAG_LEN and NAME_LEN -- see PIPELINE_FMT_OFF_SIG(tagLen, nameLen) in the generated header. `encoding` (spec #115, sub-issue #119) is metadata only -- gen_format_descriptor.py's C output ignores it entirely (ignores any key it doesn't itself read) -- consumed solely by reader/reader.js's unpackPayload() so the reader's own field decode (hex bytes vs. ASCII text vs. a plain big-endian integer) is driven by THIS descriptor instead of a second, hand-copied field-name allowlist. Absent on a field, it defaults to a plain big-endian unsigned integer.",
   "format_tag": 3,
   "fields": [
     { "name": "FORMAT_TAG", "size": 1 },
@@ -10,11 +10,11 @@
     { "name": "NONCE16",    "size": 2 },
     { "name": "KEY_ID",     "size": 1 },
     { "name": "CREATED_AT", "size": 4 },
-    { "name": "PUBKEY",     "size": 32 },
+    { "name": "PUBKEY",     "size": 32, "encoding": "hex" },
     { "name": "TAG_LEN",    "size": 1 },
-    { "name": "TAG",        "var_len": true, "len_field": "TAG_LEN", "max_size": 10 },
+    { "name": "TAG",        "var_len": true, "len_field": "TAG_LEN", "max_size": 10, "encoding": "ascii" },
     { "name": "NAME_LEN",   "size": 1 },
-    { "name": "NAME",       "var_len": true, "len_field": "NAME_LEN", "max_size": 15 },
-    { "name": "SIG",        "size": 64 }
+    { "name": "NAME",       "var_len": true, "len_field": "NAME_LEN", "max_size": 15, "encoding": "ascii" },
+    { "name": "SIG",        "size": 64, "encoding": "hex" }
   ]
 }

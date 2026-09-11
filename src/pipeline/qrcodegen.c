@@ -108,10 +108,11 @@ static long qr_labs(long x)
 }
 
 
-/*---- Private types (byte-mode-only: no other qrcodegen_Mode value is ever produced) ----*/
+/*---- Private types (only BYTE and ALPHANUMERIC qrcodegen_Mode values are ever produced) ----*/
 
 enum qrcodegen_Mode {
-    qrcodegen_Mode_BYTE = 0x4
+    qrcodegen_Mode_ALPHANUMERIC = 0x2,
+    qrcodegen_Mode_BYTE         = 0x4
 };
 
 struct qrcodegen_Segment {
@@ -128,6 +129,15 @@ static void appendBitsToBuffer(unsigned int val, int numBits, qr_u8 buffer[], in
 
 static int qrcodegen_encodeSegmentsAdvanced(const struct qrcodegen_Segment segs[], int len, enum qrcodegen_Ecc ecl,
     int minVersion, int maxVersion, enum qrcodegen_Mask mask, int boostEcl, qr_u8 tempBuffer[], qr_u8 qrcode[]);
+
+// Shared tail of segment encoding (spec #115, sub-issue #116): terminator/padding,
+// ECC generation + interleaving, function-module drawing, and masking -- the part
+// that doesn't care which mode(s) produced the data bits already written into
+// qrcode[0 : bitLen]. Factored out of qrcodegen_encodeSegmentsAdvanced() (still its
+// only pre-existing caller, via qrcodegen_encodeBinary()) so qrcodegen_encodeAlphanumeric()
+// can reuse it instead of duplicating this stage.
+static int finishEncoding(qr_u8 qrcode[], int bitLen, int version, enum qrcodegen_Ecc ecl,
+    enum qrcodegen_Mask mask, int boostEcl, qr_u8 tempBuffer[]);
 
 static void addEccAndInterleave(qr_u8 data[], int version, enum qrcodegen_Ecc ecl, qr_u8 result[]);
 static int getNumDataCodewords(int version, enum qrcodegen_Ecc ecl);
@@ -247,13 +257,6 @@ static int qrcodegen_encodeSegmentsAdvanced(const struct qrcodegen_Segment segs[
     }
     assert(dataUsedBits != LENGTH_OVERFLOW);
 
-    // Increase the error correction level while the data still fits in the current version number
-    int i;
-    for (i = (int)qrcodegen_Ecc_MEDIUM; i <= (int)qrcodegen_Ecc_HIGH; i++) {  // From low to high
-        if (boostEcl && dataUsedBits <= getNumDataCodewords(version, (enum qrcodegen_Ecc)i) * 8)
-            ecl = (enum qrcodegen_Ecc)i;
-    }
-
     // Concatenate all segments to create the data bit string
     qr_memset(qrcode, 0, qrcodegen_BUFFER_LEN_FOR_VERSION(version));
     int bitLen = 0;
@@ -277,6 +280,20 @@ static int qrcodegen_encodeSegmentsAdvanced(const struct qrcodegen_Segment segs[
         }
     }
     assert(bitLen == dataUsedBits);
+
+    return finishEncoding(qrcode, bitLen, version, ecl, mask, boostEcl, tempBuffer);
+}
+
+
+// See the forward declaration's own comment above.
+static int finishEncoding(qr_u8 qrcode[], int bitLen, int version, enum qrcodegen_Ecc ecl,
+        enum qrcodegen_Mask mask, int boostEcl, qr_u8 tempBuffer[]) {
+    // Increase the error correction level while the data still fits in the current version number
+    int i;
+    for (i = (int)qrcodegen_Ecc_MEDIUM; i <= (int)qrcodegen_Ecc_HIGH; i++) {  // From low to high
+        if (boostEcl && bitLen <= getNumDataCodewords(version, (enum qrcodegen_Ecc)i) * 8)
+            ecl = (enum qrcodegen_Ecc)i;
+    }
 
     // Add terminator and pad up to a byte if applicable
     int dataCapacityBits = getNumDataCodewords(version, ecl) * 8;
@@ -320,6 +337,95 @@ static int qrcodegen_encodeSegmentsAdvanced(const struct qrcodegen_Segment segs[
     applyMask(tempBuffer, qrcode, mask);  // Apply the final choice of mask
     drawFormatBits(ecl, mask, qrcode);  // Overwrite old format bits
     return 1;
+}
+
+
+// QR Model 2's fixed 45-character alphanumeric charset (spec #115, sub-issue
+// #116), in encoding order (index 0-44) -- the QR spec's own table, not a
+// project secret, so duplicating it here (rather than exposing it publicly)
+// is the same "hide the ported library, keep only the two narrow entry
+// points" discipline this file's header comment already documents.
+static const char ALPHANUMERIC_CHARSET[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+#define ALPHANUMERIC_CHARSET_LEN 45
+
+// Returns the charset index (0-44) of c, or -1 if c is outside the QR
+// alphanumeric charset.
+static int alphanumericCharValue(qr_u8 c) {
+    int i;
+    for (i = 0; i < ALPHANUMERIC_CHARSET_LEN; i++) {
+        if ((qr_u8)ALPHANUMERIC_CHARSET[i] == c)
+            return i;
+    }
+    return -1;
+}
+
+// Returns the bit width of the character count field for an ALPHANUMERIC
+// segment at the given version number (9/11/13 bits for versions 1-9/
+// 10-26/27-40 -- the QR spec's own table, distinct from BYTE mode's
+// 8/16/16 that numCharCountBits() above hardcodes).
+static int alphanumericCharCountBits(int version) {
+    assert(qrcodegen_VERSION_MIN <= version && version <= qrcodegen_VERSION_MAX);
+    int i = (version + 7) / 17;
+    static const int temp[] = { 9, 11, 13 };
+    return temp[i];
+}
+
+
+/*---- High-level QR Code encoding function (alphanumeric mode) ----*/
+
+// Public function - see documentation comment in header file.
+int qrcodegen_encodeAlphanumeric(const qr_u8 text[], int textLen, qr_u8 qrcode[], qr_u8 tempBuffer[],
+        enum qrcodegen_Ecc ecl, int minVersion, int maxVersion, enum qrcodegen_Mask mask, int boostEcl) {
+    assert(qrcodegen_VERSION_MIN <= minVersion && minVersion <= maxVersion && maxVersion <= qrcodegen_VERSION_MAX);
+    assert(0 <= (int)ecl && (int)ecl <= 3 && -1 <= (int)mask && (int)mask <= 7);
+
+    if (textLen < 0 || textLen > 32767) {
+        qrcode[0] = 0;
+        return 0;
+    }
+    int i;
+    for (i = 0; i < textLen; i++) {
+        if (alphanumericCharValue(text[i]) < 0) {
+            qrcode[0] = 0;  // Rejects non-alphanumeric-charset input, never silently drops/replaces it
+            return 0;
+        }
+    }
+
+    long bitLength = 11L * (textLen / 2) + (textLen % 2 != 0 ? 6 : 0);
+    assert(bitLength <= 32767L);
+
+    // Find the minimal version number to use (mirrors qrcodegen_encodeSegmentsAdvanced's own search)
+    int version, ccbits;
+    long totalBits;
+    for (version = minVersion; ; version++) {
+        int dataCapacityBits = getNumDataCodewords(version, ecl) * 8;
+        ccbits = alphanumericCharCountBits(version);
+        if (textLen < (1L << ccbits)) {
+            totalBits = 4L + ccbits + bitLength;
+            if (totalBits <= dataCapacityBits)
+                break;  // This version number is found to be suitable
+        }
+        if (version >= maxVersion) {  // All versions in the range could not fit the given data
+            qrcode[0] = 0;
+            return 0;
+        }
+    }
+
+    // Pack the mode indicator, character count, and alphanumeric-packed data bits
+    qr_memset(qrcode, 0, qrcodegen_BUFFER_LEN_FOR_VERSION(version));
+    int bitLen = 0;
+    appendBitsToBuffer((unsigned int)qrcodegen_Mode_ALPHANUMERIC, 4, qrcode, &bitLen);
+    appendBitsToBuffer((unsigned int)textLen, ccbits, qrcode, &bitLen);
+    for (i = 0; i + 1 < textLen; i += 2) {
+        int v = alphanumericCharValue(text[i]) * ALPHANUMERIC_CHARSET_LEN + alphanumericCharValue(text[i + 1]);
+        appendBitsToBuffer((unsigned int)v, 11, qrcode, &bitLen);
+    }
+    if (textLen % 2 != 0) {
+        appendBitsToBuffer((unsigned int)alphanumericCharValue(text[textLen - 1]), 6, qrcode, &bitLen);
+    }
+    assert((long)bitLen == 4L + ccbits + bitLength);
+
+    return finishEncoding(qrcode, bitLen, version, ecl, mask, boostEcl, tempBuffer);
 }
 
 
