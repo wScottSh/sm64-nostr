@@ -396,3 +396,89 @@ int qr_host_decode_alphanumeric(const unsigned char *qrcode, unsigned char *outT
     *outTextLen = numChars;
     return 1;
 }
+
+// Reads n bits (n <= 16) starting at *bitPos out of dataBytes, MSB-first,
+// advancing *bitPos by n -- the same bit-buffer convention every read loop
+// above open-codes inline; factored out here so qr_host_decode_mixed() can
+// read an arbitrary sequence of differently-sized fields (two segments'
+// worth of mode/count/data) without duplicating the loop body four times.
+static int readBitsHD(const qhd_u8 *dataBytes, int *bitPos, int n)
+{
+    int value = 0;
+    int i;
+    for (i = 0; i < n; i++) {
+        int bit = (dataBytes[*bitPos >> 3] >> (7 - (*bitPos & 7))) & 1;
+        value = (value << 1) | bit;
+        (*bitPos)++;
+    }
+    return value;
+}
+
+int qr_host_decode_mixed(const unsigned char *qrcode, unsigned char *outText, int outCap, int *outTextLen)
+{
+    qhd_u8 dataBytes[PIPELINE_QR_DATA_CODEWORDS];
+    int bitPos = 0;
+    int mode;
+    int byteLen, alnumLen, ccbits;
+    int i;
+    int totalLen;
+
+    if (!decodeToDataBytes(qrcode, dataBytes)) {
+        return 0;
+    }
+
+    // Segment 1: BYTE mode.
+    mode = readBitsHD(dataBytes, &bitPos, 4);
+    if (mode != 0x4 /* qrcodegen_Mode_BYTE */) {
+        return 0;
+    }
+    byteLen = readBitsHD(dataBytes, &bitPos, 8);
+    if (byteLen < 0 || byteLen > outCap) {
+        return 0;
+    }
+    /* Reserve room for segment 1's own data bits AND segment 2's fixed
+     * 4-bit mode indicator + alphanumericCharCountBits()-wide count field
+     * that immediately follow it -- not just segment 1's data bits alone
+     * -- so a corrupt/foreign bitmap's claimed byteLen can never leave the
+     * two reads right after this guard (segment 2's mode indicator, then
+     * its character count) walking past dataBytes[]'s own
+     * PIPELINE_QR_DATA_CODEWORDS-byte bound. */
+    if ((long)bitPos + 8L * (long)byteLen + 4L + (long)alphanumericCharCountBits(PIPELINE_QR_VERSION)
+        > (long)PIPELINE_QR_DATA_CODEWORDS * 8L) {
+        return 0;
+    }
+    for (i = 0; i < byteLen; i++) {
+        outText[i] = (unsigned char)readBitsHD(dataBytes, &bitPos, 8);
+    }
+
+    // Segment 2: ALPHANUMERIC mode, appended immediately after segment 1's text.
+    mode = readBitsHD(dataBytes, &bitPos, 4);
+    if (mode != 0x2 /* qrcodegen_Mode_ALPHANUMERIC */) {
+        return 0;
+    }
+    ccbits = alphanumericCharCountBits(PIPELINE_QR_VERSION);
+    alnumLen = readBitsHD(dataBytes, &bitPos, ccbits);
+    totalLen = byteLen + alnumLen;
+    if (alnumLen < 0 || totalLen > outCap) {
+        return 0;
+    }
+    {
+        long bitsNeeded = 11L * (alnumLen / 2) + (alnumLen % 2 != 0 ? 6 : 0);
+        if ((long)bitPos + bitsNeeded > (long)PIPELINE_QR_DATA_CODEWORDS * 8L) {
+            return 0;
+        }
+    }
+
+    for (i = 0; i + 1 < alnumLen; i += 2) {
+        int v = readBitsHD(dataBytes, &bitPos, 11);
+        outText[byteLen + i]     = (unsigned char)ALPHANUMERIC_CHARSET[v / ALPHANUMERIC_CHARSET_LEN];
+        outText[byteLen + i + 1] = (unsigned char)ALPHANUMERIC_CHARSET[v % ALPHANUMERIC_CHARSET_LEN];
+    }
+    if (alnumLen % 2 != 0) {
+        int v = readBitsHD(dataBytes, &bitPos, 6);
+        outText[byteLen + alnumLen - 1] = (unsigned char)ALPHANUMERIC_CHARSET[v];
+    }
+
+    *outTextLen = totalLen;
+    return 1;
+}

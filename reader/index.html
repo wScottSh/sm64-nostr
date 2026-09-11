@@ -66,8 +66,7 @@
  * page will not function at all.
  */
 import { reassembleFrames, base32Decode, decodeToBroadcastEvent, buildRelayMessage,
-         parseFragmentHeader, stripUrl } from './reader.js';
-import { TRANSPORT_CONTRACT } from './generated/transport_contract.js';
+         parseFragmentHeader, extractFragment } from './reader.js';
 
 /*
  * Relay this reader broadcasts to (spec #115, sub-issue #119: "broadcasts
@@ -78,21 +77,14 @@ import { TRANSPORT_CONTRACT } from './generated/transport_contract.js';
  */
 const RELAY_URL = 'wss://relay.damus.io';
 
-// This reader's own base URL (transport_contract.h's URL template is
-// HTTPS://<PIPELINE_URL_BASE>/<fragment> -- PIPELINE_URL_BASE is always
-// uppercase and has no path component, so this reader's own host,
-// uppercased, is exactly the baseUrl every scanned frame's URL was wrapped
-// around). See url.h's own pipeline_url_strip() contract, which stripUrl()
-// in reader.js ports. This assumes the deployed host is reached at EXACTLY
-// PIPELINE_URL_BASE (the build-time constant baked into the cabinet's
-// frames) -- a preview/staging subdomain or a "www." prefix would compute
-// a different BASE_URL here and every frame would be silently dropped as
-// "not our prefix" (see FRAME_URL_PREFIX below); production deploys must
-// serve this page at that exact host.
-const BASE_URL = location.host.toUpperCase();
-const FRAME_URL_PREFIX = TRANSPORT_CONTRACT.PIPELINE_URL_SCHEME + BASE_URL
-  + TRANSPORT_CONTRACT.PIPELINE_URL_PATH_SEP;
-
+// Host-agnostic by construction (spec #122, sub-issue #123 -- #101's
+// ratified <BASE>#<SEQ>/<TOTAL>/<PAYLOAD> template): this reader never
+// computes or compares against its own host. Any scanned/opened URL that
+// contains a parseable `#`-fragment (extractFragment()/parseFragmentHeader(),
+// both host-agnostic) is accepted, regardless of which base it was wrapped
+// around -- so this page works identically whether deployed to its
+// production domain, a preview/staging subdomain, a lowercase project
+// path, or a bare LAN IP.
 const statusEl = document.getElementById('status');
 const video = document.getElementById('video');
 const canvas = document.createElement('canvas');
@@ -109,14 +101,16 @@ function setError(msg) {
 
 /*
  * scanIndex: this URL's own fragment-header index, via the SAME
- * stripUrl()/parseFragmentHeader() the real reassembler uses -- never a
- * hand-inlined re-parse of the wire format. Returns null for a URL that
- * doesn't parse (camera noise, or a bootstrap open with no fragment at
- * all), so callers can ignore it rather than crash the scan loop.
+ * extractFragment()/parseFragmentHeader() the real reassembler uses --
+ * never a hand-inlined re-parse of the wire format, and never a host
+ * comparison (spec #122, sub-issue #123: host-agnostic by construction).
+ * Returns null for a URL that doesn't parse (camera noise, or a bootstrap
+ * open with no fragment at all), so callers can ignore it rather than
+ * crash the scan loop.
  */
 function scanIndex(url) {
   try {
-    return parseFragmentHeader(stripUrl(url, BASE_URL)).index;
+    return parseFragmentHeader(extractFragment(url)).index;
   } catch {
     return null;
   }
@@ -146,10 +140,10 @@ function renderGrid(count) {
 }
 
 /*
- * addScannedUrl: records url (if it's a well-formed frame for THIS base
- * URL) and checks for completion. Shared by the N=1 bootstrap-from-location
- * path below and the camera scan loop's tick(), so both go through the
- * identical reassembleFrames()/renderGrid() logic.
+ * addScannedUrl: records url (if it's a well-formed frame -- host
+ * irrelevant, spec #122) and checks for completion. Shared by the N=1
+ * bootstrap-from-location path below and the camera scan loop's tick(), so
+ * both go through the identical reassembleFrames()/renderGrid() logic.
  */
 function addScannedUrl(url) {
   if (scannedUrls.has(url)) {
@@ -157,7 +151,7 @@ function addScannedUrl(url) {
   }
   scannedUrls.add(url);
   try {
-    const { complete, count } = reassembleFrames([...scannedUrls], BASE_URL);
+    const { complete, count } = reassembleFrames([...scannedUrls]);
     renderGrid(count);
     return complete;
   } catch (e) {
@@ -176,7 +170,7 @@ function addScannedUrl(url) {
     scannedUrls.add(url);
     document.getElementById('grid').innerHTML = ''; // force a fresh grid on the next renderGrid() call
     try {
-      const fresh = reassembleFrames([...scannedUrls], BASE_URL);
+      const fresh = reassembleFrames([...scannedUrls]);
       renderGrid(fresh.count);
       return fresh.complete;
     } catch {
@@ -216,7 +210,7 @@ async function finish() {
   (video.srcObject?.getTracks() || []).forEach((t) => t.stop());
   document.getElementById('start').style.display = 'none';
 
-  const { complete, base32Text } = reassembleFrames([...scannedUrls], BASE_URL);
+  const { complete, base32Text } = reassembleFrames([...scannedUrls]);
   if (!complete) return; // shouldn't happen: callers only reach finish() once complete
 
   const packedBytes = base32Decode(base32Text);
@@ -241,7 +235,10 @@ function tick() {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
-    if (code && code.data && code.data.startsWith(FRAME_URL_PREFIX)) {
+    // Accept ANY scanned string that contains a parseable `#`-fragment
+    // (spec #122: no host-prefix filter -- scanIndex() is host-agnostic by
+    // construction), not a hand-inlined re-parse of the wire format.
+    if (code && code.data && scanIndex(code.data) !== null) {
       if (addScannedUrl(code.data)) {
         return finish();
       }
@@ -275,23 +272,24 @@ document.getElementById('start').onclick = startCamera;
 
 /*
  * ADR-0006's N=1 path: "no camera-permission prompt or active hold" --
- * whichever single frame's URL a stock camera opened THIS page from
- * (location.pathname) is itself the first (and, for N=1, only) fragment.
- * Reconstruct that URL and feed it through the exact same addScannedUrl()
- * path a camera scan would, BEFORE ever touching getUserMedia: if it
- * alone completes the set (the common N=1 case), finish immediately with
- * zero camera grant. For N>1 it seeds one fragment for free and the Start
- * button (a real camera scan) is still needed for the rest. A bootstrap
- * open with no fragment in the path (e.g. someone navigating to the bare
- * site root) fails to parse and is silently ignored here -- the ordinary
- * Start-camera flow still works.
+ * whichever single frame's URL a stock camera opened THIS page from is
+ * itself the first (and, for N=1, only) fragment. Per spec #122's ratified
+ * <BASE>#<SEQ>/<TOTAL>/<PAYLOAD> template, that fragment is the opening
+ * URL's OWN hash (location.href already carries it verbatim, whatever the
+ * page's actual host/path happen to be -- no reconstruction needed, and no
+ * host comparison: extractFragment()/parseFragmentHeader() are host-
+ * agnostic by construction). Feed it through the exact same
+ * addScannedUrl() path a camera scan would, BEFORE ever touching
+ * getUserMedia: if it alone completes the set (the common N=1 case),
+ * finish immediately with zero camera grant. For N>1 it seeds one fragment
+ * for free and the Start button (a real camera scan) is still needed for
+ * the rest. A bootstrap open with no `#` fragment at all (e.g. someone
+ * navigating to the bare site root) fails to parse and is silently ignored
+ * here -- the ordinary Start-camera flow still works.
  */
 (function bootstrapFromLocation() {
-  // Reuse FRAME_URL_PREFIX (scheme + host + PATH_SEP) rather than re-joining
-  // the pieces, so the path separator stays single-sourced; location.pathname
-  // always begins with "/", which slice(1) drops to avoid doubling PATH_SEP.
-  const openedUrl = FRAME_URL_PREFIX + location.pathname.slice(1);
-  if (!openedUrl.startsWith(FRAME_URL_PREFIX)) return;
+  if (!location.hash) return;
+  const openedUrl = location.href;
   if (addScannedUrl(openedUrl)) {
     statusEl.className = 'ok';
     statusEl.textContent = 'Single-frame payload -- broadcasting with no camera needed.';

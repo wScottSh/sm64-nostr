@@ -89,18 +89,20 @@
 #define PIPELINE_EVENT_NAME_LEN (sizeof(PIPELINE_EVENT_NAME) - 1)
 
 /*
- * ADR-0006's airgap transport base URL (spec #115, sub-issue #116): the
- * build-time constant every emitted QR frame's URL wraps a fragment
- * around -- HTTPS://<PIPELINE_URL_BASE>/<fragment> (url.h). Mirrors
+ * ADR-0006's airgap transport base URL (spec #115, sub-issue #116;
+ * realigned to #101's ratified URL schema by spec #122 sub-issue #123):
+ * the build-time constant every emitted QR frame's URL wraps a fragment
+ * around -- <PIPELINE_URL_BASE>#<SEQ>/<TOTAL>/<PAYLOAD> (url.h). Mirrors
  * PIPELINE_EVENT_NAME's own provisioning (baked per build from a Makefile
  * variable, --url-base, gen_event_profile.py), but with a dev default
  * (never fail-closed like PIPELINE_EVENT_NAME): a build with no real
  * domain yet still produces a scannable, structurally valid URL, just one
  * pointed at a placeholder host until the real short domain (#101) is
  * purchased and swapped in via PIPELINE_URL_BASE, with no pipeline code
- * change. Uppercase-folded and restricted to A-Z/0-9/./- , the same
- * charset discipline TAG_1_VALUE/EVENT_NAME enforce above, so it rides the
- * QR alphanumeric charset (0-9 A-Z space $ % * + - . / :) untouched.
+ * change. Emitted VERBATIM -- case is never folded, since URL paths are
+ * case-sensitive -- so it rides a QR BYTE segment, not the narrower
+ * alphanumeric charset TAG_1_VALUE/EVENT_NAME are restricted to above (see
+ * qr_adapter.h's pipeline_qr_encode_two_segment()).
  */
 #define PIPELINE_URL_BASE "@URL_BASE@"
 /* Compile-time length of the base URL (excludes the NUL terminator),

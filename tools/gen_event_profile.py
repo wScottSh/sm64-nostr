@@ -113,21 +113,40 @@ EVENT_NAME_ALLOWED_CHARS = frozenset(
 # constants stay in sync.
 EVENT_NAME_MAX_LEN = 15
 
-# ADR-0006's airgap transport base URL (spec #115, sub-issue #116):
-# uppercase-folded (mirroring EVENT_NAME_ALLOWED_CHARS' own fold-then-check
-# shape), restricted to A-Z, 0-9, `.`, and `-` -- a domain-name-shaped
-# charset, all of which is already inside the QR alphanumeric charset
-# (0-9 A-Z space $ % * + - . / :) untouched, so url.h never needs to
-# re-validate it. No length cap here: build_event.c's own compile-time
+# ADR-0006's airgap transport base URL, realigned to #101's ratified URL
+# schema by spec #122 (sub-issue #123): emitted VERBATIM (case preserved --
+# URL paths are case-sensitive, e.g. a GitHub Pages project site's lowercase
+# `/repo/`), never uppercase-folded, unlike EVENT_NAME/TAG_1_VALUE above.
+# Every printable ASCII byte is legal EXCEPT `#` (spec #122's own literal
+# fragment separator -- a base URL containing one would make the
+# `<BASE>#<fragment>` join point ambiguous), space/`<`/`>`/backtick (a
+# space would silently produce an unscannable, whitespace-broken QR
+# payload; `<`/`>`/backtick are never legal in a bare URL and are common
+# injection/copy-paste-corruption markers), and `"`/`\` (this value is
+# embedded raw into a generated C string literal, the same reason
+# TAG_VALUE_RE excludes them). This is broader than TAG_VALUE_RE/
+# EVENT_NAME_ALLOWED_CHARS because this value now rides a QR BYTE segment
+# (qr_adapter.h's pipeline_qr_encode_two_segment()), not the QR
+# alphanumeric charset, and because a real absolute URL (scheme + host +
+# optional path) needs `:`, `/`, and lowercase letters none of those
+# charsets carry. No length cap here: build_event.c's own compile-time
 # pipeline_build_event_fragment_budget_check is the real, loud-not-silent
 # guard against a PIPELINE_URL_BASE too long to leave room for even one
 # base32 character per QR frame.
-URL_BASE_ALLOWED_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")
+URL_BASE_DISALLOWED_CHARS = frozenset('"\\# <>`')
+
+# #101's ratified template requires an absolute URL with a clean `#`-fragment
+# join point -- checked case-insensitively (verbatim case is preserved,
+# never mangled) so both "https://" and "HTTPS://" pass, but a bare
+# host/path with no scheme (which could never resolve on its own) fails
+# closed here rather than producing a structurally invalid frame.
+URL_BASE_SCHEME_RE = re.compile(r"^https://", re.IGNORECASE)
 
 # Dev default (never fail-closed, unlike --event-name): a build with no
 # real short domain purchased yet (#101) still produces a scannable,
-# structurally valid URL pointed at this placeholder host.
-URL_BASE_DEFAULT = "SM64NOSTR.PAGES.DEV"
+# structurally valid URL pointed at this placeholder host. Lowercase, on
+# purpose: proves this default itself round-trips verbatim, case preserved.
+URL_BASE_DEFAULT = "https://sm64nostr.pages.dev"
 
 # Path to the single JSON source of truth for the wire layout (spec #52,
 # sub-issue #54; format v3 NAME field, spec #109 sub-issue #110) -- this
@@ -209,13 +228,20 @@ def normalize_event_name(raw):
 
 
 def normalize_url_base(raw):
-    """Validate and normalize --url-base (spec #115, sub-issue #116):
-    uppercase-fold a-z->A-Z, then accept only A-Z/0-9/./-, mirroring
-    normalize_event_name()'s own shape. Returns the normalized string, or
-    raises ValueError naming the offending character -- never silently
-    drops a bad character. Length is NOT capped here (see
-    URL_BASE_ALLOWED_CHARS' own comment for why); an over-long value fails
-    at C compile time instead, in build_event.c's own guard.
+    """Validate --url-base (spec #115, sub-issue #116; realigned to #101's
+    ratified URL schema by spec #122, sub-issue #123): returns raw
+    UNCHANGED, verbatim, case preserved -- this is deliberately NOT a
+    fold-then-check function like normalize_event_name()/normalize_url_base's
+    own pre-#122 shape any more, since #101's ratified template requires the
+    base URL emitted exactly as provisioned (URL paths are case-sensitive).
+    Raises ValueError if raw is empty/all-whitespace, does not look like an
+    absolute `https://` URL, or contains a disallowed byte (a `"`/`\\`
+    that would corrupt the generated C string literal this value is
+    embedded into raw, a literal `#` that would make the `<BASE>#<fragment>`
+    join point ambiguous, or a non-printable-ASCII byte) -- never silently
+    drops a bad character or silently folds case. Length is NOT capped here
+    (see URL_BASE_DISALLOWED_CHARS' own comment for why); an over-long value
+    fails at C compile time instead, in build_event.c's own guard.
     """
     if not raw or not raw.strip():
         raise ValueError(
@@ -223,17 +249,25 @@ def normalize_url_base(raw):
             "QR frame's URL wraps a fragment around this base URL"
         )
 
-    folded = "".join(ch.upper() if "a" <= ch <= "z" else ch for ch in raw)
+    if not URL_BASE_SCHEME_RE.match(raw):
+        raise ValueError(
+            "--url-base %r does not start with an absolute https:// URL scheme "
+            "(checked case-insensitively) -- #101's ratified <BASE>#<SEQ>/<TOTAL>/"
+            "<PAYLOAD> template requires a complete, valid https:// URL a stock "
+            "phone camera can open" % (raw,)
+        )
 
-    for ch in folded:
-        if ch not in URL_BASE_ALLOWED_CHARS:
+    for ch in raw:
+        if ch in URL_BASE_DISALLOWED_CHARS or ord(ch) < 0x20 or ord(ch) > 0x7E:
             raise ValueError(
-                "--url-base %r contains %r, outside the allowed A-Z, 0-9, "
-                "'.', '-' charset (checked after uppercase-folding a-z->A-Z) "
-                "-- this character is rejected, never silently dropped" % (raw, ch)
+                "--url-base %r contains %r, a disallowed byte (`\"`, `\\`, `#`, "
+                "space, `<`, `>`, `` ` ``, or a non-printable-ASCII byte are all "
+                "rejected -- `#` specifically because it is spec #122's own "
+                "literal <BASE>#<fragment> join separator) -- this character is "
+                "rejected, never silently dropped or case-folded" % (raw, ch)
             )
 
-    return folded
+    return raw
 
 
 def resolve_commit_sha(explicit):
@@ -280,12 +314,13 @@ def main():
     ap.add_argument(
         "--url-base",
         default=URL_BASE_DEFAULT,
-        help="ADR-0006 airgap transport base URL (spec #115, sub-issue #116); "
-        "build-time constant every emitted QR frame's URL wraps a fragment "
-        "around. Defaults to %r (a dev placeholder host) -- never fail-closed, "
-        "unlike --event-name; swap in the real short domain (#101) once "
-        "purchased, no pipeline code change needed. Uppercase-folded, "
-        "restricted to A-Z/0-9/./- after folding." % URL_BASE_DEFAULT,
+        help="Airgap transport base URL, per #101's ratified <BASE>#<SEQ>/<TOTAL>/ "
+        "<PAYLOAD> template (spec #115 sub-issue #116, realigned by spec #122 "
+        "sub-issue #123); build-time constant every emitted QR frame's URL "
+        "wraps a fragment around. Defaults to %r (a dev placeholder host) -- "
+        "never fail-closed, unlike --event-name; swap in the real short domain "
+        "once purchased, no pipeline code change needed. Emitted VERBATIM -- "
+        "case is never folded -- and must be an absolute https:// URL." % URL_BASE_DEFAULT,
     )
     ap.add_argument(
         "--tag",

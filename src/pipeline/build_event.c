@@ -71,21 +71,36 @@ typedef char pipeline_build_event_qr_bitmap_size_check[
  * what keep the duplicates from silently drifting instead. */
 typedef char pipeline_build_event_base32_len_check[
     (PIPELINE_BUILT_BASE32_LEN == PIPELINE_BASE32_ENCODED_LEN(PIPELINE_BUILT_PAYLOAD_SIZE)) ? 1 : -1];
-typedef char pipeline_build_event_qr_alnum_max_check[
-    (PIPELINE_BUILT_QR_ALNUM_MAX_CHARS == PIPELINE_QR_ALNUM_MAX_CHARS) ? 1 : -1];
+typedef char pipeline_build_event_qr_data_codewords_check[
+    (PIPELINE_BUILT_QR_DATA_CODEWORDS == PIPELINE_QR_DATA_CODEWORDS) ? 1 : -1];
+/* Cross-checks for build_event.h's hand-duplicated PIPELINE_BUILT_BYTE_SEG_
+ * HEADER_BITS(12)/PIPELINE_BUILT_ALNUM_SEG_HEADER_BITS(13) (spec #122,
+ * sub-issue #123): each single-segment ceiling qr_adapter.h independently
+ * derives (PIPELINE_QR_MAX_PAYLOAD_BYTES for BYTE mode,
+ * PIPELINE_QR_ALNUM_MAX_CHARS for ALPHANUMERIC mode) is recomputed here
+ * from the SAME raw data-bit budget minus only that one segment's own
+ * header-bit constant -- if either duplicated header-bit width ever
+ * drifts from the QR spec's real per-mode character-count field width,
+ * this recomputation stops matching qr_adapter.h's own independently
+ * pinned value and fails loudly here, at compile time. */
+typedef char pipeline_build_event_byte_seg_header_bits_check[
+    (((long)PIPELINE_BUILT_QR_DATA_CODEWORDS * 8L - (long)PIPELINE_BUILT_BYTE_SEG_HEADER_BITS) / 8L
+     == (long)PIPELINE_QR_MAX_PAYLOAD_BYTES) ? 1 : -1];
+typedef char pipeline_build_event_alnum_seg_header_bits_check[
+    (PIPELINE_ALNUM_CHARS_FOR_BITS((long)PIPELINE_BUILT_QR_DATA_CODEWORDS * 8L -
+                                    (long)PIPELINE_BUILT_ALNUM_SEG_HEADER_BITS)
+     == (pipeline_u32)PIPELINE_QR_ALNUM_MAX_CHARS) ? 1 : -1];
 /* This build's own PIPELINE_URL_BASE must leave room for at least one
  * base32 character per fragment -- a longer base URL than this build's
- * fixed QR alphanumeric budget allows is a build-time configuration error,
- * not a runtime one (mirrors the tag/name-length checks above: loud, not
- * silent). Recomputed independently here in signed `long` arithmetic
- * (rather than just checking PIPELINE_BUILT_FRAGMENT_CHUNK_LEN's own
- * unsigned `pipeline_u32` value directly) so an over-long PIPELINE_URL_BASE
- * that would make that macro's own unsigned subtraction WRAP AROUND to a
- * huge positive value can never masquerade as "budget >= 1" here. */
+ * fixed two-segment QR bit budget allows is a build-time configuration
+ * error, not a runtime one (mirrors the tag/name-length checks above:
+ * loud, not silent). PIPELINE_BUILT_ALNUM_BUDGET_BITS is already computed
+ * in signed `long` arithmetic (build_event.h's own comment) so an
+ * over-long PIPELINE_URL_BASE that would otherwise wrap an unsigned
+ * subtraction into a huge positive value can never masquerade as a valid
+ * budget here. */
 typedef char pipeline_build_event_fragment_budget_check[
-    (((long)PIPELINE_BUILT_QR_ALNUM_MAX_CHARS - (long)PIPELINE_URL_SCHEME_LEN -
-      (long)PIPELINE_URL_BASE_LEN - (long)PIPELINE_URL_PATH_SEP_LEN -
-      (long)PIPELINE_FRAGMENT_HEADER_LEN) >= 1L) ? 1 : -1];
+    (PIPELINE_BUILT_ALNUM_BUDGET_BITS >= PIPELINE_BUILT_MIN_ALNUM_BUDGET_BITS) ? 1 : -1];
 
 int build_event(const StarCapture *capture, const pipeline_u8 key[PIPELINE_KEY_SIZE], BuiltEvent *out)
 {
@@ -115,9 +130,10 @@ int build_event(const StarCapture *capture, const pipeline_u8 key[PIPELINE_KEY_S
     }
 
     /*
-     * ADR-0006 multi-frame transport (spec #115, sub-issue #116): wrap the
+     * ADR-0006 multi-frame transport (spec #115, sub-issue #116; realigned
+     * to #101's ratified URL schema by spec #122, sub-issue #123): wrap the
      * unchanged packed_payload bytes above in the reversible base32 /
-     * fragment / URL / alphanumeric-QR envelope -- see build_event.h's own
+     * fragment / URL / two-segment-QR envelope -- see build_event.h's own
      * comment on this section's fixed compile-time sizing.
      */
     {
@@ -155,7 +171,16 @@ int build_event(const StarCapture *capture, const pipeline_u8 key[PIPELINE_KEY_S
                 return 0;
             }
 
-            if (!pipeline_qr_encode_alphanumeric(url, urlLen, out->qr_bitmaps[i])) {
+            /* Two-segment QR encode (spec #122, sub-issue #123): the
+             * verbatim "<BASE>#" prefix rides a BYTE segment, and the
+             * `/`-delimited SEQ/TOTAL/PAYLOAD fragment tail immediately
+             * following it in url[] rides ALPHANUMERIC -- see
+             * PIPELINE_BUILT_URL_BYTE_SEG_LEN's own comment (build_event.h)
+             * for why the split point is exactly that length. */
+            if (!pipeline_qr_encode_two_segment(url, (pipeline_u32)PIPELINE_BUILT_URL_BYTE_SEG_LEN,
+                                                 url + (pipeline_u32)PIPELINE_BUILT_URL_BYTE_SEG_LEN,
+                                                 urlLen - (pipeline_u32)PIPELINE_BUILT_URL_BYTE_SEG_LEN,
+                                                 out->qr_bitmaps[i])) {
                 return 0;
             }
         }

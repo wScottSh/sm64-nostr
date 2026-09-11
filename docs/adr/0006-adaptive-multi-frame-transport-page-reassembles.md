@@ -41,15 +41,22 @@ path where it is the best available UX.
   fixed mask, ~2 px/module), kept for CRT legibility (glare, phosphor bloom,
   scanlines, rolling-shutter beat). The multi-frame pivot changes *total capacity*,
   not per-frame geometry.
-- **Fragments are numeric-mode packed** (path-based, all-uppercase URL), per the
-  density decision locked in the capacity work. Each fragment carries enough header
-  to identify its index and the total frame count so the page knows when it is done.
-  **Superseded by spec #115 sub-issue #116's own explicit build decision:** the
-  packed payload is base32-encoded (RFC 4648 §6, `A-Z2-7`), which needs the QR
-  **ALPHANUMERIC** segment mode, not numeric (base32's alphabet includes letters
-  a numeric-mode segment cannot carry). This is exactly the "full v3 wire layout"
-  detail the next bullet already scopes out of this ADR and into #102/#115 — noted
-  here, not silently overridden, per this repo's "flag ADR conflicts" convention.
+- **Fragments carry a header identifying their index and the total frame count**
+  so the page knows when it is done. **This bullet's original prose (fragments as
+  "numeric-mode packed (path-based, all-uppercase URL)") is superseded, twice
+  over:** first by spec #115 sub-issue #116's own build decision (base32, RFC
+  4648 §6, `A-Z2-7`, which needs the QR **ALPHANUMERIC** segment mode, not
+  numeric — base32's alphabet includes letters a numeric-mode segment cannot
+  carry), and then by #101's own RATIFIED URL template, which this ADR always
+  deferred the exact URL shape TO (see the next bullet) and which spec #122/
+  sub-issue #123 realigned the build against: `<BASE>#<SEQ>/<TOTAL>/<PAYLOAD>` —
+  a `#` hash-fragment join (never a `/` path join), the base URL emitted
+  **verbatim** (never uppercased), and `/`-delimited SEQ/TOTAL/PAYLOAD fields.
+  The "path-based, all-uppercase" language above was never itself ratified; it
+  was loose prose that #115 mistakenly built against instead of deferring to
+  #101 as this ADR's own next bullet says to. Noted here, corrected, not
+  silently rewritten out of the historical record, per this repo's "flag ADR
+  conflicts" convention.
 - The exact URL template and base-URL provisioning are **out of this ADR** (#101);
   the full v3 wire layout — FRAMES semantics, fragment header bits, per-frame ECC
   under the actual segment mode chosen at build time — is **out of this ADR**

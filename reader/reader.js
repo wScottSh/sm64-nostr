@@ -39,8 +39,8 @@ import { sha256Hex, bytesToHex, hexToBytes } from './sha256.js';
 const {
   PIPELINE_BASE32_ALPHABET,
   PIPELINE_FRAGMENT_BASE36_ALPHABET,
-  PIPELINE_URL_SCHEME,
-  PIPELINE_URL_PATH_SEP,
+  PIPELINE_URL_FIELD_SEP,
+  PIPELINE_URL_FRAGMENT_SEP,
   PIPELINE_FRAGMENT_INDEX_LEN,
   PIPELINE_FRAGMENT_COUNT_LEN,
   PIPELINE_EVENT_TAG_KEY,
@@ -49,7 +49,12 @@ const {
   PIPELINE_EVENT_KIND,
 } = TRANSPORT_CONTRACT;
 
-const FRAGMENT_HEADER_LEN = PIPELINE_FRAGMENT_INDEX_LEN + PIPELINE_FRAGMENT_COUNT_LEN;
+// PIPELINE_FRAGMENT_INDEX_LEN base36 digits, then PIPELINE_URL_FIELD_SEP,
+// then PIPELINE_FRAGMENT_COUNT_LEN base36 digits, then another
+// PIPELINE_URL_FIELD_SEP -- e.g. "00/02/" -- ahead of the base32 chunk
+// (spec #122's ratified <SEQ>/<TOTAL>/<PAYLOAD> template).
+const COUNT_FIELD_START = PIPELINE_FRAGMENT_INDEX_LEN + PIPELINE_URL_FIELD_SEP.length;
+const FRAGMENT_HEADER_LEN = COUNT_FIELD_START + PIPELINE_FRAGMENT_COUNT_LEN + PIPELINE_URL_FIELD_SEP.length;
 
 /**
  * base32Decode: the exact inverse of src/pipeline/base32.c's
@@ -80,18 +85,25 @@ export function base32Decode(text) {
 /**
  * parseFragmentHeader: the exact port of src/pipeline/fragment.c's
  * pipeline_fragment_parse_header() -- reads fragment[0:FRAGMENT_HEADER_LEN]
- * (PIPELINE_FRAGMENT_INDEX_LEN base36 digits, then PIPELINE_FRAGMENT_COUNT_LEN
- * base36 digits, both uppercase) and returns { index, count, chunk }, where
- * chunk is fragment's remaining text (the base32 slice). Throws if the
- * fragment is too short, either field has a non-base36 byte, count is 0, or
- * index >= count -- a structurally invalid header, never guessed at.
+ * (PIPELINE_FRAGMENT_INDEX_LEN base36 digits, PIPELINE_URL_FIELD_SEP,
+ * PIPELINE_FRAGMENT_COUNT_LEN base36 digits, PIPELINE_URL_FIELD_SEP -- e.g.
+ * "00/02/", spec #122's ratified <SEQ>/<TOTAL>/<PAYLOAD> template) and
+ * returns { index, count, chunk }, where chunk is fragment's remaining text
+ * (the base32 slice). Throws if the fragment is too short, either
+ * PIPELINE_URL_FIELD_SEP separator is missing/wrong, either base36 field
+ * has a non-base36 byte, count is 0, or index >= count -- a structurally
+ * invalid header, never guessed at.
  */
 export function parseFragmentHeader(fragment) {
   if (fragment.length < FRAGMENT_HEADER_LEN) {
     throw new Error('parseFragmentHeader: fragment shorter than the header');
   }
+  if (fragment[PIPELINE_FRAGMENT_INDEX_LEN] !== PIPELINE_URL_FIELD_SEP
+      || fragment[COUNT_FIELD_START + PIPELINE_FRAGMENT_COUNT_LEN] !== PIPELINE_URL_FIELD_SEP) {
+    throw new Error(`parseFragmentHeader: missing/wrong '${PIPELINE_URL_FIELD_SEP}' field separator in header`);
+  }
   const indexField = fragment.slice(0, PIPELINE_FRAGMENT_INDEX_LEN);
-  const countField = fragment.slice(PIPELINE_FRAGMENT_INDEX_LEN, FRAGMENT_HEADER_LEN);
+  const countField = fragment.slice(COUNT_FIELD_START, COUNT_FIELD_START + PIPELINE_FRAGMENT_COUNT_LEN);
   const index = decodeBase36Field(indexField);
   const count = decodeBase36Field(countField);
   if (count === 0 || index >= count) {
@@ -113,29 +125,32 @@ function decodeBase36Field(field) {
 }
 
 /**
- * stripUrl: the exact port of src/pipeline/url.c's pipeline_url_strip() for
- * a KNOWN baseUrl -- verifies url begins with EXACTLY
- * PIPELINE_URL_SCHEME + baseUrl + PIPELINE_URL_PATH_SEP (byte-for-byte,
- * case-sensitive -- every emitted frame's URL text is already uppercase,
- * see transport_contract.h), then returns the remainder (the fragment).
- * Throws if the prefix doesn't match.
+ * extractFragment: the host-agnostic port of src/pipeline/url.c's
+ * pipeline_url_extract_fragment() (spec #122, sub-issue #123) -- recovers
+ * everything after the FIRST PIPELINE_URL_FRAGMENT_SEP ('#') byte in url,
+ * with NO comparison against any expected base URL at all: a frame wrapped
+ * around ANY base, served from ANY host, extracts identically. This is
+ * "split once on `#`", nothing more -- host-independence is structural,
+ * not a configuration a deployer could get wrong (there is no baseUrl
+ * parameter to get wrong). Throws if url contains no `#` at all.
  */
-export function stripUrl(url, baseUrl) {
-  const prefix = PIPELINE_URL_SCHEME + baseUrl + PIPELINE_URL_PATH_SEP;
-  if (!url.startsWith(prefix)) {
-    throw new Error(`stripUrl: ${JSON.stringify(url)} does not start with expected prefix ${JSON.stringify(prefix)}`);
+export function extractFragment(url) {
+  const sepIndex = url.indexOf(PIPELINE_URL_FRAGMENT_SEP);
+  if (sepIndex < 0) {
+    throw new Error(`extractFragment: ${JSON.stringify(url)} contains no '${PIPELINE_URL_FRAGMENT_SEP}' fragment separator`);
   }
-  return url.slice(prefix.length);
+  return url.slice(sepIndex + PIPELINE_URL_FRAGMENT_SEP.length);
 }
 
 /**
  * reassembleFrames: the "opened webpage" half of ADR-0006's transport
- * (spec #115, sub-issue #116/#119) -- the JS twin of tools/pipeline_test/
- * main.c's reassemble_built_event(). Takes frameUrls (an array of raw URL
- * strings, one per scanned frame, in ANY order -- exactly what a stock
- * camera hands back one frame at a time) and baseUrl (this reader's own
- * known base URL, e.g. location.host derived), strips + parses each one,
- * and concatenates chunks at their own header-declared index. Returns
+ * (spec #115, sub-issue #116/#119; host-agnostic per spec #122 sub-issue
+ * #123) -- the JS twin of tools/pipeline_test/main.c's
+ * reassemble_built_event(). Takes frameUrls (an array of raw URL strings,
+ * one per scanned frame, in ANY order -- exactly what a stock camera hands
+ * back one frame at a time), extracts + parses each one's fragment with NO
+ * base-URL argument and NO host comparison whatsoever, and concatenates
+ * chunks at their own header-declared index. Returns
  * { complete: true, base32Text } once every index 0..count-1 has been seen
  * at least once; returns { complete: false, seen, count } otherwise -- an
  * incomplete set is reported as incomplete, NEVER as a wrong/partial
@@ -158,13 +173,13 @@ export function stripUrl(url, baseUrl) {
  * catch throws rather than silently concatenating fragments from two
  * different events into one payload.
  */
-export function reassembleFrames(frameUrls, baseUrl) {
+export function reassembleFrames(frameUrls) {
   const chunksByIndex = new Map();
   let count = null;
   let nonLastChunkLen = null;
 
   for (const url of frameUrls) {
-    const fragment = stripUrl(url, baseUrl);
+    const fragment = extractFragment(url);
     const { index, count: frameCount, chunk } = parseFragmentHeader(fragment);
     if (count === null) {
       count = frameCount;

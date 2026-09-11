@@ -9,28 +9,22 @@ pipeline_u32 pipeline_url_wrap(const pipeline_u8 *baseUrl, pipeline_u32 baseUrlL
                                 const pipeline_u8 *fragment, pipeline_u32 fragmentLen,
                                 pipeline_u8 *out, pipeline_u32 outCap)
 {
-    static const pipeline_u8 scheme[] = PIPELINE_URL_SCHEME;
-    static const pipeline_u8 sep[] = PIPELINE_URL_PATH_SEP;
+    static const pipeline_u8 sep[] = PIPELINE_URL_FRAGMENT_SEP;
     pipeline_u32 total;
     pipeline_u32 pos;
     pipeline_u32 i;
 
-    total = (pipeline_u32)PIPELINE_URL_SCHEME_LEN + baseUrlLen +
-            (pipeline_u32)PIPELINE_URL_PATH_SEP_LEN + fragmentLen;
+    total = baseUrlLen + (pipeline_u32)PIPELINE_URL_FRAGMENT_SEP_LEN + fragmentLen;
     if (total > outCap) {
         return 0;
     }
 
     pos = 0;
-    for (i = 0; i < (pipeline_u32)PIPELINE_URL_SCHEME_LEN; i++) {
-        out[pos] = scheme[i];
-        pos++;
-    }
     for (i = 0; i < baseUrlLen; i++) {
         out[pos] = baseUrl[i];
         pos++;
     }
-    for (i = 0; i < (pipeline_u32)PIPELINE_URL_PATH_SEP_LEN; i++) {
+    for (i = 0; i < (pipeline_u32)PIPELINE_URL_FRAGMENT_SEP_LEN; i++) {
         out[pos] = sep[i];
         pos++;
     }
@@ -41,42 +35,31 @@ pipeline_u32 pipeline_url_wrap(const pipeline_u8 *baseUrl, pipeline_u32 baseUrlL
     return total;
 }
 
-int pipeline_url_strip(const pipeline_u8 *url, pipeline_u32 urlLen,
-                        const pipeline_u8 *baseUrl, pipeline_u32 baseUrlLen,
-                        pipeline_u8 *fragmentOut, pipeline_u32 outCap, pipeline_u32 *fragmentLenOut)
+int pipeline_url_extract_fragment(const pipeline_u8 *url, pipeline_u32 urlLen,
+                                   pipeline_u8 *fragmentOut, pipeline_u32 outCap, pipeline_u32 *fragmentLenOut)
 {
-    static const pipeline_u8 scheme[] = PIPELINE_URL_SCHEME;
-    static const pipeline_u8 sep[] = PIPELINE_URL_PATH_SEP;
-    pipeline_u32 prefixLen;
+    pipeline_u8 sepByte = (pipeline_u8)PIPELINE_URL_FRAGMENT_SEP[0];
+    pipeline_u32 sepPos;
     pipeline_u32 fragLen;
     pipeline_u32 i;
 
-    prefixLen = (pipeline_u32)PIPELINE_URL_SCHEME_LEN + baseUrlLen + (pipeline_u32)PIPELINE_URL_PATH_SEP_LEN;
-    if (urlLen < prefixLen) {
-        return 0;
-    }
-    for (i = 0; i < (pipeline_u32)PIPELINE_URL_SCHEME_LEN; i++) {
-        if (url[i] != scheme[i]) {
-            return 0;
+    sepPos = urlLen; /* "not found" sentinel */
+    for (i = 0; i < urlLen; i++) {
+        if (url[i] == sepByte) {
+            sepPos = i;
+            break;
         }
     }
-    for (i = 0; i < baseUrlLen; i++) {
-        if (url[(pipeline_u32)PIPELINE_URL_SCHEME_LEN + i] != baseUrl[i]) {
-            return 0;
-        }
-    }
-    for (i = 0; i < (pipeline_u32)PIPELINE_URL_PATH_SEP_LEN; i++) {
-        if (url[(pipeline_u32)PIPELINE_URL_SCHEME_LEN + baseUrlLen + i] != sep[i]) {
-            return 0;
-        }
+    if (sepPos == urlLen) {
+        return 0; /* no '#' anywhere in url -- host-agnostic, but a fragment must still exist */
     }
 
-    fragLen = urlLen - prefixLen;
+    fragLen = urlLen - sepPos - (pipeline_u32)PIPELINE_URL_FRAGMENT_SEP_LEN;
     if (fragLen > outCap) {
         return 0;
     }
     for (i = 0; i < fragLen; i++) {
-        fragmentOut[i] = url[prefixLen + i];
+        fragmentOut[i] = url[sepPos + (pipeline_u32)PIPELINE_URL_FRAGMENT_SEP_LEN + i];
     }
     *fragmentLenOut = fragLen;
     return 1;

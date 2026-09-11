@@ -92,9 +92,11 @@
  * tag/name lengths) is no longer QR-encoded directly via this BYTE-mode
  * path or bounded by this constant at all (ADR-0006's multi-frame
  * transport, spec #115, sub-issue #117, retired that ceiling -- the packed
- * payload is base32-encoded, fragmented, and URL-wrapped into N
- * ALPHANUMERIC-mode frames instead; see PIPELINE_QR_ALNUM_MAX_CHARS below
- * and build_event.c). pipeline_qr_encode() itself (BYTE mode) remains a
+ * payload is base32-encoded, fragmented, and URL-wrapped into N two-segment
+ * frames instead (spec #122, sub-issue #123: a BYTE segment for the
+ * verbatim base URL + '#', an ALPHANUMERIC segment for the fragment tail);
+ * see PIPELINE_QR_ALNUM_MAX_CHARS below and build_event.h's own bit-budget
+ * derivation). pipeline_qr_encode() itself (BYTE mode) remains a
  * real, independently useful seam -- exercised directly by the host test
  * tool's own round-trip tests -- so this constant and its rejection
  * boundary stay exactly as they always were for that one call. */
@@ -111,13 +113,18 @@
  * bits (89*11 == 979) with 0 bits left over for a trailing single
  * character (which would need 6 more), so the maximum is exactly 89*2 =
  * 178 characters -- confirmed empirically against this exact encoder: 178
- * chars round-trips, 179 is cleanly rejected. This bounds the URL text
- * (scheme + PIPELINE_URL_BASE + path separator + fragment) build_event.c
- * QR-encodes per frame, not the packed-payload byte budget above (a
- * different mode, a different ceiling, and per ADR-0006 no longer a total-
- * payload ceiling at all -- see this header's own comment on
- * PIPELINE_QR_MAX_PAYLOAD_BYTES for why that one stays BYTE-mode-only and
- * per-call, not a build-wide total).
+ * chars round-trips, 179 is cleanly rejected. This is the ceiling for a
+ * SINGLE, standalone ALPHANUMERIC segment (pipeline_qr_encode_alphanumeric()'s
+ * own budget); build_event.c's per-frame fragment tail no longer uses this
+ * constant directly (spec #122, sub-issue #123: every frame is now a
+ * two-segment QR -- see build_event.h's own PIPELINE_BUILT_ALNUM_SEG_HEADER_BITS/
+ * PIPELINE_BUILT_ALNUM_BUDGET_BITS derivation, which build_event.c
+ * cross-checks against this exact constant so the two can never silently
+ * drift apart), not the packed-payload byte budget above (a different mode,
+ * a different ceiling, and per ADR-0006 no longer a total-payload ceiling
+ * at all -- see this header's own comment on PIPELINE_QR_MAX_PAYLOAD_BYTES
+ * for why that one stays BYTE-mode-only and per-call, not a build-wide
+ * total).
  */
 #define PIPELINE_QR_ALNUM_MAX_CHARS 178
 
@@ -150,6 +157,29 @@ int pipeline_qr_encode(const pipeline_u8 *payload, pipeline_u32 payloadLen,
  */
 int pipeline_qr_encode_alphanumeric(const pipeline_u8 *text, pipeline_u32 textLen,
                                      pipeline_u8 out[PIPELINE_QR_BUFFER_LEN]);
+
+/*
+ * pipeline_qr_encode_two_segment: encodes byteData[0 : byteLen] as a BYTE
+ * segment immediately followed by alnumText[0 : alnumLen] as an
+ * ALPHANUMERIC segment, both in the same fixed-version-7/ECC-MEDIUM QR
+ * Code with the same single fixed mask (PIPELINE_QR_MASK) as the two
+ * functions above (spec #122, sub-issue #123 -- #101's ratified
+ * `<BASE>#<SEQ>/<TOTAL>/<PAYLOAD>` template: the verbatim, possibly-mixed-
+ * case `<BASE>#` prefix falls outside the QR alphanumeric charset, so it
+ * rides BYTE while the `/`-delimited SEQ/TOTAL/PAYLOAD tail rides
+ * ALPHANUMERIC). alnumText must contain only the QR alphanumeric charset
+ * (0-9, A-Z, space, $ % * + - . / :) -- fragment.h's own fragment text
+ * always does, by construction; byteData is unconstrained (any byte value
+ * is legal in BYTE mode).
+ *
+ * Returns nonzero (true) on success. Returns 0 (false) -- writing nothing
+ * usable to out -- if alnumText contains a non-alphanumeric-charset byte or
+ * the combined segments exceed this fixed version/ECC's data capacity.
+ * Callers must check the return value.
+ */
+int pipeline_qr_encode_two_segment(const pipeline_u8 *byteData, pipeline_u32 byteLen,
+                                    const pipeline_u8 *alnumText, pipeline_u32 alnumLen,
+                                    pipeline_u8 out[PIPELINE_QR_BUFFER_LEN]);
 
 /* Thin pass-throughs to qrcodegen_getSize/qrcodegen_getModule, so callers
  * outside src/pipeline never need to name those functions directly -- note

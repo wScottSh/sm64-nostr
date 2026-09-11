@@ -130,6 +130,40 @@ int qrcodegen_encodeAlphanumeric(const qr_u8 text[], int textLen, qr_u8 qrcode[]
                                   enum qrcodegen_Ecc ecl, int minVersion, int maxVersion,
                                   enum qrcodegen_Mask mask, int boostEcl);
 
+/*
+ * qrcodegen_encodeTwoSegments: TWO-segment counterpart of
+ * qrcodegen_encodeBinary()/qrcodegen_encodeAlphanumeric() above (spec #122,
+ * sub-issue #123 -- #101's ratified `<BASE>#<SEQ>/<TOTAL>/<PAYLOAD>` URL
+ * template: a verbatim, possibly-mixed-case base plus the literal `#`
+ * separator fall outside the QR alphanumeric charset, so that prefix rides
+ * a BYTE segment while the `/`-delimited SEQ/TOTAL/PAYLOAD tail rides a
+ * second, ALPHANUMERIC segment). Encodes byteData[0 : byteLen] as a single
+ * BYTE-mode segment immediately followed by alnumText[0 : alnumLen] as a
+ * single ALPHANUMERIC-mode segment (alnumText must contain only the QR
+ * alphanumeric charset: 0-9, A-Z, space, $ % * + - . / :; any other byte is
+ * rejected) -- searching versions [minVersion, maxVersion] for the smallest
+ * that fits both segments at ecl (silently raised to a higher ECC level,
+ * never lower, if boostEcl is nonzero and it still fits), and writes the
+ * finished, masked QR Code into qrcode[].
+ *
+ * Returns nonzero (true) on success. Returns 0 (false) -- writing nothing
+ * usable to qrcode (qrcode[0] is set to 0, an invalid size) -- if alnumText
+ * contains a non-alphanumeric-charset byte or the combined data does not
+ * fit any version in range at the given ecl. This is the clean rejection
+ * path for invalid/over-budget input: callers must check the return value,
+ * and no truncated/partial QR Code is ever produced.
+ *
+ * Like qrcodegen_encodeAlphanumeric(), byteData[]/alnumText[] are read-only
+ * input, not scratch: tempBuffer[] (length
+ * qrcodegen_BUFFER_LEN_FOR_VERSION(maxVersion)) is the separate scratch
+ * buffer this function needs. byteData[]/alnumText[]/tempBuffer[]/qrcode[]
+ * must not overlap.
+ */
+int qrcodegen_encodeTwoSegments(const qr_u8 byteData[], int byteLen, const qr_u8 alnumText[], int alnumLen,
+                                  qr_u8 qrcode[], qr_u8 tempBuffer[],
+                                  enum qrcodegen_Ecc ecl, int minVersion, int maxVersion,
+                                  enum qrcodegen_Mask mask, int boostEcl);
+
 /* Same semantics as upstream qrcodegen_getSize/qrcodegen_getModule
  * (nonzero/zero in place of bool). */
 int qrcodegen_getSize(const qr_u8 qrcode[]);
