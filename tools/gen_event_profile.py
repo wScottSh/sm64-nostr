@@ -108,10 +108,10 @@ EVENT_NAME_ALLOWED_CHARS = frozenset(
 # #126; SHRUNK BACK 20->17 by spec #90 sub-issue #139, which SUPERSEDES
 # #126): 17 is #133's ratified cap decision for spec #90's lives-removal /
 # power-meter-relocation work -- #133 ratifies relocating the power meter
-# into the old lives-counter slot in the same top-left HUD corner (not yet
-# implemented on this branch as of #139; sPowerMeterHUD's own x/y are still
-# their pre-#133 values in src/game/hud.c), and picks 17 (not 20) as the
-# ceiling that keeps the event name clear of that eventual relocated meter.
+# into the old lives-counter slot in the same top-left HUD corner (implemented
+# by spec #90 sub-issue #141: sPowerMeterHUD.x re-anchored 140->54 in
+# src/game/hud.c, left edge x22, right edge x86), and picks 17 (not 20) as the
+# ceiling that keeps the event name clear of that relocated meter.
 # Chosen to match format_descriptor.json's own NAME.max_size (the wire
 # budget), not derived independently from the HUD -- main() below fails
 # closed if the two ever drift apart (see the NAME max-size check next to

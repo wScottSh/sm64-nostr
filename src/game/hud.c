@@ -35,9 +35,16 @@ struct PowerMeterHUD {
 // When the HUD is rendered this value is 8, full health.
 static s16 sPowerMeterStoredHealth;
 
+// x = 54: center-anchor for this 64px-wide quad, re-anchored from the
+// vanilla 140 to relocate the power meter into the top-left slot the lives
+// counter vacated (spec #90 sub-issue #141). Left edge 54 - 32 = 22 matches
+// the former lives head-glyph's left edge; right edge 54 + 32 = 86 stays
+// clear of the castle/hub event name (capped at 17 chars by spec #90
+// sub-issue #139 to guarantee this). y = 166 is left untouched: the
+// rise (166->200) and hide animations below are entirely y-driven.
 static struct PowerMeterHUD sPowerMeterHUD = {
     POWER_METER_HIDDEN,
-    140,
+    54,
     166,
     1.0,
 };
@@ -316,8 +323,11 @@ static s32 hud_lives_counter_is_shown(void) {
  * GFX_DIMENSIONS_RECT_FROM_RIGHT_EDGE(78), 'X' @ +16, count @ the star
  * counter's own count offset (RECT_FROM_RIGHT_EDGE(78 - 16) + 14; the +14
  * matches the star counter's showX==1 case, since the coin counter always
- * shows its 'X'). No collision with lives (left) or the power meter
- * (bottom-right).
+ * shows its 'X'). No collision with the power meter, now relocated to the
+ * top-left corner the lives counter vacated (spec #90 sub-issue #141:
+ * sPowerMeterHUD.x = 54, right edge x86 -- clears this corner's own
+ * leftmost glyph at absolute x92 by 6px, per spec #90 sub-issue #139's
+ * event-name length cap).
  *
  * The coin counter's old center spot (x168) is repurposed for a red-coin
  * readout: marker glyph @ x168, bare count @ x186 (no "/8" -- an explicit
