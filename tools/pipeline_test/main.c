@@ -219,6 +219,7 @@
 #include "qr_render.h"
 #include "qr_display.h"
 #include "qr_cycle.h"
+#include "star_event_scheduler.h"
 #include "base32.h"
 #include "fragment.h"
 #include "url.h"
@@ -2927,6 +2928,124 @@ static void test_qr_cycle_frame_index(void)
 }
 
 /*
+ * test_star_event_scheduler_deferred_build_contract: the capture@grab ->
+ * build@cover PURE scheduler core (spec #96, sub-issue #145) -- see
+ * ../../src/game/star_event_scheduler.h. Drives the core with the exact
+ * sequence of calls the real glue makes (interaction.c's grab-time
+ * capture()/reset(), mario_actions_cutscene.c's cover-frame poll_build()/
+ * report_build_result()) and pins the parent spec's own observable
+ * contract: (a) a build is never requested on the grab frame; (b) it is
+ * requested exactly once, on/before the cover frame; (c) it reports ready
+ * before the display/take site; (d) a build failure leaves the same resume
+ * state as today (no retry, never ready); (e) a Bowser-key grab requests no
+ * build and leaves no valid pending event.
+ */
+static void test_star_event_scheduler_deferred_build_contract(void)
+{
+    StarEventSchedulerState state;
+
+    /* Fresh session: idle, nothing ready. */
+    star_event_scheduler_init(&state);
+    check(!star_event_scheduler_is_ready(&state),
+          "star_event_scheduler: freshly-initialized state is not ready");
+    check(!star_event_scheduler_poll_build(&state),
+          "star_event_scheduler: idle state never signals a build");
+
+    /* (a) capture@grab: capture() itself -- the ONLY call the real glue
+     * makes at the grab site (interaction.c) -- carries no build-now signal
+     * of its own (it returns nothing) and does not make the event ready.
+     * NOTE on what this core can and can't prove: the core has no concept
+     * of "the grab frame" -- it only reacts to which functions are called,
+     * in which order. "A build is never requested on the grab frame" is
+     * therefore a GLUE-level guarantee (interaction.c's interact_star_or_key
+     * calls capture(), never poll_build()), not something this core enforces
+     * on its own; a caller that mistakenly called poll_build() immediately
+     * after capture() would legitimately get a build-now response, exactly
+     * like the real cover-frame call below does. What this core DOES
+     * guarantee, and what the rest of this test pins, is (b): however many
+     * frames later the glue's ONE poll_build() call at the cover frame
+     * happens, the build is requested exactly once, never twice. */
+    star_event_scheduler_capture(&state);
+    check(!star_event_scheduler_is_ready(&state),
+          "star_event_scheduler: capture() alone (the grab frame) never makes the event ready");
+
+    /* Frames between grab and the cover frame: the real glue calls nothing
+     * on this state here (general_star_dance_handler only reaches its
+     * case-80 poll on the cover frame) -- confirm nothing changes on its
+     * own in the meantime, i.e. there is no implicit/timer-driven build. */
+    check(!star_event_scheduler_is_ready(&state),
+          "star_event_scheduler: still not ready several frames after capture, with no poll yet");
+
+    /* (b) the cover frame: the FIRST poll_build() call requests the build
+     * exactly once. */
+    check(star_event_scheduler_poll_build(&state),
+          "star_event_scheduler: poll_build() on the cover frame requests the build");
+    /* A second poll_build() call -- whether a caller bug re-polls the same
+     * frame, or a later frame re-polls before report_build_result() -- must
+     * NOT request a second build: "exactly once" holds even under a
+     * misbehaving caller. */
+    check(!star_event_scheduler_poll_build(&state),
+          "star_event_scheduler: a second poll_build() call never re-requests the build");
+    check(!star_event_scheduler_poll_build(&state),
+          "star_event_scheduler: a third poll_build() call still never re-requests the build");
+
+    /* (c) report success: ready is observable immediately, before any
+     * display/take-site frame delay. */
+    star_event_scheduler_report_build_result(&state, 1);
+    check(star_event_scheduler_is_ready(&state),
+          "star_event_scheduler: is_ready() is true immediately after a successful build report");
+    check(!star_event_scheduler_poll_build(&state),
+          "star_event_scheduler: poll_build() never re-requests once ready");
+
+    /* (d) a fresh capture (a later grab) followed by a build FAILURE: leaves
+     * the exact same resume state build_event() failing at grab does today
+     * -- never ready, and no retry on a later poll. */
+    star_event_scheduler_capture(&state);
+    check(star_event_scheduler_poll_build(&state),
+          "star_event_scheduler: a fresh capture() re-arms poll_build() for its own grab");
+    star_event_scheduler_report_build_result(&state, 0);
+    check(!star_event_scheduler_is_ready(&state),
+          "star_event_scheduler: a build failure never becomes ready");
+    check(!star_event_scheduler_poll_build(&state),
+          "star_event_scheduler: a build failure is never retried by a later poll_build() call");
+    check(!star_event_scheduler_is_ready(&state),
+          "star_event_scheduler: still not ready after the no-retry poll following a failure");
+
+    /* (e) a Bowser-key grab: reset() unconditionally returns to idle,
+     * whether or not anything was captured/ready beforehand -- requests no
+     * build and leaves no valid pending event, matching a fresh capture
+     * that never gets built. */
+    star_event_scheduler_capture(&state);
+    star_event_scheduler_reset(&state);
+    check(!star_event_scheduler_is_ready(&state),
+          "star_event_scheduler: reset() after a capture (key grab) leaves the state not ready");
+    check(!star_event_scheduler_poll_build(&state),
+          "star_event_scheduler: reset() after a capture (key grab) leaves no build to request");
+    check(!star_event_scheduler_is_ready(&state),
+          "star_event_scheduler: key-grab reset still not ready after the no-op poll_build()");
+
+    /* reset() also unconditionally clears an already-READY state (a key
+     * grab arriving after a PRIOR no-exit star already built successfully
+     * but was somehow not yet taken) -- no valid pending event survives a
+     * key grab, ever. */
+    star_event_scheduler_capture(&state);
+    star_event_scheduler_poll_build(&state);
+    star_event_scheduler_report_build_result(&state, 1);
+    check(star_event_scheduler_is_ready(&state),
+          "star_event_scheduler: sanity -- ready before the reset-after-ready check below");
+    star_event_scheduler_reset(&state);
+    check(!star_event_scheduler_is_ready(&state),
+          "star_event_scheduler: reset() clears an already-ready state too (key grab after an "
+          "unread earlier build)");
+
+    /* report_build_result() with no preceding successful poll_build() (a
+     * caller bug) is a defensive no-op: idle stays idle, never ready. */
+    star_event_scheduler_report_build_result(&state, 1);
+    check(!star_event_scheduler_is_ready(&state),
+          "star_event_scheduler: report_build_result() without a preceding poll_build() is a no-op");
+}
+
+/*
  * Field-reduction differential sweep + operation-count proxy (spec #43
  * sub-issue #44). Establishes the two proof mechanisms this spec's later
  * sub-issues reuse -- see secp256k1.h's header comment on
@@ -3915,6 +4034,7 @@ int main(void)
     test_qr_render_glyph_orientation();
     test_qr_display_state_machine();
     test_qr_cycle_frame_index();
+    test_star_event_scheduler_deferred_build_contract();
     test_field_mul_differential_sweep();
     test_field_inv_differential_sweep();
     test_scalar_differential_sweep();

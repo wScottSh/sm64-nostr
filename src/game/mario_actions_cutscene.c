@@ -676,19 +676,33 @@ void general_star_dance_handler(struct MarioState *m, s32 isInWater) {
                     level_trigger_warp(m, WARP_OP_STAR_EXIT);
                 } else {
                     /* Nostr pipeline qr_display glue (spec #24, sub-issue
-                     * #33): the no-exit save flow. This action arg (& 1,
-                     * i.e. INT_SUBTYPE_NO_EXIT) is only ever set for a real
-                     * star grab -- a Bowser key grab always exits (see
-                     * interact_star_or_key, INT_SUBTYPE_NO_EXIT), so the
-                     * event captured at grab is always present here; the
-                     * `else` branch below is a defensive fallback only
-                     * (build_event() failure -- astronomically unlikely,
-                     * see build_event.h), not an expected path. Time-stop
+                     * #33; deferred build by spec #96, sub-issue #145): the
+                     * no-exit save flow. This action arg (& 1, i.e.
+                     * INT_SUBTYPE_NO_EXIT) is only ever set for a real star
+                     * grab -- a Bowser key grab always exits (see
+                     * interact_star_or_key, INT_SUBTYPE_NO_EXIT). Time-stop
                      * is enabled here (inherited by qr_display, per its own
                      * header comment) exactly as the DIALOG_013/014 prompt
-                     * it replaces used to. */
+                     * it replaces used to -- and, as of #145, THIS is also
+                     * the frame the deferred build_event() call actually
+                     * runs on: enable_time_stop() has already frozen the
+                     * scene by the time
+                     * pipeline_build_pending_star_event_if_captured() does
+                     * its (heavy) work below, so the whole-frame cost is
+                     * absorbed by an already-static frame instead of
+                     * showing up as a hitch at grab. That call fills the
+                     * SAME hand-off pipeline_take_pending_star_event() reads
+                     * immediately after -- capture@grab only stashed the
+                     * StarCapture (interact_star_or_key); the event is only
+                     * actually built and marked valid right here. A
+                     * build_event() failure (astronomically unlikely, see
+                     * build_event.h) leaves the hand-off invalid, so the
+                     * `else` branch below is still a defensive fallback
+                     * only, exactly as before -- just discovered here
+                     * instead of at grab. */
                     BuiltEvent pendingEvent;
                     enable_time_stop();
+                    pipeline_build_pending_star_event_if_captured();
                     if (pipeline_take_pending_star_event(&pendingEvent)
                         && qr_display_n64_present(&pendingEvent)) {
                         m->actionState = 1;
