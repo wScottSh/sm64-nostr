@@ -305,7 +305,7 @@ typedef struct BuiltEvent {
  * untouched; or any internal step past that (pipeline_pack(), base32.h's
  * pipeline_base32_encode(), fragment.h's pipeline_fragment_build(),
  * url.h's pipeline_url_wrap(), or qr_adapter.h's
- * pipeline_qr_encode_alphanumeric()) reporting a length/budget mismatch --
+ * pipeline_qr_encode_two_segment()) reporting a length/budget mismatch --
  * which this build's own compile-time checks in build_event.c (mirroring
  * pipeline_build_event_base32_len_check's existing discipline) already
  * refuse to build at all if the fixed compile-time sizes above ever

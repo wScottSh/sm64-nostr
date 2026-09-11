@@ -449,11 +449,15 @@ static void test_build_event_end_to_end(void)
     check(PIPELINE_BUILT_PAYLOAD_SIZE == 121u,
           "build_event's packed_payload size is 121 B (113 + 4-byte \"sm64\" tag + 4-byte \"TEST\" name)");
 
-    /* (a) ADR-0006's transport envelope (spec #115, sub-issue #116): the
-     * host decodes every emitted QR frame (ALPHANUMERIC-mode URLs, not raw
-     * bytes), strips the known base URL, parses each fragment header, and
-     * reassembles by index back to the exact packed_payload -- the
-     * cabinet->jumper keystone round-trip, in natural frame order. See
+    /* (a) ADR-0006's transport envelope (spec #115, sub-issue #116;
+     * realigned to #101's ratified, host-agnostic URL schema by spec #122
+     * sub-issue #123): the host decodes every emitted two-segment QR frame
+     * (a BYTE segment for the verbatim <BASE># prefix, an ALPHANUMERIC
+     * segment for the fragment tail -- not raw bytes), extracts each
+     * fragment with NO base-URL comparison at all (host-agnostic), parses
+     * each fragment header, and reassembles by index back to the exact
+     * packed_payload -- the cabinet->jumper keystone round-trip, in natural
+     * frame order. See
      * test_build_event_multiframe_round_trip() below for the any-order and
      * missing-fragment coverage this same reassembler is put through. */
     check((int)event.frame_count == (int)PIPELINE_BUILT_FRAME_COUNT && event.frame_count >= 1u,
@@ -1546,13 +1550,18 @@ static void test_qr_alphanumeric_round_trip_and_rejections(void)
      * <BASE>#<SEQ>/<TOTAL>/<PAYLOAD> two-segment schema (see
      * pipeline_qr_encode_two_segment() / qr_host_decode_mixed() instead). */
     {
-        static const char url[] = "HTTPS://SM64NOSTR.PAGES.DEV/0102ABCDEFGHIJKLMNOP";
-        int len = (int)(sizeof(url) - 1);
-        encodeOk = pipeline_qr_encode_alphanumeric((const pipeline_u8 *)url, (pipeline_u32)len, qrcode);
-        check(encodeOk != 0, "QR alphanumeric encode succeeds for a URL-shaped alphanumeric string");
+        /* A neutral all-uppercase-alnum string, NOT shaped like any per-frame
+         * URL: spec #122's frames are two-segment (`#` + verbatim base fall
+         * outside this charset), so a single-segment ALPHANUMERIC input is
+         * never a whole frame URL -- using a URL-shaped literal here would
+         * depict the retired path-based/all-uppercase shape #122 removed. */
+        static const char alnum[] = "QR ALPHANUMERIC SEGMENT ROUND TRIP 0123456789";
+        int len = (int)(sizeof(alnum) - 1);
+        encodeOk = pipeline_qr_encode_alphanumeric((const pipeline_u8 *)alnum, (pipeline_u32)len, qrcode);
+        check(encodeOk != 0, "QR alphanumeric encode succeeds for a generic alphanumeric-charset string");
         decodeOk = qr_host_decode_alphanumeric(qrcode, decoded, (int)sizeof(decoded), &decodedLen);
-        check(decodeOk != 0 && decodedLen == len && memcmp(decoded, url, (size_t)len) == 0,
-              "QR alphanumeric round-trip is byte-exact for a URL-shaped string (odd character count)");
+        check(decodeOk != 0 && decodedLen == len && memcmp(decoded, alnum, (size_t)len) == 0,
+              "QR alphanumeric round-trip is byte-exact for a generic alnum string (odd character count)");
     }
 
     /* Exact max budget (178 chars, an even count) round-trips. */
@@ -1586,8 +1595,10 @@ static void test_qr_alphanumeric_round_trip_and_rejections(void)
               "QR alphanumeric round-trip is byte-exact for an odd character count (trailing 6-bit char)");
     }
 
-    /* A byte outside the alphanumeric charset (lowercase, never legal on
-     * this build's all-uppercase wire) is rejected, not silently coerced. */
+    /* A byte outside the QR alphanumeric charset (lowercase, never legal
+     * in an ALPHANUMERIC segment -- and by construction never present in
+     * the uppercase base32/base36 fragment tail this build rides
+     * ALPHANUMERIC, spec #122) is rejected, not silently coerced. */
     {
         pipeline_u8 badText[8];
         memcpy(badText, "HTTPS://", 8);
