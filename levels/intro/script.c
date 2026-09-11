@@ -63,7 +63,11 @@ const LevelScript level_intro_mario_head_regular[] = {
     TRANSITION(/*transType*/ WARP_TRANSITION_FADE_FROM_STAR, /*time*/ 20, /*color*/ 0x00, 0x00, 0x00),
     SLEEP(/*frames*/ 20),
     CALL_LOOP(/*arg*/ LVL_INTRO_REGULAR, /*func*/ lvl_intro_update),
-    JUMP_IF(/*op*/ OP_EQ, /*arg*/ 100, script_intro_L1),
+    // Sandbox seam H - file-select bypass (spec #92): the regular Start branch
+    // is repointed away from the vanilla file-select menu (script_intro_L1)
+    // toward a menu-less successor that drops the player straight into the
+    // castle grounds on File A. The dizzy/game-over branch below is untouched.
+    JUMP_IF(/*op*/ OP_EQ, /*arg*/ 100, script_intro_bypass_file_select),
     JUMP_IF(/*op*/ OP_EQ, /*arg*/ 101, script_intro_L2),
     JUMP(script_intro_L4),
 };
@@ -124,6 +128,26 @@ const LevelScript script_intro_L1[] = {
     SLEEP(/*frames*/ 2),
     SET_REG(/*value*/ 16),
     EXIT_AND_EXECUTE(/*seg*/ 0x14, _menuSegmentRomStart, _menuSegmentRomEnd, level_main_menu_entry_1),
+};
+
+// Sandbox seam H - file-select bypass (spec #92, sub-issue #143). Structural
+// sibling of script_intro_L3/L4 (which already skip the menu and hand off
+// straight to level_main_scripts_entry), but mirrors the load-bearing tail of
+// level_main_menu_entry_1 (levels/menu/script.c): tear down the intro level,
+// pin the save slot to File A (gCurrSaveFileNum = 1) via SET_REG +
+// GET_OR_SET(OP_SET, VAR_CURR_SAVE_FILE_NUM), then set the target level to
+// the castle grounds and hand off to the shared level_main_scripts_entry.
+// The file-select menu level itself is never loaded.
+const LevelScript script_intro_bypass_file_select[] = {
+    STOP_MUSIC(/*fadeOutTime*/ 0x00BE),
+    TRANSITION(/*transType*/ WARP_TRANSITION_FADE_INTO_COLOR, /*time*/ 16, /*color*/ 0xFF, 0xFF, 0xFF),
+    SLEEP(/*frames*/ 16),
+    CLEAR_LEVEL(),
+    SLEEP_BEFORE_EXIT(/*frames*/ 1),
+    SET_REG(/*value*/ 1),
+    GET_OR_SET(/*op*/ OP_SET, /*var*/ VAR_CURR_SAVE_FILE_NUM),
+    SET_REG(/*value*/ LEVEL_CASTLE_GROUNDS),
+    EXIT_AND_EXECUTE(/*seg*/ 0x15, _scriptsSegmentRomStart, _scriptsSegmentRomEnd, level_main_scripts_entry),
 };
 
 const LevelScript script_intro_L2[] = {
