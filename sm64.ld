@@ -166,8 +166,8 @@ SECTIONS
          * .text, .data, .rodata and .bss blocks) makes it a linker orphan --
          * ld places unmatched input sections somewhere in the output
          * without failing the link, so a missing entry is a silent
-         * placement surprise, not a build error. As of sub-issue #31 there
-         * are exactly 10 src/pipeline/*.c files and 10 entries below (one
+         * placement surprise, not a build error. As of spec #115 there
+         * are exactly 13 src/pipeline/*.c files and 13 entries below (one
          * per file) in each of the four blocks. */
         BUILD_DIR/src/pipeline/build_event.o(.text);
         BUILD_DIR/src/pipeline/capture.o(.text);
@@ -178,6 +178,9 @@ SECTIONS
         BUILD_DIR/src/pipeline/sha256.o(.text);
         BUILD_DIR/src/pipeline/secp256k1.o(.text);
         BUILD_DIR/src/pipeline/qrcodegen.o(.text);
+        BUILD_DIR/src/pipeline/base32.o(.text);
+        BUILD_DIR/src/pipeline/fragment.o(.text);
+        BUILD_DIR/src/pipeline/url.o(.text);
         BUILD_DIR/src/pipeline/port_stub_c99.o(.text);
         /* Renderer glue (spec #24, sub-issue #32): qr_render.o is the pure
          * pixel-placement core (src/game/qr_render.c), qr_render_n64.o is
@@ -685,6 +688,9 @@ SECTIONS
         BUILD_DIR/src/pipeline/sha256.o(.data*);
         BUILD_DIR/src/pipeline/secp256k1.o(.data*);
         BUILD_DIR/src/pipeline/qrcodegen.o(.data*);
+        BUILD_DIR/src/pipeline/base32.o(.data*);
+        BUILD_DIR/src/pipeline/fragment.o(.data*);
+        BUILD_DIR/src/pipeline/url.o(.data*);
         BUILD_DIR/src/pipeline/port_stub_c99.o(.data*);
         BUILD_DIR/src/game/qr_render.o(.data*);
         BUILD_DIR/src/game/qr_render_n64.o(.data*);
@@ -832,6 +838,9 @@ SECTIONS
         BUILD_DIR/src/pipeline/sha256.o(.rodata*);
         BUILD_DIR/src/pipeline/secp256k1.o(.rodata*);
         BUILD_DIR/src/pipeline/qrcodegen.o(.rodata*);
+        BUILD_DIR/src/pipeline/base32.o(.rodata*);
+        BUILD_DIR/src/pipeline/fragment.o(.rodata*);
+        BUILD_DIR/src/pipeline/url.o(.rodata*);
         BUILD_DIR/src/pipeline/port_stub_c99.o(.rodata*);
         BUILD_DIR/src/game/qr_render.o(.rodata*);
         BUILD_DIR/src/game/qr_render_n64.o(.rodata*);
@@ -977,6 +986,9 @@ SECTIONS
         BUILD_DIR/src/pipeline/sha256.o(.bss*);
         BUILD_DIR/src/pipeline/secp256k1.o(.bss*);
         BUILD_DIR/src/pipeline/qrcodegen.o(.bss*);
+        BUILD_DIR/src/pipeline/base32.o(.bss*);
+        BUILD_DIR/src/pipeline/fragment.o(.bss*);
+        BUILD_DIR/src/pipeline/url.o(.bss*);
         BUILD_DIR/src/pipeline/port_stub_c99.o(.bss*);
         BUILD_DIR/src/game/qr_render.o(.bss*);
         BUILD_DIR/src/game/qr_render_n64.o(.bss*);
