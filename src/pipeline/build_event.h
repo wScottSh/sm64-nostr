@@ -206,15 +206,14 @@ typedef struct StarCapture {
 
 /* The ALPHANUMERIC-mode raw bit budget left for the SEQ/TOTAL/PAYLOAD
  * fragment tail once both segments' fixed header bits and the BYTE
- * segment's own data bits (8 bits/byte) are subtracted from the QR's total
- * raw data-bit capacity. Signed `long` arithmetic throughout (mirroring
- * this section's own prior discipline) so an over-long PIPELINE_URL_BASE
- * can never wrap an unsigned subtraction into a huge positive value and
- * masquerade as a valid budget. */
-#define PIPELINE_BUILT_ALNUM_BUDGET_BITS \
+ * segment's own data bits (8 bits/byte, a baseLen-byte URL base plus the
+ * "#" join) are subtracted from the QR's total raw data-bit capacity.
+ * Signed `long` arithmetic so an over-long base can never wrap an unsigned
+ * subtraction into a huge positive budget. */
+#define PIPELINE_ALNUM_BUDGET_BITS_FOR_URL_BASE(baseLen) \
     ((long)(PIPELINE_BUILT_QR_DATA_CODEWORDS) * 8L \
      - (long)PIPELINE_BUILT_BYTE_SEG_HEADER_BITS \
-     - 8L * (long)PIPELINE_BUILT_URL_BYTE_SEG_LEN \
+     - 8L * ((long)(baseLen) + (long)PIPELINE_URL_FRAGMENT_SEP_LEN) \
      - (long)PIPELINE_BUILT_ALNUM_SEG_HEADER_BITS)
 
 /* ALPHANUMERIC mode packs 2 characters per 11 bits (a lone trailing
@@ -224,36 +223,35 @@ typedef struct StarCapture {
 #define PIPELINE_ALNUM_CHARS_FOR_BITS(bits) \
     ((pipeline_u32)(2L * ((bits) / 11L) + (((bits) % 11L) >= 6L ? 1L : 0L)))
 
-/* The exact bits needed to carry PIPELINE_FRAGMENT_HEADER_LEN + 1 alnum
- * characters (the header plus at least one base32 payload character) --
- * computed with the same odd/even packing formula above, never a bare
- * magic-number bit count, so this stays self-consistent with
- * PIPELINE_FRAGMENT_HEADER_LEN's own value if that ever changes. */
-#define PIPELINE_BUILT_MIN_ALNUM_BUDGET_BITS \
-    (11L * (((long)PIPELINE_FRAGMENT_HEADER_LEN + 1L) / 2L) + \
-     ((((long)PIPELINE_FRAGMENT_HEADER_LEN + 1L) % 2L) != 0L ? 6L : 0L))
+/* Per-fragment character budget (header + chunk), the base32 chunk it
+ * leaves, and the resulting frame count -- ceil(base32 length / chunk
+ * length), minimum 1 -- for a baseLen-byte URL base. */
+#define PIPELINE_FRAGMENT_BUDGET_FOR_URL_BASE(baseLen) \
+    PIPELINE_ALNUM_CHARS_FOR_BITS(PIPELINE_ALNUM_BUDGET_BITS_FOR_URL_BASE(baseLen))
+#define PIPELINE_FRAGMENT_CHUNK_LEN_FOR_URL_BASE(baseLen) \
+    (PIPELINE_FRAGMENT_BUDGET_FOR_URL_BASE(baseLen) - (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN)
+#define PIPELINE_FRAME_COUNT_FOR(baseLen, base32Len) \
+    ((((pipeline_u32)(base32Len)) + PIPELINE_FRAGMENT_CHUNK_LEN_FOR_URL_BASE(baseLen) - 1u) / \
+     PIPELINE_FRAGMENT_CHUNK_LEN_FOR_URL_BASE(baseLen))
 
-/* This build's own fixed per-fragment character budget (header + chunk),
- * derived from the shared two-segment bit budget above (spec #122; see
- * this section's own comment for why this is no longer a pure-ALPHANUMERIC
- * character ceiling). build_event.c's own compile-time check
- * (pipeline_build_event_fragment_budget_check) fails loudly, not silently,
- * if a longer PIPELINE_URL_BASE ever leaves no room for even one base32
- * character per fragment. */
-#define PIPELINE_BUILT_FRAGMENT_BUDGET \
-    PIPELINE_ALNUM_CHARS_FOR_BITS(PIPELINE_BUILT_ALNUM_BUDGET_BITS)
-#define PIPELINE_BUILT_FRAGMENT_CHUNK_LEN \
-    (PIPELINE_BUILT_FRAGMENT_BUDGET - (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN)
+/* The most frames any build may cycle. ADR-0006 keeps sequential cycling
+ * up to ~8-10 frames; 8 takes the low end of that range. It also bounds
+ * BuiltEvent (frame count x PIPELINE_BUILT_QR_BITMAP_SIZE), which the game
+ * thread holds on its 8 KB stack twice along one call chain. */
+#define PIPELINE_MAX_FRAME_COUNT 8u
 
-/* This build's own fixed frame count: ceil(base32 length / chunk length),
- * minimum 1 (the N=1 case -- a payload whose base32 text fits one frame's
- * budget). A real StarCapture's default "sm64" tag plus a representative
- * (multi-character) event name produces N>=2 here, per spec #115 sub-issue
- * #116's own acceptance criterion; a short-enough tag+name combination
- * (or the host test tool's own short fixture name) stays at N=1. */
-#define PIPELINE_BUILT_FRAME_COUNT \
-    ((((pipeline_u32)PIPELINE_BUILT_BASE32_LEN) + (PIPELINE_BUILT_FRAGMENT_CHUNK_LEN) - 1u) / \
-     (PIPELINE_BUILT_FRAGMENT_CHUNK_LEN))
+/* The longest PIPELINE_URL_BASE that keeps the largest legal payload (max
+ * tag + max name) within PIPELINE_MAX_FRAME_COUNT frames, so every legal
+ * tag/name stays under the cap. build_event.c checks the build's base
+ * against it and checks that this value is exactly that limit. */
+#define PIPELINE_URL_BASE_MAX_LEN 36u
+#define PIPELINE_WORST_CASE_BASE32_LEN \
+    (((pipeline_u32)(PIPELINE_FMT_FIXED_SIZE + PIPELINE_FMT_MAX_SIZE_TAG + PIPELINE_FMT_MAX_SIZE_NAME) * 8u + 4u) / 5u)
+
+#define PIPELINE_BUILT_ALNUM_BUDGET_BITS PIPELINE_ALNUM_BUDGET_BITS_FOR_URL_BASE(PIPELINE_URL_BASE_LEN)
+#define PIPELINE_BUILT_FRAGMENT_BUDGET PIPELINE_FRAGMENT_BUDGET_FOR_URL_BASE(PIPELINE_URL_BASE_LEN)
+#define PIPELINE_BUILT_FRAGMENT_CHUNK_LEN PIPELINE_FRAGMENT_CHUNK_LEN_FOR_URL_BASE(PIPELINE_URL_BASE_LEN)
+#define PIPELINE_BUILT_FRAME_COUNT PIPELINE_FRAME_COUNT_FOR(PIPELINE_URL_BASE_LEN, PIPELINE_BUILT_BASE32_LEN)
 
 /* Every frame's full URL text is exactly the BYTE segment
  * (PIPELINE_BUILT_URL_BYTE_SEG_LEN, "<BASE>#") followed by the ALPHANUMERIC

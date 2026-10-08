@@ -292,6 +292,9 @@ PIPELINE_KEY_LABEL            ?= dev-event
 # host until the real domain is swapped in with `make PIPELINE_URL_BASE="..."`,
 # no pipeline code change needed). Validated by gen_event_profile.py's
 # normalize_url_base() and emitted VERBATIM -- case is never folded.
+# At most 36 characters (PIPELINE_URL_BASE_MAX_LEN, src/pipeline/build_event.h):
+# a longer base pushes the worst-case QR frame count past 8 and fails the
+# build in build_event.c.
 PIPELINE_URL_BASE             ?= https://sm64nostr.pages.dev
 PIPELINE_EVENT_PROFILE_H_IN   := include/event_profile.h.in
 PIPELINE_EVENT_PROFILE_H      := $(BUILD_DIR)/include/event_profile.h

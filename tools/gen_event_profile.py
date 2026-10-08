@@ -141,10 +141,9 @@ EVENT_NAME_MAX_LEN = 17
 # (qr_adapter.h's pipeline_qr_encode_two_segment()), not the QR
 # alphanumeric charset, and because a real absolute URL (scheme + host +
 # optional path) needs `:`, `/`, and lowercase letters none of those
-# charsets carry. No length cap here: build_event.c's own compile-time
-# pipeline_build_event_fragment_budget_check is the real, loud-not-silent
-# guard against a PIPELINE_URL_BASE too long to leave room for even one
-# base32 character per QR frame.
+# charsets carry. No length cap here: build_event.c's compile-time
+# check against build_event.h's PIPELINE_URL_BASE_MAX_LEN is the
+# guard, since that limit derives from the QR geometry.
 URL_BASE_DISALLOWED_CHARS = frozenset('"\\# <>`')
 
 # #101's ratified template requires an absolute URL with a clean `#`-fragment
@@ -339,7 +338,7 @@ def main():
         default="sm64",
         help="per-game `t` tag value baked into this build and packed onto the wire "
         "(format v2, spec #52 sub-issue #54); must match [A-Za-z0-9._-]+ and fit "
-        "within format_descriptor.json's TAG.max_size (10 B at v7-MEDIUM). "
+        "within format_descriptor.json's TAG.max_size (10 B). "
         "Defaults to \"sm64\" -- this repo's only game today.",
     )
     args = ap.parse_args()
