@@ -8,13 +8,15 @@ sandbox seam (seam B) or bypasses it with a raw comparison.
 
 All repo citations are the live `src\` tree only (`.claude\` worktrees ignored).
 
-**Bottom line.** Ten distinct sites read the total star count. Four ACCESS GATES already route
-through seam B and are open at 0 stars (star doors, endless-staircase warp, MIPS, message
-Toads). **Two ACCESS GATES bypass seam B and are still closed at 0 stars — they need fixing:**
-the **castle-grounds cannon grate** (`castle_cannon_grate.inc.c:4`, raw `>= 120`) and the
-**look-up warp** to Wing Mario Over the Rainbow (`mario_actions_stationary.c:1070`, raw `>= 10`).
-The remaining four are REWARD/COSMETIC (Yoshi, fat penguin, staircase music, milestone dialog);
-they stay dormant at 0 stars, which is correct sandbox behavior and needs no change.
+**Bottom line.** Fifteen distinct sites read the total star count, either directly or through
+its HUD mirror `gHudDisplay.stars` (copied from `gMarioState->numStars`, `level_update.c:1044`).
+Seven ACCESS GATES route through seam B and are open at 0 stars: star doors, endless-staircase
+warp, MIPS, message Toads, the castle-grounds cannon grate, the look-up warp to Wing Mario Over
+the Rainbow, and the 12-star castle Boos that carry the Big Boo's Haunt entrance (#149). The
+cannon grate and look-up warp were raw comparisons when this note was first written and have
+since been routed through the seam. The remaining six are REWARD/COSMETIC (Yoshi, fat penguin,
+staircase music, milestone dialog, lobby Wing Cap light, Bowser's final dialog); they stay
+dormant at 0 stars, which is correct sandbox behavior and needs no change.
 
 ---
 
@@ -78,7 +80,7 @@ count check fails the Toad object is deleted (`obj_mark_for_deletion`, `:215`). 
 **`mario_misc.c:190, 196, 202`** → all pass at 0 stars.
 Classified ACCESS GATE: gates whether each Toad (and its star) exists.
 
-### 5. Castle-grounds cannon grate (120) — BYPASSES seam B ❌ NEEDS FIXING
+### 5. Castle-grounds cannon grate (120) — routed through seam B ✅ (fixed after first write-up)
 `bhv_castle_cannon_grate_init`, `src\game\behaviors\castle_cannon_grate.inc.c:3-7`:
 ```c
 if (save_file_get_total_star_count(...) >= 120) {
@@ -95,7 +97,7 @@ Cross-check: the castle-grounds grate opens at 120 stars, exposing the cannon to
 [The Castle — Ukikipedia](https://ukikipedia.net/wiki/The_Castle),
 [Super Mario 64/Secrets — StrategyWiki](https://strategywiki.org/wiki/Super_Mario_64/Secrets)
 
-### 6. Look-up warp / Wing Mario Over the Rainbow (10) — BYPASSES seam B ❌ NEEDS FIXING
+### 6. Look-up warp / Wing Mario Over the Rainbow (10) — routed through seam B ✅ (fixed after first write-up)
 `act_first_person`, `src\game\mario_actions_stationary.c:1069-1076`:
 ```c
 if (m->floor->type == SURFACE_LOOK_UP_WARP
@@ -108,6 +110,22 @@ Standing on the `SURFACE_LOOK_UP_WARP` tile (castle lobby) and looking straight 
 to Wing Mario Over the Rainbow, but only at ≥10 stars. At 0 stars **the warp never fires**, so that
 secret area is unreachable via this route. Genuine ACCESS GATE, still closed in the sandbox. Fix:
 route through the seam, e.g. `&& save_file_star_gate_is_open(total, 10)`.
+**Status:** fixed. Sites 5 and 6 now call `save_file_star_gate_is_open()`
+(`castle_cannon_grate.inc.c:11`, `mario_actions_stationary.c:1075`); the snippets above show the
+original raw comparisons.
+
+### 11–13. Castle Boos / Big Boo's Haunt entrance (12) — routed through seam B ✅ (#149)
+`src\game\behaviors\boo.inc.c`, threshold `SPAWN_CASTLE_BOO_STAR_REQUIREMENT 12` (`:3`). These
+read `gHudDisplay.stars` rather than `save_file_get_total_star_count()`, which is why the first
+sweep missed them. Each deletes its object below 12 stars:
+- `bhv_boo_with_cage_init` (`:719`) — the courtyard Boo that spawns the haunted cage
+  (`bhvBooCage`, `INTERACT_BBH_ENTRANCE`). **Load-bearing:** at 0 stars there is no cage, so
+  Big Boo's Haunt has no entrance.
+- `bhv_courtyard_boo_triplet_init` (`:86`) — the three ambient courtyard Boos.
+- `bhv_boo_in_castle_loop` (`:806`) — the castle-interior Boo.
+All three now delete only when `!save_file_star_gate_is_open(gHudDisplay.stars, 12)`, which is
+never in the sandbox, so the Boos and the cage spawn at 0 stars. The two ambient sites are routed
+too because they share the one threshold constant with the entrance gate.
 
 ---
 
@@ -138,6 +156,15 @@ if `prevNumStarsForDialog < threshold <= numStars`, shows a congratulatory dialo
 (`DIALOG_141`+). Congratulation text only; gates nothing. In the sandbox (`numStars` pinned 0) it
 never fires.
 
+### 14. Lobby Wing Cap light (10) — raw (cosmetic)
+`geo_exec_inside_castle_light`, `src\game\geo_misc.c:90`. Raw `gHudDisplay.stars >= 10` (and no
+Wing Cap yet) draws the sunlight shaft that hints where to look up for the Wing Cap tower. Hint
+only; the warp itself is site 6. Dark at 0 stars.
+
+### 15. Bowser's final dialog (120) — raw (cosmetic)
+`bowser_dead_final_stage_ending`, `src\game\behaviors\bowser.inc.c:1317`. Raw
+`gHudDisplay.stars < 120` picks `DIALOG_121` over `DIALOG_163`. Text choice only.
+
 ---
 
 ## Summary table
@@ -148,12 +175,17 @@ never fires.
 | 2 | `level_update.c:535` (`check_instant_warp`) | `≥70` via seam | climbing endless staircase | **ACCESS GATE** | ✅ yes | no (open) |
 | 3 | `mips.inc.c:15,24` (`bhv_mips_init`) | `≥15` / `≥50` via seam | MIPS star reachable | **ACCESS GATE** | ✅ yes | no (open) |
 | 4 | `mario_misc.c:190,196,202` (`bhv_toad_message_init`) | `≥12/25/35` via seam | message-Toad stars exist | **ACCESS GATE** | ✅ yes | no (open) |
-| 5 | `castle_cannon_grate.inc.c:4` | raw `≥120` | opens grounds cannon to roof | **ACCESS GATE** | ❌ no | **YES** |
-| 6 | `mario_actions_stationary.c:1070` (`act_first_person`) | raw `≥10` | warp to Wing Mario/Rainbow | **ACCESS GATE** | ❌ no | **YES** |
+| 5 | `castle_cannon_grate.inc.c:11` | `≥120` via seam | opens grounds cannon to roof | **ACCESS GATE** | ✅ yes | no (open) |
+| 6 | `mario_actions_stationary.c:1075` (`act_first_person`) | `≥10` via seam | warp to Wing Mario/Rainbow | **ACCESS GATE** | ✅ yes | no (open) |
 | 7 | `yoshi.inc.c:14` (`bhv_yoshi_init`) | raw `<120` | Yoshi roof reward NPC | REWARD | ❌ no | no (dormant OK) |
 | 8 | `racing_penguin.inc.c:15` | raw `==120` | fat penguin variant | COSMETIC | ❌ no | no |
 | 9 | `sound_init.c:206` | raw `<70` | endless-stairs music | COSMETIC | ❌ no | no |
 | 10 | `mario_actions_cutscene.c:239` | 1/3/8/30/50/70 | milestone congrats dialog | COSMETIC | ❌ no | no |
+| 11 | `boo.inc.c:719` (`bhv_boo_with_cage_init`) | `≥12` via seam | BBH entrance cage exists | **ACCESS GATE** | ✅ yes | no (open) |
+| 12 | `boo.inc.c:86` (`bhv_courtyard_boo_triplet_init`) | `≥12` via seam | courtyard Boo triplet | ambient, shares #11's constant | ✅ yes | no |
+| 13 | `boo.inc.c:806` (`bhv_boo_in_castle_loop`) | `≥12` via seam | castle-interior Boo | ambient, shares #11's constant | ✅ yes | no |
+| 14 | `geo_misc.c:90` (`geo_exec_inside_castle_light`) | raw `≥10` | lobby Wing Cap hint light | COSMETIC | ❌ no | no |
+| 15 | `bowser.inc.c:1317` | raw `<120` | Bowser final dialog choice | COSMETIC | ❌ no | no |
 
 ## Sources
 
