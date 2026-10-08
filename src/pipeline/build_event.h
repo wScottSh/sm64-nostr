@@ -90,9 +90,9 @@ typedef struct StarCapture {
 #define PIPELINE_BUILT_PAYLOAD_SIZE (PIPELINE_FMT_FIXED_SIZE + PIPELINE_EVENT_TAG_1_LEN + PIPELINE_EVENT_NAME_LEN)
 
 /*
- * QR bitmap buffer sizing: mirrors qrcodegen_BUFFER_LEN_FOR_VERSION(7) --
+ * QR bitmap buffer sizing: mirrors qrcodegen_BUFFER_LEN_FOR_VERSION(version) --
  * ((version*4+17)^2 + 7) / 8 + 1 -- from qrcodegen.h/qr_adapter.h's fixed
- * version 7 choice (spec #52, sub-issue #53), WITHOUT #including
+ * version choice, WITHOUT #including
  * qrcodegen.h here. qr_adapter.h's own header comment documents that
  * qrcodegen.h/qrcodegen.c must stay hidden behind the qr_adapter.h seam
  * (never visible to callers outside src/pipeline/, including game glue,
@@ -104,7 +104,7 @@ typedef struct StarCapture {
  * against qr_adapter.h's PIPELINE_QR_VERSION/PIPELINE_QR_BUFFER_LEN) are
  * what keep this duplicated formula from silently drifting instead.
  */
-#define PIPELINE_BUILT_QR_VERSION 7
+#define PIPELINE_BUILT_QR_VERSION 4
 #define PIPELINE_BUILT_QR_BITMAP_SIZE \
     ((((PIPELINE_BUILT_QR_VERSION) * 4 + 17) * ((PIPELINE_BUILT_QR_VERSION) * 4 + 17) + 7) / 8 + 1)
 
@@ -142,8 +142,8 @@ typedef struct StarCapture {
 #define PIPELINE_BUILT_BASE32_LEN (((pipeline_u32)(PIPELINE_BUILT_PAYLOAD_SIZE) * 8u + 4u) / 5u)
 
 /*
- * Data-codeword capacity of a version 7, ECC MEDIUM QR Code: duplicates
- * qr_adapter.h's PIPELINE_QR_DATA_CODEWORDS (124, see that header's own
+ * Data-codeword capacity of a version 4, ECC MEDIUM QR Code: duplicates
+ * qr_adapter.h's PIPELINE_QR_DATA_CODEWORDS (64, see that header's own
  * derivation comment) for the identical circular-include reason
  * PIPELINE_BUILT_QR_VERSION/PIPELINE_BUILT_QR_BITMAP_SIZE above duplicate
  * qr_adapter.h's other constants instead of #including it (qr_adapter.h
@@ -162,11 +162,11 @@ typedef struct StarCapture {
  * no longer be expressed purely in ALPHANUMERIC-mode characters; it must
  * instead be derived from the raw data-bit budget the two segments share.
  */
-#define PIPELINE_BUILT_QR_DATA_CODEWORDS 124
+#define PIPELINE_BUILT_QR_DATA_CODEWORDS 64
 
 /* Fixed per-segment bit overhead (4-bit mode indicator + the mode's own
  * character-count field width) at versions 1-9 (this build is pinned to
- * version 7, PIPELINE_BUILT_QR_VERSION above): BYTE mode's 8-bit count,
+ * version 4, PIPELINE_BUILT_QR_VERSION above): BYTE mode's 8-bit count,
  * ALPHANUMERIC mode's 9-bit count -- the QR spec's own fixed header widths
  * (qrcodegen.c's numCharCountBits()/alphanumericCharCountBits()), not a
  * value this build derives. Hand-duplicated constants, like every other

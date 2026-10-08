@@ -5,8 +5,8 @@
  * The renderer glue's PURE core (spec #24 sub-issue #32; redesigned for
  * issue #84). Consumes ONE finished qr_bitmap (build_event.h's
  * BuiltEvent::qr_bitmaps[i], produced by the pipeline's qr_adapter.h -- see
- * that header for the fixed version 7 / ECC MEDIUM / fixed-mask choice,
- * 45x45 modules, spec #52 sub-issue #53). Format v3's ADR-0006 multi-frame
+ * that header for the fixed version 4 / ECC MEDIUM / fixed-mask choice,
+ * 33x33 modules, issue #152). Format v3's ADR-0006 multi-frame
  * transport (spec #115, sub-issue #116) made BuiltEvent carry frame_count +
  * N qr_bitmaps instead of one; this renderer core is unchanged -- it still
  * blits/composites exactly one bitmap per call, oblivious to which frame
@@ -20,7 +20,7 @@
  * convention: no MarioState, no globals, no N64 headers (no ultra64.h, no
  * PR/ headers). It #includes only pipeline/qr_adapter.h, itself pure. That keeps
  * it host-compilable, unmodified, a second time into tools/pipeline_test --
- * so the placement math (2px QR + box rect + word-wrap + ia4 glyph
+ * so the placement math (3px QR + box rect + word-wrap + ia4 glyph
  * placement + overscan-safe centering) is exercised by a real host test.
  *
  * The one thing that genuinely varies across the ROM and host builds -- the
@@ -32,22 +32,23 @@
  *
  * === Layout (all values from ROM source; see issue #84 / ADR-0004) ===
  * Screen 320x240; overscan-safe border 8px top & bottom (config.h). QR is
- * fixed at 2 framebuffer-px/module (a deliberate LED-monitor-first bet, to
- * be photo-tested before shipping -- docs/research/qr-onscreen-module-size.md;
- * fall back to 3px/4px via QR_RENDER_MODULE_SCALE_PX alone). For the fixed
- * v7 QR (45 modules) + a 4-module quiet zone per side (ISO min):
- *   grid  = 45 + 2*4 = 53 modules
- *   image = 53 * 2    = 106 px
+ * fixed at 3 framebuffer-px/module (issue #152: version 7 at 2px became
+ * version 4 at 3px, keeping the image near its old 106px while each module
+ * grows 50% for CRT robustness; docs/research/qr-density-tradeoffs.md
+ * section 9). For the fixed v4 QR (33 modules) + a 4-module quiet zone per
+ * side (ISO min):
+ *   grid  = 33 + 2*4 = 41 modules
+ *   image = 41 * 3    = 123 px
  * The dialog box is the standard 143px-wide box (segment2.c/ingame_menu.c);
  * its pixel height is the ROM formula round(80 * (lines/5 + 0.1)) == a tidy
- * 16*lines + 8. QR + 6px gap + box = 106 + 6 + 143 = 255 of 320; the pair is
+ * 16*lines + 8. QR + 6px gap + box = 123 + 6 + 143 = 272 of 320; the pair is
  * centered horizontally, the QR is centered vertically, and the box is
  * centered vertically, everything inside the 8px overscan band.
  */
 
 #include "pipeline/qr_adapter.h"
 
-#define QR_RENDER_MODULE_SCALE_PX     2
+#define QR_RENDER_MODULE_SCALE_PX     3
 #define QR_RENDER_QUIET_ZONE_MODULES  4
 
 #define QR_RENDER_GRID_SIZE_MODULES \
@@ -157,7 +158,7 @@ unsigned char qr_render_ascii_to_dialog(char c);
 
 /*
  * qr_render_layout: pure geometry. Given the QR grid size in modules
- * (pipeline_qr_get_size()'s value, e.g. 45), the framebuffer dimensions,
+ * (pipeline_qr_get_size()'s value, e.g. 33), the framebuffer dimensions,
  * the font (for per-char advances used by word-wrap), and the three ASCII
  * copy segments (heading / body / prompt, each starting a fresh line and
  * word-wrapped to QR_RENDER_DLG_USABLE_PX), fills *out with the full
