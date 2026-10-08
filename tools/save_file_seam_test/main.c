@@ -47,6 +47,11 @@
  * from level_update.c (WARP_OP_DEATH / WARP_OP_WARP_FLOOR) to confirm they
  * never see numLives reach 0 -- i.e. Game Over is suppressed transitively,
  * with no second gate -- including at the former 0-lives boundary.
+ *
+ * Seam B: on a zeroed save (total stars 0), asserts the castle-Boo spawn
+ * guard in boo.inc.c (`if (!save_file_star_gate_is_open(stars, 12))
+ * obj_mark_for_deletion(o);`) keeps the Boos, so the Big Boo's Haunt
+ * entrance cage spawns.
  */
 
 #include <stdio.h>
@@ -225,6 +230,22 @@ static void test_former_zero_lives_boundary_produces_no_game_over(void) {
 // note rather than a check() -- there is no seam-G behavior for a test to
 // exercise on the increment path.
 
+#define SPAWN_CASTLE_BOO_STAR_REQUIREMENT 12
+
+static int castle_boo_is_deleted(s32 hudStars) {
+    return !save_file_star_gate_is_open(hudStars, SPAWN_CASTLE_BOO_STAR_REQUIREMENT);
+}
+
+static void test_castle_boos_spawn_at_zero_stars(void) {
+    s32 stars;
+
+    reset_save_fixture(COURSE_NONE);
+    stars = save_file_get_total_star_count(gCurrSaveFileNum - 1, COURSE_MIN - 1, COURSE_MAX - 1);
+    check(stars == 0, "zeroed save reports 0 total stars");
+    check(!castle_boo_is_deleted(stars),
+          "castle Boo (BBH entrance cage carrier) is kept at 0 stars");
+}
+
 int main(void) {
     test_cannons_are_forced_open_predicate();
     test_cannon_unlocked_on_fresh_zeroed_save();
@@ -238,11 +259,13 @@ int main(void) {
     test_death_exit_leaves_lives_unchanged_across_many_deaths();
     test_former_zero_lives_boundary_produces_no_game_over();
 
+    test_castle_boos_spawn_at_zero_stars();
+
     if (g_failures != 0) {
         printf("%d check(s) FAILED\n", g_failures);
         return 1;
     }
 
-    printf("All save_file seam-E/F/G host tests PASSED\n");
+    printf("All save_file seam-B/E/F/G host tests PASSED\n");
     return 0;
 }
