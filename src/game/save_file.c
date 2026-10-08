@@ -478,12 +478,7 @@ s32 save_file_get_total_star_count(s32 fileIndex, s32 minCourse, s32 maxCourse) 
     return save_file_get_course_star_count(fileIndex, COURSE_NUM_TO_INDEX(COURSE_NONE)) + count;
 }
 
-/**
- * Sandbox seam I: each cap-switch course hides its own cap from seam A's
- * unlock mask on every entry, so the course plays as designed. RAM-only, so
- * nothing persists; init_level recomputes it on every level load, which
- * restores the cap on any exit, death, or star warp.
- */
+// Sandbox seam I: per-visit cap suppression.
 static const struct {
     s16 levelNum;
     u32 capFlag;

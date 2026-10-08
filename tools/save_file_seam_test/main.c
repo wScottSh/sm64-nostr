@@ -235,7 +235,7 @@ static u32 caps_at_entry(s16 levelNum) {
 }
 
 static void test_cap_switch_courses_hide_only_their_own_cap(void) {
-    reset_save_fixture(/* courseNum */ 0);
+    reset_save_fixture(COURSE_NONE);
 
     check(caps_at_entry(LEVEL_COTMC) == (SAVE_FLAG_HAVE_WING_CAP | SAVE_FLAG_HAVE_VANISH_CAP),
           "entering COTMC hides the metal cap only");
@@ -246,7 +246,7 @@ static void test_cap_switch_courses_hide_only_their_own_cap(void) {
 }
 
 static void test_cap_suppression_leaves_other_unlocks_alone(void) {
-    reset_save_fixture(/* courseNum */ 0);
+    reset_save_fixture(COURSE_NONE);
     save_file_suppress_caps_for_level(LEVEL_COTMC);
 
     check((save_file_get_flags() & SAVE_FLAG_SANDBOX_UNLOCK_MASK)
@@ -259,7 +259,7 @@ static void test_other_levels_keep_every_cap(void) {
                                   LEVEL_BOB, LEVEL_WMOTR };
     u32 i;
 
-    reset_save_fixture(/* courseNum */ 0);
+    reset_save_fixture(COURSE_NONE);
     for (i = 0; i < sizeof(levels) / sizeof(levels[0]); i++) {
         check(caps_at_entry(levels[i]) == ALL_CAP_FLAGS,
               "a level without its own cap switch keeps all three caps");
@@ -267,7 +267,7 @@ static void test_other_levels_keep_every_cap(void) {
 }
 
 static void test_leaving_a_cap_switch_course_restores_its_cap(void) {
-    reset_save_fixture(/* courseNum */ 0);
+    reset_save_fixture(COURSE_NONE);
     save_file_suppress_caps_for_level(LEVEL_COTMC);
 
     check(caps_at_entry(LEVEL_CASTLE) == ALL_CAP_FLAGS,
@@ -275,7 +275,7 @@ static void test_leaving_a_cap_switch_course_restores_its_cap(void) {
 }
 
 static void test_pressing_the_switch_restores_the_cap_for_this_visit(void) {
-    reset_save_fixture(/* courseNum */ 0);
+    reset_save_fixture(COURSE_NONE);
     save_file_suppress_caps_for_level(LEVEL_COTMC);
 
     save_file_set_flags(SAVE_FLAG_HAVE_METAL_CAP);
@@ -285,7 +285,7 @@ static void test_pressing_the_switch_restores_the_cap_for_this_visit(void) {
 }
 
 static void test_unrelated_flag_write_keeps_the_cap_hidden(void) {
-    reset_save_fixture(/* courseNum */ 0);
+    reset_save_fixture(COURSE_NONE);
     save_file_suppress_caps_for_level(LEVEL_COTMC);
 
     save_file_set_flags(SAVE_FLAG_HAVE_WING_CAP | SAVE_FLAG_CAP_ON_GROUND);
@@ -295,7 +295,7 @@ static void test_unrelated_flag_write_keeps_the_cap_hidden(void) {
 }
 
 static void test_reentry_hides_the_cap_again_after_a_press(void) {
-    reset_save_fixture(/* courseNum */ 0);
+    reset_save_fixture(COURSE_NONE);
     save_file_suppress_caps_for_level(LEVEL_COTMC);
     save_file_set_flags(SAVE_FLAG_HAVE_METAL_CAP);
     save_file_suppress_caps_for_level(LEVEL_CASTLE);
