@@ -6,7 +6,7 @@ capacity or encoding revision: ADR-0006's adaptive multi-frame transport removed
 the single-frame byte ceiling that drove every v2 field-sizing decision, so v3 is
 chosen for *what the event honestly says*, not for how few bytes it costs. Byte
 count, QR encoding mode, ECC, mask, and fragment geometry are unchanged and out of
-scope here (per-frame geometry stays v7-MEDIUM per ADR-0002/0006); this ADR governs
+scope here (per-frame geometry stays v7-MEDIUM per ADR-0002/0006, since amended to v4-MEDIUM by issue #152, see ADR-0006); this ADR governs
 only the event's content and the cabinet-side computation behind it.
 
 Everything here concerns the **left side of the airgap** — what the cabinet
@@ -91,7 +91,7 @@ version discriminator advances. A decoder MUST reject unknown tags rather than g
   Its only job is to keep two byte-identical runs from collapsing to one `id`; the
   layered entropy makes a full collision (same star/act/coins/`frames` *and* nonce)
   negligible, so its width is not a lever.
-- **kind** 8064 (baked), and **per-frame QR geometry** (v7-MEDIUM, fixed mask).
+- **kind** 8064 (baked), and **per-frame QR geometry** (v7-MEDIUM, fixed mask; v4-MEDIUM since issue #152).
 
 ## Considered and rejected
 
