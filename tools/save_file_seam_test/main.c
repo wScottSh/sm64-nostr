@@ -1,7 +1,7 @@
 /*
- * Host test tool for sandbox seams E, F & G (spec #80/#90, sub-issues
- * #81, #82 & #138): cannon suppression, star-collection suppression, and
- * lives-consequence suppression.
+ * Host test tool for sandbox seams E, F, G & I (spec #80/#90, sub-issues
+ * #81, #82 & #138, issue #150): cannon suppression, star-collection
+ * suppression, lives-consequence suppression, and per-visit cap suppression.
  *
  * Links the SAME src/game/save_file.c compiled into the ROM, unmodified, a
  * second time into a native host binary -- mirroring tools/pipeline_test's
@@ -55,6 +55,7 @@
 #include "sm64.h"
 #include "area.h"
 #include "save_file.h"
+#include "level_table.h"
 
 static int g_failures = 0;
 
@@ -225,6 +226,84 @@ static void test_former_zero_lives_boundary_produces_no_game_over(void) {
 // note rather than a check() -- there is no seam-G behavior for a test to
 // exercise on the increment path.
 
+
+#define ALL_CAP_FLAGS (SAVE_FLAG_HAVE_WING_CAP | SAVE_FLAG_HAVE_METAL_CAP | SAVE_FLAG_HAVE_VANISH_CAP)
+
+static u32 caps_at_entry(s16 levelNum) {
+    save_file_suppress_caps_for_level(levelNum);
+    return save_file_get_flags() & ALL_CAP_FLAGS;
+}
+
+static void test_cap_switch_courses_hide_only_their_own_cap(void) {
+    reset_save_fixture(/* courseNum */ 0);
+
+    check(caps_at_entry(LEVEL_COTMC) == (SAVE_FLAG_HAVE_WING_CAP | SAVE_FLAG_HAVE_VANISH_CAP),
+          "entering COTMC hides the metal cap only");
+    check(caps_at_entry(LEVEL_TOTWC) == (SAVE_FLAG_HAVE_METAL_CAP | SAVE_FLAG_HAVE_VANISH_CAP),
+          "entering TOTWC hides the wing cap only");
+    check(caps_at_entry(LEVEL_VCUTM) == (SAVE_FLAG_HAVE_WING_CAP | SAVE_FLAG_HAVE_METAL_CAP),
+          "entering VCUTM hides the vanish cap only");
+}
+
+static void test_cap_suppression_leaves_other_unlocks_alone(void) {
+    reset_save_fixture(/* courseNum */ 0);
+    save_file_suppress_caps_for_level(LEVEL_COTMC);
+
+    check((save_file_get_flags() & SAVE_FLAG_SANDBOX_UNLOCK_MASK)
+              == (SAVE_FLAG_SANDBOX_UNLOCK_MASK & ~SAVE_FLAG_HAVE_METAL_CAP),
+          "COTMC keeps every other seam-A unlock");
+}
+
+static void test_other_levels_keep_every_cap(void) {
+    static const s16 levels[] = { LEVEL_CASTLE, LEVEL_CASTLE_GROUNDS, LEVEL_HMC, LEVEL_JRB,
+                                  LEVEL_BOB, LEVEL_WMOTR };
+    u32 i;
+
+    reset_save_fixture(/* courseNum */ 0);
+    for (i = 0; i < sizeof(levels) / sizeof(levels[0]); i++) {
+        check(caps_at_entry(levels[i]) == ALL_CAP_FLAGS,
+              "a level without its own cap switch keeps all three caps");
+    }
+}
+
+static void test_leaving_a_cap_switch_course_restores_its_cap(void) {
+    reset_save_fixture(/* courseNum */ 0);
+    save_file_suppress_caps_for_level(LEVEL_COTMC);
+
+    check(caps_at_entry(LEVEL_CASTLE) == ALL_CAP_FLAGS,
+          "the next level load after COTMC restores the metal cap");
+}
+
+static void test_pressing_the_switch_restores_the_cap_for_this_visit(void) {
+    reset_save_fixture(/* courseNum */ 0);
+    save_file_suppress_caps_for_level(LEVEL_COTMC);
+
+    save_file_set_flags(SAVE_FLAG_HAVE_METAL_CAP);
+
+    check((save_file_get_flags() & SAVE_FLAG_HAVE_METAL_CAP) != 0,
+          "pressing the COTMC switch makes the metal cap available at once");
+}
+
+static void test_unrelated_flag_write_keeps_the_cap_hidden(void) {
+    reset_save_fixture(/* courseNum */ 0);
+    save_file_suppress_caps_for_level(LEVEL_COTMC);
+
+    save_file_set_flags(SAVE_FLAG_HAVE_WING_CAP | SAVE_FLAG_CAP_ON_GROUND);
+
+    check((save_file_get_flags() & SAVE_FLAG_HAVE_METAL_CAP) == 0,
+          "writing other flags in COTMC keeps the metal cap hidden");
+}
+
+static void test_reentry_hides_the_cap_again_after_a_press(void) {
+    reset_save_fixture(/* courseNum */ 0);
+    save_file_suppress_caps_for_level(LEVEL_COTMC);
+    save_file_set_flags(SAVE_FLAG_HAVE_METAL_CAP);
+    save_file_suppress_caps_for_level(LEVEL_CASTLE);
+
+    check((caps_at_entry(LEVEL_COTMC) & SAVE_FLAG_HAVE_METAL_CAP) == 0,
+          "re-entering COTMC hides the metal cap even after a saved switch press");
+}
+
 int main(void) {
     test_cannons_are_forced_open_predicate();
     test_cannon_unlocked_on_fresh_zeroed_save();
@@ -238,11 +317,19 @@ int main(void) {
     test_death_exit_leaves_lives_unchanged_across_many_deaths();
     test_former_zero_lives_boundary_produces_no_game_over();
 
+    test_cap_switch_courses_hide_only_their_own_cap();
+    test_cap_suppression_leaves_other_unlocks_alone();
+    test_other_levels_keep_every_cap();
+    test_leaving_a_cap_switch_course_restores_its_cap();
+    test_pressing_the_switch_restores_the_cap_for_this_visit();
+    test_unrelated_flag_write_keeps_the_cap_hidden();
+    test_reentry_hides_the_cap_again_after_a_press();
+
     if (g_failures != 0) {
         printf("%d check(s) FAILED\n", g_failures);
         return 1;
     }
 
-    printf("All save_file seam-E/F/G host tests PASSED\n");
+    printf("All save_file seam-E/F/G/I host tests PASSED\n");
     return 0;
 }
