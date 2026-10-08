@@ -18,15 +18,7 @@
  * this adapter directly.
  *
  * Version/ECC choice: fixed version 4 (33x33), error correction level
- * MEDIUM, with a SINGLE FIXED MASK (not qrcodegen_Mask_AUTO). Spec #52 /
- * sub-issue #53 pinned version 7 so format v2's whole payload fit one
- * symbol; ADR-0006's multi-frame transport retired that need, and issue
- * #152 then dropped to version 4 so each module is larger on screen (a
- * lower-density symbol is easier to scan off a CRT) at the cost of more
- * frames (docs/research/qr-density-tradeoffs.md section 9, ADR-0006's
- * #152 amendment). Version 3 is not viable while PIPELINE_URL_BASE stays
- * 27 bytes: the fixed BYTE segment leaves too little room per frame
- * (18 frames for the default build).
+ * MEDIUM, with a SINGLE FIXED MASK (not qrcodegen_Mask_AUTO).
  *
  * getNumDataCodewords(4, MEDIUM) = getNumRawDataModules(4)/8 -
  * ECC_CODEWORDS_PER_BLOCK[MEDIUM][4] * NUM_ERROR_CORRECTION_BLOCKS[MEDIUM][4]
@@ -34,11 +26,7 @@
  * That figure includes the mandatory 4-bit mode indicator + 8-bit
  * byte-mode character count header (versions 1-9 use an 8-bit byte-mode
  * count field), so the usable BYTE-mode PAYLOAD capacity is
- * floor((64*8 - 12) / 8) = 62 bytes (PIPELINE_QR_MAX_PAYLOAD_BYTES,
- * confirmed against this exact encoder by the host round-trip test: 62 B
- * round-trips, 63 B is cleanly rejected). MEDIUM (not LOW) error
- * correction is kept for realistic camera-scan robustness (glare/moire/CRT
- * artifacts, see the research doc's section 3).
+ * floor((64*8 - 12) / 8) = 62 bytes (PIPELINE_QR_MAX_PAYLOAD_BYTES).
  *
  * The mask is pinned to a single fixed value (PIPELINE_QR_MASK) rather
  * than qrcodegen_Mask_AUTO: AUTO runs all 8 mask patterns and scores each
@@ -102,9 +90,7 @@
  * Alphanumeric mode packs 2 characters per 11 bits (a lone trailing
  * character costs 6 bits): floor(499 / 11) = 45 pairs uses 495 bits,
  * leaving 4 bits, too few for a trailing single character (which needs
- * 6), so the maximum is exactly 45*2 = 90 characters -- confirmed against
- * this exact encoder by the host round-trip test: 90 chars round-trips,
- * 91 is cleanly rejected. This is the ceiling for a
+ * 6), so the maximum is exactly 45*2 = 90 characters. This is the ceiling for a
  * SINGLE, standalone ALPHANUMERIC segment (pipeline_qr_encode_alphanumeric()'s
  * own budget); build_event.c's per-frame fragment tail no longer uses this
  * constant directly (spec #122, sub-issue #123: every frame is now a

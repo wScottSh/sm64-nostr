@@ -455,9 +455,8 @@ static void test_build_event_end_to_end(void)
      * format_descriptor.json) plus this build's own per-game tag length
      * (4 for "sm64") plus this build's own baked event-name length (4 for
      * "TEST", spec #109 sub-issue #111 threads the real baked name into
-     * build_event -- see build_event.c's own comment) = 121 B. This fixture
-     * would once have fit one v7/MEDIUM QR symbol's raw BYTE-mode capacity
-     * (122 B), but that is no longer load-bearing for build_event() itself: as of ADR-0006's multi-frame
+     * build_event -- see build_event.c's own comment) = 121 B. As of
+     * ADR-0006's multi-frame
      * transport (spec #115, sub-issue #117), the packed payload is never
      * QR-encoded directly, and there is no total-payload ceiling -- format
      * v3's own worst case (TAG_LEN=10, NAME_LEN=17, 140 B as of spec #90

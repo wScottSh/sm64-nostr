@@ -29,9 +29,7 @@
  * to qr_display_n64_render_if_active() (qr_display_n64.c), which runs once
  * per display_and_vsync() -- i.e. once per rendered frame, ~30 Hz on real
  * hardware -- so at the default value below each QR frame holds for
- * roughly 10/30 s (~0.33 s) before the sequence advances (issue #152
- * halved it from 20; whether a phone camera still catches every frame off
- * a CRT at this rate is unverified, #107).
+ * roughly 10/30 s (~0.33 s) before the sequence advances.
  */
 #define QR_CYCLE_HOLD_TICKS 10u
 

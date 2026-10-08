@@ -32,11 +32,8 @@
  *
  * === Layout (all values from ROM source; see issue #84 / ADR-0004) ===
  * Screen 320x240; overscan-safe border 8px top & bottom (config.h). QR is
- * fixed at 3 framebuffer-px/module (issue #152: version 7 at 2px became
- * version 4 at 3px, keeping the image near its old 106px while each module
- * grows 50% for CRT robustness; docs/research/qr-density-tradeoffs.md
- * section 9). For the fixed v4 QR (33 modules) + a 4-module quiet zone per
- * side (ISO min):
+ * fixed at 3 framebuffer-px/module. For the fixed v4 QR (33 modules) + a
+ * 4-module quiet zone per side (ISO min):
  *   grid  = 33 + 2*4 = 41 modules
  *   image = 41 * 3    = 123 px
  * The dialog box is the standard 143px-wide box (segment2.c/ingame_menu.c);
