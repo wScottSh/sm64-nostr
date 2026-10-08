@@ -1,7 +1,7 @@
 /*
- * Host test tool for sandbox seams E, F & G (spec #80/#90, sub-issues
- * #81, #82 & #138): cannon suppression, star-collection suppression, and
- * lives-consequence suppression.
+ * Host test tool for sandbox seams B, E, F & G (spec #80/#90, issues #149,
+ * #81, #82 & #138): star-gate opening, cannon suppression, star-collection
+ * suppression, and lives-consequence suppression.
  *
  * Links the SAME src/game/save_file.c compiled into the ROM, unmodified, a
  * second time into a native host binary -- mirroring tools/pipeline_test's
@@ -47,11 +47,6 @@
  * from level_update.c (WARP_OP_DEATH / WARP_OP_WARP_FLOOR) to confirm they
  * never see numLives reach 0 -- i.e. Game Over is suppressed transitively,
  * with no second gate -- including at the former 0-lives boundary.
- *
- * Seam B: on a zeroed save (total stars 0), asserts the castle-Boo spawn
- * guard in boo.inc.c (`if (!save_file_star_gate_is_open(stars, 12))
- * obj_mark_for_deletion(o);`) keeps the Boos, so the Big Boo's Haunt
- * entrance cage spawns.
  */
 
 #include <stdio.h>
@@ -232,17 +227,13 @@ static void test_former_zero_lives_boundary_produces_no_game_over(void) {
 
 #define SPAWN_CASTLE_BOO_STAR_REQUIREMENT 12
 
-static int castle_boo_is_deleted(s32 hudStars) {
-    return !save_file_star_gate_is_open(hudStars, SPAWN_CASTLE_BOO_STAR_REQUIREMENT);
-}
-
 static void test_castle_boos_spawn_at_zero_stars(void) {
     s32 stars;
 
     reset_save_fixture(COURSE_NONE);
     stars = save_file_get_total_star_count(gCurrSaveFileNum - 1, COURSE_MIN - 1, COURSE_MAX - 1);
     check(stars == 0, "zeroed save reports 0 total stars");
-    check(!castle_boo_is_deleted(stars),
+    check(save_file_star_gate_is_open(stars, SPAWN_CASTLE_BOO_STAR_REQUIREMENT),
           "castle Boo (BBH entrance cage carrier) is kept at 0 stars");
 }
 

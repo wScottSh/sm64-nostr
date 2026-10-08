@@ -500,14 +500,9 @@ u32 save_file_get_flags(void) {
 }
 
 /**
- * Sandbox seam B: always-open star-requirement predicate. Substituted at the seven
- * live star-count comparison sites (star-count doors, castle endless-staircase
- * instant-warp gate, MIPS activation, the message-Toad "enough stars" checks, the
- * castle-grounds cannon grill hidden until 120 stars, the look-up warp to Wing
- * Mario Over the Rainbow requiring 10 stars, and the 12-star castle-Boo spawns
- * that carry the Big Boo's Haunt entrance cage) so every star gate is passable at
- * 0 stars. Does not touch save_file_get_total_star_count, which continues to feed the
- * HUD/level-select honestly.
+ * Sandbox seam B: always-open star-requirement predicate, so every star gate is
+ * passable at 0 stars. Does not touch save_file_get_total_star_count, which
+ * continues to feed the HUD/level-select honestly.
  */
 s32 save_file_star_gate_is_open(UNUSED s32 numStars, UNUSED s32 requiredStars) {
     return TRUE;
