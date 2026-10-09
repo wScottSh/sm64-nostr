@@ -16,6 +16,7 @@ import argparse
 import os
 import re
 import subprocess
+import sys
 from collections import namedtuple
 
 import numpy as np
@@ -97,7 +98,6 @@ def us_branch_mask(lines):
 
 
 Mesh = namedtuple("Mesh", "arrays faces")
-# A face remembers where its triangle command lives so it can be deleted.
 Face = namedtuple("Face", "material verts line half")
 
 
@@ -163,7 +163,7 @@ def group_letters(faces):
     return list(groups.values())
 
 
-Letter = namedtuple("Letter", "faces lo hi top front bevels")
+Letter = namedtuple("Letter", "faces lo top front bevels")
 
 
 def is_front(face):
@@ -175,7 +175,7 @@ def make_letter(faces):
     fronts = [f for f in faces if is_front(f)]
     front = max({f.verts[0][5:8] for f in fronts}, key=lambda c: sum(f.verts[0][5:8] == c for f in fronts))
     bevels = [f for f in faces if f.material == "tex1" and not is_front(f)]
-    return Letter(faces, pts[:, :2].min(0), pts[:, :2].max(0), pts[:, 2].max(), front, bevels)
+    return Letter(faces, pts[:, :2].min(0), pts[:, 2].max(), front, bevels)
 
 
 def words(faces):
@@ -187,9 +187,9 @@ def words(faces):
     return {"SUPER": top, "MARIO": bottom}
 
 
-def nearest_color(normal, samples):
+def nearest_color(n, samples):
     normals, colors = samples
-    return colors[int(np.argmax(normals @ normal))]
+    return colors[int(np.argmax(normals @ n))]
 
 
 def color_samples(faces):
@@ -433,8 +433,10 @@ def main():
     parser.add_argument("--preview", metavar="PNG", help="also render the resulting logo to this PNG")
     args = parser.parse_args()
 
-    vanilla = subprocess.run(["git", "-C", ROOT, "show", f"{VANILLA_REV}:{LEVELDATA}"],
-                             check=True, capture_output=True, text=True).stdout.splitlines()
+    shown = subprocess.run(["git", "-C", ROOT, "show", f"{VANILLA_REV}:{LEVELDATA}"], capture_output=True, text=True)
+    if shown.returncode:
+        sys.exit(f"cannot read vanilla {LEVELDATA} at {VANILLA_REV}; run `git fetch --unshallow origin`\n{shown.stderr}")
+    vanilla = shown.stdout.splitlines()
     mesh = parse_mesh(vanilla)
     word, new = build_nostr(mesh.faces)
     doomed = {f for slot in NOSTR for f in word["SUPER"][slot.replaces].faces}
