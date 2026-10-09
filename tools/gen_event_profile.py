@@ -151,11 +151,10 @@ URL_BASE_DISALLOWED_CHARS = frozenset('"\\# <>`')
 # closed here rather than producing a structurally invalid frame.
 URL_BASE_SCHEME_RE = re.compile(r"^https://", re.IGNORECASE)
 
-# Dev default (never fail-closed, unlike --event-name): a build with no
-# real short domain purchased yet (#101) still produces a scannable,
-# structurally valid URL pointed at this placeholder host. Lowercase, on
-# purpose: proves this default itself round-trips verbatim, case preserved.
-URL_BASE_DEFAULT = "https://sm64nostr.pages.dev"
+# Default (never fail-closed, unlike --event-name): the project's short
+# reader domain (#101). Lowercase, on purpose: proves this default itself
+# round-trips verbatim, case preserved.
+URL_BASE_DEFAULT = "https://qrgo.fyi"
 
 # Path to the single JSON source of truth for the wire layout (spec #52,
 # sub-issue #54; format v3 NAME field, spec #109 sub-issue #110) -- this
@@ -326,9 +325,9 @@ def main():
         help="Airgap transport base URL, per #101's ratified <BASE>#<SEQ>/<TOTAL>/ "
         "<PAYLOAD> template (spec #115 sub-issue #116, realigned by spec #122 "
         "sub-issue #123); build-time constant every emitted QR frame's URL "
-        "wraps a fragment around. Defaults to %r (a dev placeholder host) -- "
-        "never fail-closed, unlike --event-name; swap in the real short domain "
-        "once purchased, no pipeline code change needed. Emitted VERBATIM -- "
+        "wraps a fragment around. Defaults to %r (the short reader domain) -- "
+        "never fail-closed, unlike --event-name; override per build, no "
+        "pipeline code change needed. Emitted VERBATIM -- "
         "case is never folded -- and must be an absolute https:// URL." % URL_BASE_DEFAULT,
     )
     ap.add_argument(

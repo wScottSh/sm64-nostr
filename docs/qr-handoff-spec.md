@@ -59,7 +59,7 @@ Each frame's text is one URL:
 
 | Part | Format |
 |---|---|
-| `<BASE>` | The build's base URL, emitted verbatim (case preserved). Absolute `https://` URL, at most 36 characters, never contains `#`. Default `https://sm64nostr.pages.dev`. |
+| `<BASE>` | The build's base URL, emitted verbatim (case preserved). Absolute `https://` URL, at most 36 characters, never contains `#`. Default `https://qrgo.fyi`. |
 | `#` | Literal separator. The first `#` in the URL starts the fragment. |
 | `<SEQ>` | 0-based frame index, 2 base36 digits (`0-9A-Z`, uppercase), zero-padded. |
 | `/` | Literal field separator. |
@@ -67,7 +67,7 @@ Each frame's text is one URL:
 | `/` | Literal field separator. |
 | `<PAYLOAD>` | This frame's slice of the base32 text (§1.3). |
 
-Example frame: `https://sm64nostr.pages.dev#00/05/AMHQMZAB...`.
+Example frame: `https://qrgo.fyi#00/05/AMHQMZAB...`.
 
 Do not compare `<BASE>` against an expected host. Split the URL once on the
 first `#` and parse everything after it. Frames wrapped around different bases
