@@ -22,8 +22,10 @@ Canonical serialization (NIP-01), the exact 6-element array the cabinet hashes f
 - **created_at** = `PIPELINE_EVENT_CREATED_AT`, the frozen build epoch (off-wire,
   known to the far side via the wire? No — see §2: it is packed). Honestly = build
   signing time, not capture time (ADR-0007 §4).
-- **tags** = `[["t","cabinet-leaderboard"],["t","sm64"],["n","<EVENT NAME>"]]`
-  - `["t","cabinet-leaderboard"]` — cross-game class marker, baked, off-wire.
+- **tags** = `[["t","ag-lb"],["t","sm64"],["n","<EVENT NAME>"]]`
+  - `["t","ag-lb"]` — cross-game class marker, baked, off-wire
+    (`PIPELINE_EVENT_TAG0_VALUE`, `src/pipeline/event_id.h:79`; ADR-0007 §3
+    says `cabinet-leaderboard`, the pre-v2 value).
   - `["t","sm64"]` — per-game tag (`gen_event_profile.py --tag`, default `sm64`),
     on-wire (as v2's `TAG`).
   - `["n","<EVENT NAME>"]` — **new in v3**: the promoted `PIPELINE_EVENT_NAME`
@@ -138,5 +140,6 @@ the nonce still hashes the raw since-boot counter, independent of the `frames` v
 ## 4. Out of scope
 
 Far side / decoder, QR encoding mode / ECC / mask / fragment header, transport
-frame count — all unchanged and untouched (ADR-0002 geometry, ADR-0006 transport).
+frame count — all unchanged and untouched (ADR-0006 transport and per-frame
+geometry, v4-MEDIUM since issue #152; `docs/qr-handoff-spec.md` §1).
 This spec changes event content and the cabinet timer only.
