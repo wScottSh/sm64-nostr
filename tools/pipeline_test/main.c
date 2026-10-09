@@ -894,8 +894,7 @@ static void init_fake_font(QrRenderFont *font) {
 
 /*
  * qr_render overlay round-trip test (issue #84; was sub-issue #32's centered
- * blit). Renders the full overlay's QR (flush-left at the
- * layout's qrX/qrY) and proves it still decodes to build_event's exact
+ * blit). Renders the full overlay's QR and proves it still decodes to build_event's exact
  * packed payload -- the render->reconstruct->decode shape from the file
  * header, re-anchored on the new left-positioned geometry. Uses a
  * StarCapture distinct from vector A just to exercise a different payload,

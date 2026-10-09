@@ -204,12 +204,6 @@ typedef struct StarCapture {
 #define PIPELINE_BUILT_URL_BYTE_SEG_LEN \
     ((pipeline_u32)PIPELINE_URL_BASE_LEN + (pipeline_u32)PIPELINE_URL_FRAGMENT_SEP_LEN)
 
-/* The ALPHANUMERIC-mode raw bit budget left for the SEQ/TOTAL/PAYLOAD
- * fragment tail once both segments' fixed header bits and the BYTE
- * segment's own data bits (8 bits/byte, a baseLen-byte URL base plus the
- * "#" join) are subtracted from the QR's total raw data-bit capacity.
- * Signed `long` arithmetic so an over-long base can never wrap an unsigned
- * subtraction into a huge positive budget. */
 #define PIPELINE_ALNUM_BUDGET_BITS_FOR_URL_BASE(baseLen) \
     ((long)(PIPELINE_BUILT_QR_DATA_CODEWORDS) * 8L \
      - (long)PIPELINE_BUILT_BYTE_SEG_HEADER_BITS \
@@ -223,9 +217,6 @@ typedef struct StarCapture {
 #define PIPELINE_ALNUM_CHARS_FOR_BITS(bits) \
     ((pipeline_u32)(2L * ((bits) / 11L) + (((bits) % 11L) >= 6L ? 1L : 0L)))
 
-/* Per-fragment character budget (header + chunk), the base32 chunk it
- * leaves, and the resulting frame count -- ceil(base32 length / chunk
- * length), minimum 1 -- for a baseLen-byte URL base. */
 #define PIPELINE_FRAGMENT_BUDGET_FOR_URL_BASE(baseLen) \
     PIPELINE_ALNUM_CHARS_FOR_BITS(PIPELINE_ALNUM_BUDGET_BITS_FOR_URL_BASE(baseLen))
 #define PIPELINE_FRAGMENT_CHUNK_LEN_FOR_URL_BASE(baseLen) \
@@ -234,16 +225,11 @@ typedef struct StarCapture {
     ((((pipeline_u32)(base32Len)) + PIPELINE_FRAGMENT_CHUNK_LEN_FOR_URL_BASE(baseLen) - 1u) / \
      PIPELINE_FRAGMENT_CHUNK_LEN_FOR_URL_BASE(baseLen))
 
-/* The most frames any build may cycle. ADR-0006 keeps sequential cycling
- * up to ~8-10 frames; 8 takes the low end of that range. It also bounds
- * BuiltEvent (frame count x PIPELINE_BUILT_QR_BITMAP_SIZE), which the game
- * thread holds on its 8 KB stack twice along one call chain. */
+/* Low end of ADR-0006's ~8-10 frame sequential ceiling. Also bounds
+ * BuiltEvent, which the game thread holds on its 8 KB stack twice along
+ * one call chain. */
 #define PIPELINE_MAX_FRAME_COUNT 8u
 
-/* The longest PIPELINE_URL_BASE that keeps the largest legal payload (max
- * tag + max name) within PIPELINE_MAX_FRAME_COUNT frames, so every legal
- * tag/name stays under the cap. build_event.c checks the build's base
- * against it and checks that this value is exactly that limit. */
 #define PIPELINE_URL_BASE_MAX_LEN 36u
 #define PIPELINE_WORST_CASE_BASE32_LEN \
     (((pipeline_u32)(PIPELINE_FMT_FIXED_SIZE + PIPELINE_FMT_MAX_SIZE_TAG + PIPELINE_FMT_MAX_SIZE_NAME) * 8u + 4u) / 5u)

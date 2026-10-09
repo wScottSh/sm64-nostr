@@ -26,7 +26,7 @@
  * but this decoder still recovers whichever mask was actually used from
  * the format-info bits, exactly as a real reader must, rather than
  * assuming the encoder's constant), de-interleave the error correction
- * blocks (two, for version 4 / ECC MEDIUM), and parse the resulting
+ * blocks, and parse the resulting
  * bitstream's mode indicator +
  * character count + byte-mode data directly (no Reed-Solomon error
  * correction is performed: this decodes a bitmap this same test built in

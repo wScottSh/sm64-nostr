@@ -141,9 +141,7 @@ EVENT_NAME_MAX_LEN = 17
 # (qr_adapter.h's pipeline_qr_encode_two_segment()), not the QR
 # alphanumeric charset, and because a real absolute URL (scheme + host +
 # optional path) needs `:`, `/`, and lowercase letters none of those
-# charsets carry. No length cap here: build_event.c's compile-time
-# check against build_event.h's PIPELINE_URL_BASE_MAX_LEN is the
-# guard, since that limit derives from the QR geometry.
+# charsets carry.
 URL_BASE_DISALLOWED_CHARS = frozenset('"\\# <>`')
 
 # #101's ratified template requires an absolute URL with a clean `#`-fragment

@@ -99,7 +99,7 @@ static void buildFunctionModuleMap(int version, int qrsize)
         }
     }
 
-    // Version-info blocks (versions 7+ only). Mirrors qrcodegen.c's drawVersion(): two
+    // Version-info blocks. Mirrors qrcodegen.c's drawVersion(): two
     // copies of an 18-bit version-info field, one at x in [size-11,size-9]
     // / y in [0,5] (3 wide x 6 tall), one at its transpose, x in [0,5] / y
     // in [size-11,size-9] (6 wide x 3 tall). These modules carry real data

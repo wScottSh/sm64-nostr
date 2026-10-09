@@ -36,7 +36,7 @@
  *
  * This build's own tag-length guard (spec #52, sub-issue #54): a per-game
  * tag baked via gen_event_profile.py's --tag must itself stay within
- * pack_adapter.h's PIPELINE_PACK_MAX_TAG_LEN (10 B) --
+ * pack_adapter.h's PIPELINE_PACK_MAX_TAG_LEN --
  * pipeline_pack()'s own runtime check (returning 0) already catches this at
  * build_event() call time (see the packedLen check below), but failing at
  * COMPILE time, not just "the ROM silently never grabs a star", is the
@@ -92,14 +92,9 @@ typedef char pipeline_build_event_alnum_seg_header_bits_check[
     (PIPELINE_ALNUM_CHARS_FOR_BITS((long)PIPELINE_BUILT_QR_DATA_CODEWORDS * 8L -
                                     (long)PIPELINE_BUILT_ALNUM_SEG_HEADER_BITS)
      == (pipeline_u32)PIPELINE_QR_ALNUM_MAX_CHARS) ? 1 : -1];
-/* A PIPELINE_URL_BASE longer than PIPELINE_URL_BASE_MAX_LEN would push the
- * frame count past PIPELINE_MAX_FRAME_COUNT and grow BuiltEvent past what
- * the game thread's stack can hold. The second check pins
- * PIPELINE_URL_BASE_MAX_LEN to the exact longest base that keeps the
- * worst-case payload within the cap. */
 typedef char pipeline_build_event_url_base_longer_than_PIPELINE_URL_BASE_MAX_LEN[
     (PIPELINE_URL_BASE_LEN <= PIPELINE_URL_BASE_MAX_LEN) ? 1 : -1];
-typedef char pipeline_build_event_url_base_max_len_check[
+typedef char pipeline_build_event_PIPELINE_URL_BASE_MAX_LEN_is_not_the_exact_limit[
     (PIPELINE_FRAME_COUNT_FOR(PIPELINE_URL_BASE_MAX_LEN, PIPELINE_WORST_CASE_BASE32_LEN) <= PIPELINE_MAX_FRAME_COUNT &&
      PIPELINE_FRAME_COUNT_FOR(PIPELINE_URL_BASE_MAX_LEN + 1u, PIPELINE_WORST_CASE_BASE32_LEN) > PIPELINE_MAX_FRAME_COUNT)
         ? 1 : -1];
