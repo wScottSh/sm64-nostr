@@ -83,7 +83,7 @@ static s32 boo_should_be_active(void) {
 void bhv_courtyard_boo_triplet_init(void) {
     s32 i;
 
-    if (gHudDisplay.stars < SPAWN_CASTLE_BOO_STAR_REQUIREMENT) {
+    if (!save_file_star_gate_is_open(gHudDisplay.stars, SPAWN_CASTLE_BOO_STAR_REQUIREMENT)) {
         obj_mark_for_deletion(o);
     } else {
         for (i = 0; i < 3; i++) {
@@ -716,7 +716,7 @@ static void boo_with_cage_act_3(void) {
 }
 
 void bhv_boo_with_cage_init(void) {
-    if (gHudDisplay.stars < SPAWN_CASTLE_BOO_STAR_REQUIREMENT) {
+    if (!save_file_star_gate_is_open(gHudDisplay.stars, SPAWN_CASTLE_BOO_STAR_REQUIREMENT)) {
         obj_mark_for_deletion(o);
     } else {
         struct Object *cage = spawn_object(o, MODEL_HAUNTED_CAGE, bhvBooCage);
@@ -803,7 +803,7 @@ void bhv_boo_in_castle_loop(void) {
     if (o->oAction == 0) {
         cur_obj_hide();
 
-        if (gHudDisplay.stars < SPAWN_CASTLE_BOO_STAR_REQUIREMENT) {
+        if (!save_file_star_gate_is_open(gHudDisplay.stars, SPAWN_CASTLE_BOO_STAR_REQUIREMENT)) {
             obj_mark_for_deletion(o);
         }
 
