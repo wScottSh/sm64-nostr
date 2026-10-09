@@ -455,10 +455,8 @@ static void test_build_event_end_to_end(void)
      * format_descriptor.json) plus this build's own per-game tag length
      * (4 for "sm64") plus this build's own baked event-name length (4 for
      * "TEST", spec #109 sub-issue #111 threads the real baked name into
-     * build_event -- see build_event.c's own comment) = 121 B. This fixture
-     * happens to fit one v7/MEDIUM QR symbol's raw BYTE-mode capacity
-     * (PIPELINE_QR_MAX_PAYLOAD_BYTES, 122 B), but that is no longer load-
-     * bearing for build_event() itself: as of ADR-0006's multi-frame
+     * build_event -- see build_event.c's own comment) = 121 B. As of
+     * ADR-0006's multi-frame
      * transport (spec #115, sub-issue #117), the packed payload is never
      * QR-encoded directly, and there is no total-payload ceiling -- format
      * v3's own worst case (TAG_LEN=10, NAME_LEN=17, 140 B as of spec #90
@@ -896,8 +894,7 @@ static void init_fake_font(QrRenderFont *font) {
 
 /*
  * qr_render overlay round-trip test (issue #84; was sub-issue #32's centered
- * blit). Renders the full overlay's QR (now 2px/module, flush-left at the
- * layout's qrX/qrY) and proves it still decodes to build_event's exact
+ * blit). Renders the full overlay's QR and proves it still decodes to build_event's exact
  * packed payload -- the render->reconstruct->decode shape from the file
  * header, re-anchored on the new left-positioned geometry. Uses a
  * StarCapture distinct from vector A just to exercise a different payload,
@@ -967,7 +964,7 @@ static void test_qr_render_blit_round_trips_through_decode(void)
     }
 
     check(imageSize == QR_RENDER_IMAGE_SIZE_PX,
-          "qr_render: computed image size matches QR_RENDER_IMAGE_SIZE_PX (106x106 for v7/scale2/quiet4)");
+          "qr_render: computed image size matches QR_RENDER_IMAGE_SIZE_PX (123x123 for v4/scale3/quiet4)");
     check(imageSize <= QR_RENDER_TEST_FB_WIDTH && imageSize <= QR_RENDER_TEST_FB_HEIGHT,
           "qr_render: image fits within the 320x240 N64 framebuffer");
     if (imageSize > QR_RENDER_TEST_FB_WIDTH || imageSize > QR_RENDER_TEST_FB_HEIGHT) {
@@ -1106,12 +1103,12 @@ static void test_qr_render_layout_geometry(void) {
                      &layout);
 
     check(layout.fits, "qr_render layout: fits at 320x240");
-    check(layout.qrImagePx == QR_RENDER_IMAGE_SIZE_PX && layout.qrImagePx == 106,
-          "qr_render layout: QR image is 106px (45 modules + 2*4 quiet, 2px/module)");
-    /* pair = 106 + 6 + 143 = 255; centered -> startX = (320-255)/2 = 32 */
-    check(layout.qrX == 32, "qr_render layout: QR flush-left at x=32 (pair centered)");
-    check(layout.qrY == (240 - 106) / 2, "qr_render layout: QR vertically centered");
-    check(layout.boxX == 32 + 106 + QR_RENDER_PAIR_GAP_PX,
+    check(layout.qrImagePx == QR_RENDER_IMAGE_SIZE_PX && layout.qrImagePx == 123,
+          "qr_render layout: QR image is 123px (33 modules + 2*4 quiet, 3px/module)");
+    /* pair = 123 + 6 + 143 = 272; centered -> startX = (320-272)/2 = 24 */
+    check(layout.qrX == 24, "qr_render layout: QR flush-left at x=24 (pair centered)");
+    check(layout.qrY == (240 - 123) / 2, "qr_render layout: QR vertically centered");
+    check(layout.boxX == 24 + 123 + QR_RENDER_PAIR_GAP_PX,
           "qr_render layout: box sits one gap right of the QR");
     check(layout.boxW == QR_RENDER_DLG_BOX_W, "qr_render layout: box is the ROM 143px width");
     check(layout.boxH == QR_RENDER_DLG_LINE_PITCH * layout.lineCount + 8,
@@ -1454,9 +1451,9 @@ static void test_format_descriptor_round_trip(void)
  * seam directly: pipeline_qr_encode() (qr_adapter.h, which hides the
  * ported qrcodegen.c behind it) followed by qr_host_decode() (host-only,
  * tools/pipeline_test/qr_host_decode.c -- never linked into the ROM). See
- * qr_adapter.h for the version 7 / ECC MEDIUM / fixed-mask /
- * 122-byte-usable-payload (124 total data codewords, minus the mode+count
- * header) choice (spec #52, sub-issue #53).
+ * qr_adapter.h for the version 4 / ECC MEDIUM / fixed-mask /
+ * 62-byte-usable-payload (64 total data codewords, minus the mode+count
+ * header) choice (issue #152).
  */
 static void fill_pattern(pipeline_u8 *buf, int len, pipeline_u8 seed)
 {
@@ -1497,10 +1494,7 @@ static void test_qr_round_trip_representative_sizes(void)
     check_round_trip(1, "minimal payload");
     check_round_trip(4, "sub-issue #25 stub payload size");
     check_round_trip(24, "spec #24's ~24 B variable content estimate");
-    check_round_trip(75, "the old format v1 total size (pre-#54 history)");
-    check_round_trip(PIPELINE_BUILT_PAYLOAD_SIZE, "this build's format v3 packed payload size (113 + TAG_LEN + NAME_LEN)");
-    check_round_trip(88, "spec #24's ~88 B payload budget");
-    check_round_trip(PIPELINE_QR_MAX_PAYLOAD_BYTES, "exact version 7 / ECC MEDIUM usable payload capacity (122 B)");
+    check_round_trip(PIPELINE_QR_MAX_PAYLOAD_BYTES, "exact version 4 / ECC MEDIUM usable payload capacity (62 B)");
 }
 
 static void test_qr_rejects_over_budget_cleanly(void)
@@ -1511,13 +1505,13 @@ static void test_qr_rejects_over_budget_cleanly(void)
 
     fill_pattern(payload, (int)sizeof(payload), 0x5A);
 
-    /* One byte over the real version 7 / ECC MEDIUM capacity: must be
+    /* One byte over the real version 4 / ECC MEDIUM capacity: must be
      * rejected cleanly (nonzero return, no truncated/partial QR Code
      * written -- qrcode[0] is left at the documented invalid-size
      * sentinel of 0), never silently truncated to fit. */
     memset(qrcode, 0xFF, sizeof(qrcode));
     encodeOk = pipeline_qr_encode(payload, (pipeline_u32)sizeof(payload), qrcode);
-    check(encodeOk == 0, "QR encode rejects a payload one byte over the 122 B usable payload capacity");
+    check(encodeOk == 0, "QR encode rejects a payload one byte over the 62 B usable payload capacity");
     check(qrcode[0] == 0, "rejected QR encode leaves the invalid-size sentinel, not a truncated code");
 
     /* Far over budget too (well past even the raw bitmap buffer size) --
@@ -1589,11 +1583,11 @@ static void test_qr_alphanumeric_round_trip_and_rejections(void)
               "QR alphanumeric round-trip is byte-exact for a generic alnum string (odd character count)");
     }
 
-    /* Exact max budget (178 chars, an even count) round-trips. */
+    /* Exact max budget (90 chars, an even count) round-trips. */
     {
         fill_alnum_pattern(text, PIPELINE_QR_ALNUM_MAX_CHARS);
         encodeOk = pipeline_qr_encode_alphanumeric(text, (pipeline_u32)PIPELINE_QR_ALNUM_MAX_CHARS, qrcode);
-        check(encodeOk != 0, "QR alphanumeric encode succeeds at exactly PIPELINE_QR_ALNUM_MAX_CHARS (178)");
+        check(encodeOk != 0, "QR alphanumeric encode succeeds at exactly PIPELINE_QR_ALNUM_MAX_CHARS (90)");
         decodeOk = qr_host_decode_alphanumeric(qrcode, decoded, (int)sizeof(decoded), &decodedLen);
         check(decodeOk != 0 && decodedLen == PIPELINE_QR_ALNUM_MAX_CHARS &&
               memcmp(decoded, text, (size_t)PIPELINE_QR_ALNUM_MAX_CHARS) == 0,
@@ -1684,7 +1678,7 @@ static void test_qr_two_segment_round_trip_and_rejections(void)
      * one PIPELINE_BUILT_FRAGMENT_BUDGET derives from), never a hand-picked
      * magic character count that could silently drift from the real
      * shared budget. This is necessarily SMALLER than the older
-     * single-segment PIPELINE_QR_ALNUM_MAX_CHARS(178) ceiling, since a
+     * single-segment PIPELINE_QR_ALNUM_MAX_CHARS(90) ceiling, since a
      * two-segment QR pays a second segment's mode+count header on top. */
     {
         long maxAlnumBudgetBits = (long)PIPELINE_QR_DATA_CODEWORDS * 8L

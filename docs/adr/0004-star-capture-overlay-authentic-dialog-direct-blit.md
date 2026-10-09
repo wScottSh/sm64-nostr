@@ -61,3 +61,10 @@ host-testable seam.
   `docs/research/qr-onscreen-module-size.md`. If the photo test fails, fall back
   to 3px (LED-safe) or 4px (CRT-safe) by changing the single
   `QR_RENDER_MODULE_SCALE_PX` constant; the layout math re-centers automatically.
+
+## Amendment: 3 px/module (issue #152)
+
+`QR_RENDER_MODULE_SCALE_PX` is now **3**. Issue #152 lowered the QR to
+version 4 (33×33), so 3 px/module gives a 123 px image, near the old 106 px,
+with larger modules. The pair layout is 123 + 6 + 143 = 272 of 320 px, still
+inside the overscan band. See ADR-0006's #152 amendment.

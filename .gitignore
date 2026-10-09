@@ -96,3 +96,4 @@ __pycache__/
 /tools/pipeline_test/build-worstcase/
 /tools/pipeline_test/pipeline_test_worstcase
 /tools/pipeline_test/pipeline_test_worstcase.exe
+/tools/pipeline_test/build-urlcap/

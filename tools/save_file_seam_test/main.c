@@ -1,7 +1,8 @@
 /*
- * Host test tool for sandbox seams E, F, G & I (spec #80/#90, sub-issues
- * #81, #82 & #138, issue #150): cannon suppression, star-collection
- * suppression, lives-consequence suppression, and per-visit cap suppression.
+ * Host test tool for sandbox seams B, E, F, G & I (spec #80/#90, issues
+ * #149, #81, #82, #138 & #150): star-gate opening, cannon suppression,
+ * star-collection suppression, lives-consequence suppression, and per-visit
+ * cap suppression.
  *
  * Links the SAME src/game/save_file.c compiled into the ROM, unmodified, a
  * second time into a native host binary -- mirroring tools/pipeline_test's
@@ -303,6 +304,17 @@ static void test_reentry_hides_the_cap_again_after_a_press(void) {
     check((caps_at_entry(LEVEL_COTMC) & SAVE_FLAG_HAVE_METAL_CAP) == 0,
           "re-entering COTMC hides the metal cap even after a saved switch press");
 }
+#define SPAWN_CASTLE_BOO_STAR_REQUIREMENT 12
+
+static void test_castle_boos_spawn_at_zero_stars(void) {
+    s32 stars;
+
+    reset_save_fixture(COURSE_NONE);
+    stars = save_file_get_total_star_count(gCurrSaveFileNum - 1, COURSE_MIN - 1, COURSE_MAX - 1);
+    check(stars == 0, "zeroed save reports 0 total stars");
+    check(save_file_star_gate_is_open(stars, SPAWN_CASTLE_BOO_STAR_REQUIREMENT),
+          "castle Boo (BBH entrance cage carrier) is kept at 0 stars");
+}
 
 int main(void) {
     test_cannons_are_forced_open_predicate();
@@ -325,11 +337,13 @@ int main(void) {
     test_unrelated_flag_write_keeps_the_cap_hidden();
     test_reentry_hides_the_cap_again_after_a_press();
 
+    test_castle_boos_spawn_at_zero_stars();
+
     if (g_failures != 0) {
         printf("%d check(s) FAILED\n", g_failures);
         return 1;
     }
 
-    printf("All save_file seam-E/F/G/I host tests PASSED\n");
+    printf("All save_file seam-B/E/F/G/I host tests PASSED\n");
     return 0;
 }

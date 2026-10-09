@@ -17,37 +17,16 @@
  * later sub-issue, build_event.c); game glue never calls qrcodegen.c or
  * this adapter directly.
  *
- * Version/ECC choice (spec #52, sub-issue #53): fixed version 7 (45x45),
- * error correction level MEDIUM, with a SINGLE FIXED MASK (not
- * qrcodegen_Mask_AUTO). Bumped up from version 6 to make room for format
- * v2's self-contained payload (pubkey + created_at + tag, ~112-122 B,
- * docs/adr/0002). Sub-issue #53 landed this geometry/mask change first,
- * against the OLD v1 payload (75 B), to isolate it from the wire-format
- * change; sub-issue #54 then landed format v2 itself (112-122 B), and
- * spec #109/sub-issue #110 has since landed format v3's NAME_LEN/NAME
- * field on top (113-140 B), so this symbol's geometry/mask choice is now
- * shared by all three (docs/qr-handoff-spec.md,
- * docs/research/qr-density-tradeoffs.md, docs/format-v3-spec.md). A near-
- * max-length tag+name build no longer needs to fit any one QR symbol's
- * capacity at all: ADR-0006's multi-frame transport (spec #115, sub-issue
- * #117) retired the total-payload ceiling this comment used to describe --
- * see PIPELINE_QR_MAX_PAYLOAD_BYTES's own comment below for what that
- * constant still means (a per-call BYTE-mode encode budget, not a build-
- * wide cap).
+ * Version/ECC choice: fixed version 4 (33x33), error correction level
+ * MEDIUM, with a SINGLE FIXED MASK (not qrcodegen_Mask_AUTO).
  *
- * getNumDataCodewords(7, MEDIUM) = getNumRawDataModules(7)/8 -
- * ECC_CODEWORDS_PER_BLOCK[MEDIUM][7] * NUM_ERROR_CORRECTION_BLOCKS[MEDIUM][7]
- * = 196 - 18*4 = 124 data CODEWORDS total (PIPELINE_QR_DATA_CODEWORDS) --
- * but that figure includes the mandatory 4-bit mode indicator + 8-bit
+ * getNumDataCodewords(4, MEDIUM) = getNumRawDataModules(4)/8 -
+ * ECC_CODEWORDS_PER_BLOCK[MEDIUM][4] * NUM_ERROR_CORRECTION_BLOCKS[MEDIUM][4]
+ * = 100 - 18*2 = 64 data CODEWORDS total (PIPELINE_QR_DATA_CODEWORDS).
+ * That figure includes the mandatory 4-bit mode indicator + 8-bit
  * byte-mode character count header (versions 1-9 use an 8-bit byte-mode
- * count field), so the actual usable PAYLOAD capacity is smaller:
- * floor((124*8 - 12) / 8) = 122 bytes (PIPELINE_QR_MAX_PAYLOAD_BYTES,
- * matching docs/research/qr-density-tradeoffs.md's v7/MEDIUM capacity
- * table and confirmed empirically against this exact encoder: 122 B
- * round-trips, 123 B is cleanly rejected). MEDIUM (not LOW) error
- * correction is kept for realistic camera-scan robustness (glare/moiré/CRT
- * artifacts, see the research doc's §3) now that the renderer glue (#32)
- * has landed.
+ * count field), so the usable BYTE-mode PAYLOAD capacity is
+ * floor((64*8 - 12) / 8) = 62 bytes (PIPELINE_QR_MAX_PAYLOAD_BYTES).
  *
  * The mask is pinned to a single fixed value (PIPELINE_QR_MASK) rather
  * than qrcodegen_Mask_AUTO: AUTO runs all 8 mask patterns and scores each
@@ -64,27 +43,27 @@
 #include "build_event.h"
 #include "qrcodegen.h"
 
-#define PIPELINE_QR_VERSION 7
+#define PIPELINE_QR_VERSION 4
 #define PIPELINE_QR_ECC qrcodegen_Ecc_MEDIUM
 
 /* Fixed mask pattern (0-7) passed to qrcodegen_encodeBinary() instead of
  * qrcodegen_Mask_AUTO -- see the file header comment above. */
 #define PIPELINE_QR_MASK qrcodegen_Mask_0
 
-/* Module grid side length: version*4+17 = 45 for version 7. */
+/* Module grid side length: version*4+17 = 33 for version 4. */
 #define PIPELINE_QR_MODULE_SIZE (PIPELINE_QR_VERSION * 4 + 17)
 
 /* Size of the qrcodegen-format bitmap buffer (byte 0 = grid size, remaining
- * bytes = packed 1-bpp module bits): qrcodegen_BUFFER_LEN_FOR_VERSION(7). */
+ * bytes = packed 1-bpp module bits). */
 #define PIPELINE_QR_BUFFER_LEN qrcodegen_BUFFER_LEN_FOR_VERSION(PIPELINE_QR_VERSION)
 
-/* Total data-codeword capacity of a version 7, ECC MEDIUM QR Code (header +
- * payload + terminator/padding): 124 bytes. See the file header comment. */
-#define PIPELINE_QR_DATA_CODEWORDS 124
+/* Total data-codeword capacity of a version 4, ECC MEDIUM QR Code (header +
+ * payload + terminator/padding): 64 bytes. See the file header comment. */
+#define PIPELINE_QR_DATA_CODEWORDS 64
 
-/* Usable BYTE-mode payload capacity of a single version 7, ECC MEDIUM QR
+/* Usable BYTE-mode payload capacity of a single version 4, ECC MEDIUM QR
  * symbol, after the mandatory 4-bit mode indicator + 8-bit character count
- * header: 122 bytes. See the derivation in the file header comment above.
+ * header: 62 bytes. See the derivation in the file header comment above.
  * This is the real over-budget boundary a single pipeline_qr_encode() call
  * rejects against (qr_adapter.c) -- PER CALL, PER SYMBOL geometry, not a
  * build-wide total-payload cap: format v3's packed payload
@@ -100,20 +79,18 @@
  * real, independently useful seam -- exercised directly by the host test
  * tool's own round-trip tests -- so this constant and its rejection
  * boundary stay exactly as they always were for that one call. */
-#define PIPELINE_QR_MAX_PAYLOAD_BYTES 122
+#define PIPELINE_QR_MAX_PAYLOAD_BYTES 62
 
 /*
- * Usable ALPHANUMERIC-mode character capacity of a version 7, ECC MEDIUM QR
+ * Usable ALPHANUMERIC-mode character capacity of a version 4, ECC MEDIUM QR
  * Code (spec #115, sub-issue #116 -- ADR-0006's airgap transport wraps
  * every fragment as a plaintext URL, which rides this denser mode rather
  * than BYTE): after the mandatory 4-bit mode indicator + 9-bit alphanumeric
- * character-count header (versions 1-9), 992 - 13 = 979 data bits remain.
+ * character-count header (versions 1-9), 512 - 13 = 499 data bits remain.
  * Alphanumeric mode packs 2 characters per 11 bits (a lone trailing
- * character costs 6 bits): floor(979 / 11) = 89 pairs uses exactly 979
- * bits (89*11 == 979) with 0 bits left over for a trailing single
- * character (which would need 6 more), so the maximum is exactly 89*2 =
- * 178 characters -- confirmed empirically against this exact encoder: 178
- * chars round-trips, 179 is cleanly rejected. This is the ceiling for a
+ * character costs 6 bits): floor(499 / 11) = 45 pairs uses 495 bits,
+ * leaving 4 bits, too few for a trailing single character (which needs
+ * 6), so the maximum is exactly 45*2 = 90 characters. This is the ceiling for a
  * SINGLE, standalone ALPHANUMERIC segment (pipeline_qr_encode_alphanumeric()'s
  * own budget); build_event.c's per-frame fragment tail no longer uses this
  * constant directly (spec #122, sub-issue #123: every frame is now a
@@ -126,10 +103,10 @@
  * for why that one stays BYTE-mode-only and per-call, not a build-wide
  * total).
  */
-#define PIPELINE_QR_ALNUM_MAX_CHARS 178
+#define PIPELINE_QR_ALNUM_MAX_CHARS 90
 
 /*
- * pipeline_qr_encode: encodes payload[0 : payloadLen] as a fixed-version-7/
+ * pipeline_qr_encode: encodes payload[0 : payloadLen] as a fixed-version-4/
  * ECC-MEDIUM, BYTE-mode QR Code, with a single fixed mask (PIPELINE_QR_MASK,
  * not qrcodegen_Mask_AUTO), into out (a qrcodegen-format bitmap; read it
  * back via pipeline_qr_get_size/pipeline_qr_get_module).
@@ -144,7 +121,7 @@ int pipeline_qr_encode(const pipeline_u8 *payload, pipeline_u32 payloadLen,
 
 /*
  * pipeline_qr_encode_alphanumeric: encodes text[0 : textLen] as a fixed-
- * version-7/ECC-MEDIUM, ALPHANUMERIC-mode QR Code, with the same single
+ * version-4/ECC-MEDIUM, ALPHANUMERIC-mode QR Code, with the same single
  * fixed mask (PIPELINE_QR_MASK) as pipeline_qr_encode() above, into out.
  * text must contain only the QR alphanumeric charset (0-9, A-Z, space,
  * $ % * + - . / :) -- ADR-0006's URL-wrapped fragment text (url.h) always
@@ -161,7 +138,7 @@ int pipeline_qr_encode_alphanumeric(const pipeline_u8 *text, pipeline_u32 textLe
 /*
  * pipeline_qr_encode_two_segment: encodes byteData[0 : byteLen] as a BYTE
  * segment immediately followed by alnumText[0 : alnumLen] as an
- * ALPHANUMERIC segment, both in the same fixed-version-7/ECC-MEDIUM QR
+ * ALPHANUMERIC segment, both in the same fixed-version-4/ECC-MEDIUM QR
  * Code with the same single fixed mask (PIPELINE_QR_MASK) as the two
  * functions above (spec #122, sub-issue #123 -- #101's ratified
  * `<BASE>#<SEQ>/<TOTAL>/<PAYLOAD>` template: the verbatim, possibly-mixed-

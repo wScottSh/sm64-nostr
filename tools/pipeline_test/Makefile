@@ -120,17 +120,6 @@
 # Spec #90 sub-issue #139 SHRINKS this cap back 20->17 chars, SUPERSEDING
 # #126 (the same three sites move together again, now down by 3 B).
 #
-# Spec #109 sub-issue #111 promotes the event name to a signed on-wire tag,
-# packed onto the wire alongside the per-game tag. Prior to ADR-0006's
-# multi-frame transport (spec #115, sub-issue #117), both fields shared the
-# SAME v7-MEDIUM single-QR-symbol budget (PIPELINE_QR_MAX_PAYLOAD_BYTES,
-# 122 B), which is why the fixture value below was shortened from the
-# pre-#111 "HOST TEST" (9 B) to "TEST" (4 B) -- that combined single-frame
-# ceiling is now retired (build_event.c's fits-QR compile-time check is
-# gone; a longer tag+name combination just emits more frames), so "TEST"
-# stays purely a small, readable host-test fixture choice, not a
-# ceiling-driven one.
-#
 # Spec #115 sub-issue #118 adds ../../src/game/qr_cycle.c -- the star-
 # capture overlay's frame-cycling PURE core (the (frameCount, tick) ->
 # frameIndex selector). Compiled here unmodified, exactly like qr_render.c/
@@ -204,13 +193,7 @@ TEST_CREATED_AT   := 1700000000
 # all-lowercase dev default) so this host tool's own KAT/round-trip tests
 # directly exercise the verbatim-base contract -- a build whose base
 # contains uppercase AND lowercase bytes must round-trip with neither
-# folded, proving build_event()/url.h never mangle case. This host tool's
-# baked BuiltEvent (PIPELINE_BUILT_PAYLOAD_SIZE 121 B, "sm64" tag + "TEST"
-# name) still exercises a realistic multi-frame split (N=2) at the real
-# build_event() seam -- see main.c's test_build_event_multiframe_
-# round_trip() for why: ADR-0006 itself observes the honest v3 floor
-# already overflows one frame once URL-wrapped under any realistic domain,
-# so this build's own N is expected to be >1, not a hand-picked worst case.
+# folded, proving build_event()/url.h never mangle case.
 TEST_URL_BASE     := https://Sm64Nostr.Pages.Dev
 
 FORMAT_DESCRIPTOR_JSON := $(PIPELINE_DIR)/format_descriptor.json
@@ -277,9 +260,14 @@ reader-fixture: $(READER_FIXTURE_BIN)
 	@mkdir -p $(dir $(READER_FIXTURE_OUT))
 	./$(READER_FIXTURE_BIN) > $(READER_FIXTURE_OUT)
 
-.PHONY: all test worstcase-test reader-fixture clean
+URLCAP_DIR      := build-urlcap
+URLCAP_OK_BASE  := https://aaaaaaaaaaaaaaaaaaaaaaaa.dev
+URLCAP_BAD_BASE := https://aaaaaaaaaaaaaaaaaaaaaaaaa.dev
+URLCAP_CFLAGS   := -std=gnu99 -Wall -Wextra -I $(SRC_DIR) -I $(PIPELINE_DIR) -fsyntax-only
 
-all: test worstcase-test
+.PHONY: all test worstcase-test url-base-cap-test reader-fixture clean
+
+all: test worstcase-test url-base-cap-test
 
 $(TEST_PRIVKEY_FILE):
 	@mkdir -p $(BUILD_DIR)
@@ -321,5 +309,16 @@ $(WORSTCASE_BIN): $(WORSTCASE_SRCS) $(WORSTCASE_FORMAT_DESCRIPTOR_H) $(WORSTCASE
 worstcase-test: $(WORSTCASE_BIN)
 	./$(WORSTCASE_BIN)
 
+url-base-cap-test: $(WORSTCASE_FORMAT_DESCRIPTOR_H) $(WORSTCASE_SECP256K1_BAKED_H) $(TEST_PRIVKEY_FILE)
+	@mkdir -p $(URLCAP_DIR)/ok $(URLCAP_DIR)/bad
+	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $(URLCAP_DIR)/ok/event_profile.h --label host-urlcap --manifest $(URLCAP_DIR)/ok/manifest.json --commit host-test --created-at $(TEST_CREATED_AT) --event-name "$(WORSTCASE_EVENT_NAME)" --tag "$(WORSTCASE_TAG)" --url-base "$(URLCAP_OK_BASE)"
+	$(PYTHON) $(TOOLS_DIR)/gen_event_profile.py --privkey $(TEST_PRIVKEY_FILE) --template $(EVENT_PROFILE_H_IN) --out $(URLCAP_DIR)/bad/event_profile.h --label host-urlcap --manifest $(URLCAP_DIR)/bad/manifest.json --commit host-test --created-at $(TEST_CREATED_AT) --event-name "$(WORSTCASE_EVENT_NAME)" --tag "$(WORSTCASE_TAG)" --url-base "$(URLCAP_BAD_BASE)"
+	$(CC) $(URLCAP_CFLAGS) -I $(URLCAP_DIR)/ok -I $(WORSTCASE_INC_DIR) $(PIPELINE_DIR)/build_event.c
+	@if $(CC) $(URLCAP_CFLAGS) -I $(URLCAP_DIR)/bad -I $(WORSTCASE_INC_DIR) $(PIPELINE_DIR)/build_event.c 2> $(URLCAP_DIR)/bad/cc.log; then \
+		echo "FAIL: a 37-char PIPELINE_URL_BASE compiled"; exit 1; \
+	fi
+	@grep -q PIPELINE_URL_BASE_MAX_LEN $(URLCAP_DIR)/bad/cc.log || { cat $(URLCAP_DIR)/bad/cc.log; echo "FAIL: over-long base error does not name PIPELINE_URL_BASE_MAX_LEN"; exit 1; }
+	@echo "url-base-cap-test: 36-char base compiles, 37-char base fails naming PIPELINE_URL_BASE_MAX_LEN"
+
 clean:
-	$(RM) -r $(BIN) $(BUILD_DIR) $(WORSTCASE_BIN) $(WORSTCASE_BUILD_DIR) $(READER_FIXTURE_BIN)
+	$(RM) -r $(BIN) $(BUILD_DIR) $(WORSTCASE_BIN) $(WORSTCASE_BUILD_DIR) $(READER_FIXTURE_BIN) $(URLCAP_DIR)
