@@ -1066,8 +1066,8 @@ s32 act_first_person(struct MarioState *m) {
         return set_mario_action(m, ACT_IDLE, 0);
     }
 
-    // Sandbox seam B: the look-up warp (SURFACE_LOOK_UP_WARP -> Wing Mario Over the
-    // Rainbow) is a star-count access gate -- vanilla requires >= 10 total stars
+    // Sandbox seam B: the look-up warp (SURFACE_LOOK_UP_WARP -> Tower of the Wing
+    // Cap) is a star-count access gate -- vanilla requires >= 10 total stars
     // before looking straight up fires the warp. Route it through
     // save_file_star_gate_is_open() (always TRUE) so the secret is reachable at 0
     // stars, matching the other star-count gates.
