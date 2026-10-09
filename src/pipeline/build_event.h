@@ -90,9 +90,9 @@ typedef struct StarCapture {
 #define PIPELINE_BUILT_PAYLOAD_SIZE (PIPELINE_FMT_FIXED_SIZE + PIPELINE_EVENT_TAG_1_LEN + PIPELINE_EVENT_NAME_LEN)
 
 /*
- * QR bitmap buffer sizing: mirrors qrcodegen_BUFFER_LEN_FOR_VERSION(7) --
+ * QR bitmap buffer sizing: mirrors qrcodegen_BUFFER_LEN_FOR_VERSION(version) --
  * ((version*4+17)^2 + 7) / 8 + 1 -- from qrcodegen.h/qr_adapter.h's fixed
- * version 7 choice (spec #52, sub-issue #53), WITHOUT #including
+ * version choice, WITHOUT #including
  * qrcodegen.h here. qr_adapter.h's own header comment documents that
  * qrcodegen.h/qrcodegen.c must stay hidden behind the qr_adapter.h seam
  * (never visible to callers outside src/pipeline/, including game glue,
@@ -104,7 +104,7 @@ typedef struct StarCapture {
  * against qr_adapter.h's PIPELINE_QR_VERSION/PIPELINE_QR_BUFFER_LEN) are
  * what keep this duplicated formula from silently drifting instead.
  */
-#define PIPELINE_BUILT_QR_VERSION 7
+#define PIPELINE_BUILT_QR_VERSION 4
 #define PIPELINE_BUILT_QR_BITMAP_SIZE \
     ((((PIPELINE_BUILT_QR_VERSION) * 4 + 17) * ((PIPELINE_BUILT_QR_VERSION) * 4 + 17) + 7) / 8 + 1)
 
@@ -142,8 +142,8 @@ typedef struct StarCapture {
 #define PIPELINE_BUILT_BASE32_LEN (((pipeline_u32)(PIPELINE_BUILT_PAYLOAD_SIZE) * 8u + 4u) / 5u)
 
 /*
- * Data-codeword capacity of a version 7, ECC MEDIUM QR Code: duplicates
- * qr_adapter.h's PIPELINE_QR_DATA_CODEWORDS (124, see that header's own
+ * Data-codeword capacity of a version 4, ECC MEDIUM QR Code: duplicates
+ * qr_adapter.h's PIPELINE_QR_DATA_CODEWORDS (64, see that header's own
  * derivation comment) for the identical circular-include reason
  * PIPELINE_BUILT_QR_VERSION/PIPELINE_BUILT_QR_BITMAP_SIZE above duplicate
  * qr_adapter.h's other constants instead of #including it (qr_adapter.h
@@ -162,11 +162,11 @@ typedef struct StarCapture {
  * no longer be expressed purely in ALPHANUMERIC-mode characters; it must
  * instead be derived from the raw data-bit budget the two segments share.
  */
-#define PIPELINE_BUILT_QR_DATA_CODEWORDS 124
+#define PIPELINE_BUILT_QR_DATA_CODEWORDS 64
 
 /* Fixed per-segment bit overhead (4-bit mode indicator + the mode's own
  * character-count field width) at versions 1-9 (this build is pinned to
- * version 7, PIPELINE_BUILT_QR_VERSION above): BYTE mode's 8-bit count,
+ * version 4, PIPELINE_BUILT_QR_VERSION above): BYTE mode's 8-bit count,
  * ALPHANUMERIC mode's 9-bit count -- the QR spec's own fixed header widths
  * (qrcodegen.c's numCharCountBits()/alphanumericCharCountBits()), not a
  * value this build derives. Hand-duplicated constants, like every other
@@ -204,17 +204,10 @@ typedef struct StarCapture {
 #define PIPELINE_BUILT_URL_BYTE_SEG_LEN \
     ((pipeline_u32)PIPELINE_URL_BASE_LEN + (pipeline_u32)PIPELINE_URL_FRAGMENT_SEP_LEN)
 
-/* The ALPHANUMERIC-mode raw bit budget left for the SEQ/TOTAL/PAYLOAD
- * fragment tail once both segments' fixed header bits and the BYTE
- * segment's own data bits (8 bits/byte) are subtracted from the QR's total
- * raw data-bit capacity. Signed `long` arithmetic throughout (mirroring
- * this section's own prior discipline) so an over-long PIPELINE_URL_BASE
- * can never wrap an unsigned subtraction into a huge positive value and
- * masquerade as a valid budget. */
-#define PIPELINE_BUILT_ALNUM_BUDGET_BITS \
+#define PIPELINE_ALNUM_BUDGET_BITS_FOR_URL_BASE(baseLen) \
     ((long)(PIPELINE_BUILT_QR_DATA_CODEWORDS) * 8L \
      - (long)PIPELINE_BUILT_BYTE_SEG_HEADER_BITS \
-     - 8L * (long)PIPELINE_BUILT_URL_BYTE_SEG_LEN \
+     - 8L * ((long)(baseLen) + (long)PIPELINE_URL_FRAGMENT_SEP_LEN) \
      - (long)PIPELINE_BUILT_ALNUM_SEG_HEADER_BITS)
 
 /* ALPHANUMERIC mode packs 2 characters per 11 bits (a lone trailing
@@ -224,36 +217,27 @@ typedef struct StarCapture {
 #define PIPELINE_ALNUM_CHARS_FOR_BITS(bits) \
     ((pipeline_u32)(2L * ((bits) / 11L) + (((bits) % 11L) >= 6L ? 1L : 0L)))
 
-/* The exact bits needed to carry PIPELINE_FRAGMENT_HEADER_LEN + 1 alnum
- * characters (the header plus at least one base32 payload character) --
- * computed with the same odd/even packing formula above, never a bare
- * magic-number bit count, so this stays self-consistent with
- * PIPELINE_FRAGMENT_HEADER_LEN's own value if that ever changes. */
-#define PIPELINE_BUILT_MIN_ALNUM_BUDGET_BITS \
-    (11L * (((long)PIPELINE_FRAGMENT_HEADER_LEN + 1L) / 2L) + \
-     ((((long)PIPELINE_FRAGMENT_HEADER_LEN + 1L) % 2L) != 0L ? 6L : 0L))
+#define PIPELINE_FRAGMENT_BUDGET_FOR_URL_BASE(baseLen) \
+    PIPELINE_ALNUM_CHARS_FOR_BITS(PIPELINE_ALNUM_BUDGET_BITS_FOR_URL_BASE(baseLen))
+#define PIPELINE_FRAGMENT_CHUNK_LEN_FOR_URL_BASE(baseLen) \
+    (PIPELINE_FRAGMENT_BUDGET_FOR_URL_BASE(baseLen) - (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN)
+#define PIPELINE_FRAME_COUNT_FOR(baseLen, base32Len) \
+    ((((pipeline_u32)(base32Len)) + PIPELINE_FRAGMENT_CHUNK_LEN_FOR_URL_BASE(baseLen) - 1u) / \
+     PIPELINE_FRAGMENT_CHUNK_LEN_FOR_URL_BASE(baseLen))
 
-/* This build's own fixed per-fragment character budget (header + chunk),
- * derived from the shared two-segment bit budget above (spec #122; see
- * this section's own comment for why this is no longer a pure-ALPHANUMERIC
- * character ceiling). build_event.c's own compile-time check
- * (pipeline_build_event_fragment_budget_check) fails loudly, not silently,
- * if a longer PIPELINE_URL_BASE ever leaves no room for even one base32
- * character per fragment. */
-#define PIPELINE_BUILT_FRAGMENT_BUDGET \
-    PIPELINE_ALNUM_CHARS_FOR_BITS(PIPELINE_BUILT_ALNUM_BUDGET_BITS)
-#define PIPELINE_BUILT_FRAGMENT_CHUNK_LEN \
-    (PIPELINE_BUILT_FRAGMENT_BUDGET - (pipeline_u32)PIPELINE_FRAGMENT_HEADER_LEN)
+/* Low end of ADR-0006's ~8-10 frame sequential ceiling. Also bounds
+ * BuiltEvent, which the game thread holds on its 8 KB stack twice along
+ * one call chain. */
+#define PIPELINE_MAX_FRAME_COUNT 8u
 
-/* This build's own fixed frame count: ceil(base32 length / chunk length),
- * minimum 1 (the N=1 case -- a payload whose base32 text fits one frame's
- * budget). A real StarCapture's default "sm64" tag plus a representative
- * (multi-character) event name produces N>=2 here, per spec #115 sub-issue
- * #116's own acceptance criterion; a short-enough tag+name combination
- * (or the host test tool's own short fixture name) stays at N=1. */
-#define PIPELINE_BUILT_FRAME_COUNT \
-    ((((pipeline_u32)PIPELINE_BUILT_BASE32_LEN) + (PIPELINE_BUILT_FRAGMENT_CHUNK_LEN) - 1u) / \
-     (PIPELINE_BUILT_FRAGMENT_CHUNK_LEN))
+#define PIPELINE_URL_BASE_MAX_LEN 36u
+#define PIPELINE_WORST_CASE_BASE32_LEN \
+    (((pipeline_u32)(PIPELINE_FMT_FIXED_SIZE + PIPELINE_FMT_MAX_SIZE_TAG + PIPELINE_FMT_MAX_SIZE_NAME) * 8u + 4u) / 5u)
+
+#define PIPELINE_BUILT_ALNUM_BUDGET_BITS PIPELINE_ALNUM_BUDGET_BITS_FOR_URL_BASE(PIPELINE_URL_BASE_LEN)
+#define PIPELINE_BUILT_FRAGMENT_BUDGET PIPELINE_FRAGMENT_BUDGET_FOR_URL_BASE(PIPELINE_URL_BASE_LEN)
+#define PIPELINE_BUILT_FRAGMENT_CHUNK_LEN PIPELINE_FRAGMENT_CHUNK_LEN_FOR_URL_BASE(PIPELINE_URL_BASE_LEN)
+#define PIPELINE_BUILT_FRAME_COUNT PIPELINE_FRAME_COUNT_FOR(PIPELINE_URL_BASE_LEN, PIPELINE_BUILT_BASE32_LEN)
 
 /* Every frame's full URL text is exactly the BYTE segment
  * (PIPELINE_BUILT_URL_BYTE_SEG_LEN, "<BASE>#") followed by the ALPHANUMERIC

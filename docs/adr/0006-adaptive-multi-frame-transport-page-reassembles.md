@@ -41,6 +41,9 @@ path where it is the best available UX.
   fixed mask, ~2 px/module), kept for CRT legibility (glare, phosphor bloom,
   scanlines, rolling-shutter beat). The multi-frame pivot changes *total capacity*,
   not per-frame geometry.
+  **Amended by issue #152:** per-frame geometry is now QR **v4**-MEDIUM (33×33,
+  one fixed mask, 3 px/module, 123 px image). See "Amendment: lower per-frame
+  density (issue #152)" below.
 - **Fragments carry a header identifying their index and the total frame count**
   so the page knows when it is done. **This bullet's original prose (fragments as
   "numeric-mode packed (path-based, all-uppercase URL)") is superseded, twice
@@ -118,3 +121,24 @@ fixes only the criterion that decides it.
 - **ADR-0005 is amended, not superseded.** Its reader model (phone camera → URL →
   website, decode-and-broadcast only) and its invariant stand; this ADR extends the
   reader from a single frame to an adaptive stream and points ADR-0005 here.
+
+## Amendment: lower per-frame density (issue #152)
+
+Per-frame geometry drops from v7-MEDIUM at 2 px/module (106 px) to
+**v4-MEDIUM at 3 px/module (123 px)**, one fixed mask as before. Each module
+is 50% larger on screen, which helps a phone read the QR off a CRT. The image
+grows only 16%. The multi-frame transport absorbs the lost capacity: the
+default build (130 B payload) goes from 2 frames to 6. The frame hold
+(`QR_CYCLE_HOLD_TICKS`) halves from 20 to 10 ticks, about 0.33 s per frame.
+
+Version 4 is the lowest version that stays under this ADR's ~8-10 frame
+sequential ceiling, so sequential cycling still holds and fountain coding
+stays deferred. Version 3 would need 18 frames, because the fixed base-URL
+BYTE segment takes 236 of its 352 data bits. Shortening the base URL (#101)
+is what would open version 3. The measured version sweep is in
+`docs/research/qr-density-tradeoffs.md` section 9.
+
+The N=1 passive snap was already out of reach for format v3 at v7 (the
+113 B minimum payload is 181 base32 characters, against a 129-character
+chunk), so this amendment does not take it away. Catching all 6 frames at 10
+ticks each off a CRT is unverified, and stays tracked by #107.

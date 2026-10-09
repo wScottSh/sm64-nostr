@@ -352,6 +352,57 @@ boundary — they are not decisive.
 
 ---
 
+## 9. Lower per-frame density under the multi-frame transport (issue #152)
+
+ADR-0006 made the transport multi-frame, so a lower QR version no longer
+overflows the payload. It spills into more frames instead. Issue #152 asks for
+the lowest viable density at about the same on-screen size, with a faster
+cycle. Density here means the QR version. Holding the image size while the
+version drops means raising `QR_RENDER_MODULE_SCALE_PX`, so each module gets
+physically larger.
+
+**Measured, not derived.** Each row below comes from building
+`tools/pipeline_test/gen_reader_fixture.c` against a copy of the tree with
+that version's constants. The run used the real `qrcodegen.c` encoder and
+`build_event()`, and the ROM-default profile: tag `sm64`, name `BROTHERS SHEP`
+(130 B packed payload), base `https://sm64nostr.pages.dev`. Frames were counted
+from the decoded fixture output. Each fixture self-checks its id and signature.
+Image size is `(modules + 8) * scale` with the 4-module quiet zone on each
+side. Data codewords are for ECC MEDIUM.
+
+| Ver | Modules | Data cw | BYTE max | ALNUM max | Frames | URL chars/frame | px @2 | px @3 | px @4 |
+|---|---|---|---|---|---|---|---|---|---|
+| 3 | 29 | 44 | 42 | 61 | 18 | 46 | 74 | 111 | 148 |
+| **4** | 33 | 64 | 62 | 90 | **6** | 75 | 82 | **123** | 164 |
+| 5 | 37 | 86 | 84 | 122 | 3 | 107 | 90 | 135 | 180 |
+| 6 | 41 | 108 | 106 | 154 | 2 | 139 | 98 | 147 | 196 |
+| 7 (before) | 45 | 124 | 122 | 178 | 2 | 163 | **106** | 159 | 212 |
+
+**Choice: version 4 at 3 px/module (123 px).** It is the lowest version that
+stays under ADR-0006's ~8-10 frame sequential ceiling. Version 3 at 3 px is
+closer to the old size (111 px), but it needs 18 frames, past the point where
+ADR-0006 calls for fountain coding. Version 5 at 3 px is larger (135 px) and
+only drops to 3 frames. Version 4 at 2 px shrinks the image to 82 px, which
+defeats the purpose. At 123 px, the pair layout is 123 + 6 + 143 = 272 of
+320 px, and the QR clears the 8 px overscan band (host layout test).
+
+**The base URL caps how low the version can go.** Every frame carries the
+28-byte `https://sm64nostr.pages.dev#` as a BYTE segment (236 bits including
+its header), whatever the version. At version 4 that leaves 263 of 512 data
+bits for the fragment's characters after its own 13-bit header. At version 3
+it leaves 103 bits, 12 base32 characters per frame. A shorter base URL (#101) is the next lever. It would make
+version 3 viable without fountain coding.
+
+**ECC stays MEDIUM.** The lower version already buys robustness through larger
+modules. There is no reason to also trade away error correction (section 3).
+
+**Cycle: `QR_CYCLE_HOLD_TICKS` 20 -> 10**, about 0.33 s per frame at the
+~30 Hz render tick. A full loop of the default build is 6 x 10 = 60 ticks
+(~2.0 s), against 2 x 20 = 40 ticks (~1.3 s) before. A phone's rolling
+shutter needs each frame to persist across a full exposure, so ~3 Hz is an
+estimate of the safe edge, not a measurement. If real captures miss frames,
+back off to 13-14 ticks. Capture off a CRT at this rate is unverified (#107).
+
 ## Verification notes / limits
 
 - The v5-v8 capacity numbers were **derived** from `qrcodegen.c` and
