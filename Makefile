@@ -667,9 +667,17 @@ $(BUILD_DIR)/src/game/hud.o: $(PIPELINE_EVENT_PROFILE_H)
 # a manifest sidecar describing the baked identity; the registry row that binds
 # that identity to the finished ROM's sha1 is appended later, by the $(ROM)
 # recipe (see stamp_rom_registry.py), so a shipped .z64 is always traceable.
-$(PIPELINE_EVENT_PROFILE_H): $(PIPELINE_EVENT_PROFILE_H_IN) $(PIPELINE_PRIVKEY_FILE) $(GEN_EVENT_PROFILE_PY) $(TOOLS_DIR)/nostr_secp256k1.py
+PIPELINE_EVENT_PROFILE_ARGS   := --label $(PIPELINE_KEY_LABEL) --event-name "$(PIPELINE_EVENT_NAME)" --url-base "$(PIPELINE_URL_BASE)"
+PIPELINE_EVENT_PROFILE_ARGS_STAMP := $(BUILD_DIR)/include/event_profile.args.stamp
+ifneq ($(PIPELINE_EVENT_PROFILE_ARGS),$(shell cat $(PIPELINE_EVENT_PROFILE_ARGS_STAMP) 2>/dev/null))
+$(PIPELINE_EVENT_PROFILE_ARGS_STAMP): FORCE
+endif
+$(PIPELINE_EVENT_PROFILE_ARGS_STAMP):
+	$(file >$@,$(PIPELINE_EVENT_PROFILE_ARGS))
+
+$(PIPELINE_EVENT_PROFILE_H): $(PIPELINE_EVENT_PROFILE_H_IN) $(PIPELINE_PRIVKEY_FILE) $(GEN_EVENT_PROFILE_PY) $(TOOLS_DIR)/nostr_secp256k1.py $(PIPELINE_EVENT_PROFILE_ARGS_STAMP)
 	$(call print,Generating event profile:,$<,$@)
-	$(V)$(PYTHON) $(GEN_EVENT_PROFILE_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_EVENT_PROFILE_H_IN) --out $@ --label $(PIPELINE_KEY_LABEL) --manifest $(PIPELINE_EVENT_MANIFEST) --event-name "$(PIPELINE_EVENT_NAME)" --url-base "$(PIPELINE_URL_BASE)"
+	$(V)$(PYTHON) $(GEN_EVENT_PROFILE_PY) --privkey $(PIPELINE_PRIVKEY_FILE) --template $(PIPELINE_EVENT_PROFILE_H_IN) --out $@ --manifest $(PIPELINE_EVENT_MANIFEST) $(PIPELINE_EVENT_PROFILE_ARGS)
 
 # Format descriptor header: single source of truth for the packed QR
 # payload's field layout, rendered from src/pipeline/format_descriptor.json.
@@ -1243,12 +1251,14 @@ $(BUILD_DIR)/$(TARGET).objdump: $(ELF)
 
 
 
-.PHONY: all clean distclean default diff test load libultra
+.PHONY: all clean distclean default diff test load libultra FORCE
 # with no prerequisites, .SECONDARY causes no intermediate target to be removed
 .SECONDARY:
 
 # Remove built-in rules, to improve performance
 MAKEFLAGS += --no-builtin-rules
+
+FORCE:
 
 -include $(DEP_FILES)
 
