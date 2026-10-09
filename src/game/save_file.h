@@ -159,6 +159,8 @@ s32 save_file_get_total_star_count(s32 fileIndex, s32 minCourse, s32 maxCourse);
 void save_file_set_flags(u32 flags);
 void save_file_clear_flags(u32 flags);
 u32 save_file_get_flags(void);
+// Sandbox seam I: hide the cap of a cap-switch course until its switch is pressed.
+void save_file_suppress_caps_for_level(s16 levelNum);
 // Sandbox seam B: star-requirement gate; currently always open (returns TRUE), ignoring its args.
 s32 save_file_star_gate_is_open(s32 numStars, s32 requiredStars);
 // Sandbox seam D: intro-suppression gate; currently always suppressed (returns TRUE).

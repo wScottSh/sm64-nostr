@@ -1344,6 +1344,7 @@ s32 init_level(void) {
     s32 val4 = FALSE;
 
     set_play_mode(PLAY_MODE_NORMAL);
+    save_file_suppress_caps_for_level(gCurrLevelNum);
 
     sDelayedWarpOp = WARP_OP_NONE;
     sTransitionTimer = 0;

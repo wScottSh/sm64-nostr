@@ -478,7 +478,31 @@ s32 save_file_get_total_star_count(s32 fileIndex, s32 minCourse, s32 maxCourse) 
     return save_file_get_course_star_count(fileIndex, COURSE_NUM_TO_INDEX(COURSE_NONE)) + count;
 }
 
+// Sandbox seam I: per-visit cap suppression.
+static const struct {
+    s16 levelNum;
+    u32 capFlag;
+} sCapSuppressedLevels[] = {
+    { LEVEL_TOTWC, SAVE_FLAG_HAVE_WING_CAP },
+    { LEVEL_COTMC, SAVE_FLAG_HAVE_METAL_CAP },
+    { LEVEL_VCUTM, SAVE_FLAG_HAVE_VANISH_CAP },
+};
+
+static u32 sSuppressedCapFlags;
+
+void save_file_suppress_caps_for_level(s16 levelNum) {
+    s32 i;
+
+    sSuppressedCapFlags = 0;
+    for (i = 0; i < ARRAY_COUNT(sCapSuppressedLevels); i++) {
+        if (sCapSuppressedLevels[i].levelNum == levelNum) {
+            sSuppressedCapFlags = sCapSuppressedLevels[i].capFlag;
+        }
+    }
+}
+
 void save_file_set_flags(u32 flags) {
+    sSuppressedCapFlags &= ~flags;
     gSaveBuffer.files[gCurrSaveFileNum - 1][0].flags |= (flags | SAVE_FLAG_FILE_EXISTS);
     gSaveFileModified = TRUE;
 }
@@ -496,7 +520,8 @@ u32 save_file_get_flags(void) {
     // Sandbox seam A: force the fixed unlock mask on at read-time only. Nothing is
     // written back to the save buffer/EEPROM, and the credits/demo early return above
     // is untouched so attract demos and the credits sequence still see a zeroed flag set.
-    return gSaveBuffer.files[gCurrSaveFileNum - 1][0].flags | SAVE_FLAG_SANDBOX_UNLOCK_MASK;
+    return (gSaveBuffer.files[gCurrSaveFileNum - 1][0].flags | SAVE_FLAG_SANDBOX_UNLOCK_MASK)
+           & ~sSuppressedCapFlags;
 }
 
 /**
