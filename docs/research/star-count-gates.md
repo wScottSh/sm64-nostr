@@ -11,8 +11,8 @@ All repo citations are the live `src\` tree only (`.claude\` worktrees ignored).
 **Bottom line.** Fifteen distinct sites read the total star count, either directly or through
 its HUD mirror `gHudDisplay.stars` (copied from `gMarioState->numStars`, `level_update.c:1044`).
 Seven ACCESS GATES route through seam B and are open at 0 stars: star doors, endless-staircase
-warp, MIPS, message Toads, the castle-grounds cannon grate, the look-up warp to Wing Mario Over
-the Rainbow, and the 12-star castle Boos that carry the Big Boo's Haunt entrance (#149). The
+warp, MIPS, message Toads, the castle-grounds cannon grate, the look-up warp to Tower of the
+Wing Cap, and the 12-star castle Boos that carry the Big Boo's Haunt entrance (#149). The
 cannon grate and look-up warp were raw comparisons when this note was first written and have
 since been routed through the seam. The remaining six are REWARD/COSMETIC (Yoshi, fat penguin,
 staircase music, milestone dialog, lobby Wing Cap light, Bowser's final dialog); they stay
@@ -97,17 +97,17 @@ Cross-check: the castle-grounds grate opens at 120 stars, exposing the cannon to
 [The Castle — Ukikipedia](https://ukikipedia.net/wiki/The_Castle),
 [Super Mario 64/Secrets — StrategyWiki](https://strategywiki.org/wiki/Super_Mario_64/Secrets)
 
-### 6. Look-up warp / Wing Mario Over the Rainbow (10) — routed through seam B ✅ (fixed after first write-up)
+### 6. Look-up warp / Tower of the Wing Cap (10) — routed through seam B ✅ (fixed after first write-up)
 `act_first_person`, `src\game\mario_actions_stationary.c:1069-1076`:
 ```c
 if (m->floor->type == SURFACE_LOOK_UP_WARP
     && save_file_get_total_star_count(...) >= 10) {
-    ... level_trigger_warp(m, WARP_OP_UNKNOWN_01);   // warp up to the rainbow
+    ... level_trigger_warp(m, WARP_OP_UNKNOWN_01);   // enter TotWC
 }
 ```
 Raw `>= 10` comparison at **`mario_actions_stationary.c:1070`** — does **not** use the seam.
 Standing on the `SURFACE_LOOK_UP_WARP` tile (castle lobby) and looking straight up triggers the warp
-to Wing Mario Over the Rainbow, but only at ≥10 stars. At 0 stars **the warp never fires**, so that
+to Tower of the Wing Cap, but only at ≥10 stars. At 0 stars **the warp never fires**, so that
 secret area is unreachable via this route. Genuine ACCESS GATE, still closed in the sandbox. Fix:
 route through the seam, e.g. `&& save_file_star_gate_is_open(total, 10)`.
 **Status:** fixed. Sites 5 and 6 now call `save_file_star_gate_is_open()`
@@ -176,7 +176,7 @@ only; the warp itself is site 6. Dark at 0 stars.
 | 3 | `mips.inc.c:15,24` (`bhv_mips_init`) | `≥15` / `≥50` via seam | MIPS star reachable | **ACCESS GATE** | ✅ yes | no (open) |
 | 4 | `mario_misc.c:190,196,202` (`bhv_toad_message_init`) | `≥12/25/35` via seam | message-Toad stars exist | **ACCESS GATE** | ✅ yes | no (open) |
 | 5 | `castle_cannon_grate.inc.c:11` | `≥120` via seam | opens grounds cannon to roof | **ACCESS GATE** | ✅ yes | no (open) |
-| 6 | `mario_actions_stationary.c:1075` (`act_first_person`) | `≥10` via seam | warp to Wing Mario/Rainbow | **ACCESS GATE** | ✅ yes | no (open) |
+| 6 | `mario_actions_stationary.c:1075` (`act_first_person`) | `≥10` via seam | warp to Tower of the Wing Cap | **ACCESS GATE** | ✅ yes | no (open) |
 | 7 | `yoshi.inc.c:14` (`bhv_yoshi_init`) | raw `<120` | Yoshi roof reward NPC | REWARD | ❌ no | no (dormant OK) |
 | 8 | `racing_penguin.inc.c:15` | raw `==120` | fat penguin variant | COSMETIC | ❌ no | no |
 | 9 | `sound_init.c:206` | raw `<70` | endless-stairs music | COSMETIC | ❌ no | no |
