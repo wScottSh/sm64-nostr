@@ -286,14 +286,13 @@ PIPELINE_KEY_LABEL            ?= dev-event
 # template (spec #115 sub-issue #116, realigned by spec #122 sub-issue
 # #123): a build-time constant every emitted QR frame's URL wraps a
 # fragment around (mirrors PIPELINE_EVENT_NAME's own provisioning
-# immediately below, but with a dev default rather than a fail-closed check
-# -- a build with no real short domain purchased yet (#101) still produces
-# a scannable, structurally valid URL, just one pointed at this placeholder
-# host until the real domain is swapped in with `make PIPELINE_URL_BASE="..."`,
-# no pipeline code change needed). Validated by gen_event_profile.py's
+# immediately below, but with a default rather than a fail-closed check).
+# Defaults to the project's short reader domain (#101); override per build
+# with `make PIPELINE_URL_BASE="..."`, no pipeline code change needed.
+# Validated by gen_event_profile.py's
 # normalize_url_base() and emitted VERBATIM -- case is never folded.
 # At most 36 characters (PIPELINE_URL_BASE_MAX_LEN): a longer base fails the build.
-PIPELINE_URL_BASE             ?= https://sm64nostr.pages.dev
+PIPELINE_URL_BASE             ?= https://qrgo.fyi
 PIPELINE_EVENT_PROFILE_H_IN   := include/event_profile.h.in
 PIPELINE_EVENT_PROFILE_H      := $(BUILD_DIR)/include/event_profile.h
 PIPELINE_EVENT_MANIFEST       := $(BUILD_DIR)/include/event_profile.manifest.json
